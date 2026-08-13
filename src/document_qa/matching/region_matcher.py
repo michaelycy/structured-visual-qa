@@ -5,8 +5,8 @@ from __future__ import annotations
 import numpy as np
 from scipy.optimize import linear_sum_assignment
 
-from document_qa.config import QAThresholds
 from document_qa.matching.geometry import position_similarity, size_similarity
+from document_qa.profiles import RuleProfile, default_rule_profile
 from document_qa.schemas import (
     ElementType,
     MatchMetrics,
@@ -30,10 +30,10 @@ class RegionMatcher:
         ElementType.FOOTER,
     }
 
-    def __init__(self, thresholds: QAThresholds | None = None) -> None:
-        """允许调用方注入经过样本校准的匹配阈值。"""
+    def __init__(self, profile: RuleProfile | None = None) -> None:
+        """允许调用方注入经过版本管理和样本校准的规则配置。"""
 
-        self.thresholds = thresholds or QAThresholds()
+        self.profile = profile or default_rule_profile()
 
     def match_page(self, source: Page, target: Page) -> PageMatchResult:
         """构建代价矩阵，并通过线性分配获得全局最优匹配。"""
@@ -74,7 +74,7 @@ class RegionMatcher:
             metrics = metric_matrix[int(source_index)][int(target_index)]
             score = self._score(metrics)
             # 低置信度分配不能伪装成有效匹配，应交给缺失元素检测器处理。
-            if score < self.thresholds.minimum_match_score:
+            if score < self.profile.matching.minimum_score:
                 continue
             source_region = source.regions[int(source_index)]
             target_region = target.regions[int(target_index)]
@@ -133,15 +133,15 @@ class RegionMatcher:
             order_similarity=max(0.0, 1.0 - abs(source_order - target_order)),
         )
 
-    @staticmethod
-    def _score(metrics: MatchMetrics) -> float:
-        """应用固定初始权重；后续权重变更必须通过 Golden Sample 验证。"""
+    def _score(self, metrics: MatchMetrics) -> float:
+        """应用 Profile 权重；发布新版本前必须通过 Golden Sample 验证。"""
 
+        weights = self.profile.matching.weights
         return (
-            0.40 * metrics.position_similarity
-            + 0.25 * metrics.size_similarity
-            + 0.20 * metrics.type_similarity
-            + 0.15 * metrics.order_similarity
+            weights.position * metrics.position_similarity
+            + weights.size * metrics.size_similarity
+            + weights.type * metrics.type_similarity
+            + weights.order * metrics.order_similarity
         )
 
     def _type_similarity(self, source: ElementType, target: ElementType) -> float:
@@ -193,4 +193,3 @@ class RegionMatcher:
                 and source_region.style.color != target_region.style.color
             ),
         )
-

@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import json
 from enum import StrEnum
 from pathlib import Path
 
 from pydantic import Field, model_validator
 
-from document_qa.schemas import IssueType, SchemaModel, Severity
+from document_qa.schemas.common import SchemaModel
+from document_qa.schemas.issue import IssueType, Severity
 
 
 class ProfileStatus(StrEnum):
@@ -193,3 +195,22 @@ class RuleProfileStore:
         temporary_path.replace(safe_path)
         return safe_path
 
+    @staticmethod
+    def export_json_schema(path: Path) -> Path:
+        """导出 UI 可用于动态表单和客户端校验的 JSON Schema。"""
+
+        safe_path = path.expanduser().resolve()
+        if safe_path.suffix.lower() != ".json":
+            raise ValueError("JSON Schema 文件必须使用 .json 扩展名")
+        safe_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary_path = safe_path.with_suffix(safe_path.suffix + ".tmp")
+        temporary_path.write_text(
+            json.dumps(
+                RuleProfile.model_json_schema(),
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        temporary_path.replace(safe_path)
+        return safe_path

@@ -1,0 +1,702 @@
+# 自定义 JSON Rule Profile 配置手册
+
+## 1. 手册用途
+
+本文说明如何创建、修改、校验和使用 Structured Visual QA 的自定义 JSON Rule Profile。
+
+Rule Profile 用于统一配置：
+
+- Source/Target Region 的匹配权重；
+- Region 最低匹配分数和跨语言文本合并容错；
+- 各检测器是否启用；
+- 偏移、字号缩小和重叠等检测阈值；
+- Severity 扣分、Issue 页内扣分上限；
+- `PASS / REVIEW / FAIL` 状态规则。
+
+配置文件不会修改 Python 代码。每次 QA 任务都会把 Profile 版本引用和完整快照写入报告，因此旧任务可以复现。
+
+## 2. 快速开始
+
+以下命令均在项目根目录执行：
+
+```bash
+cd /Users/muzhaoyang/Projects/structured-visual-QA
+```
+
+### 2.1 导出默认配置
+
+```bash
+.venv/bin/document-qa \
+  --export-default-profile profiles/translation-balanced.v1.json
+```
+
+命令会自动创建 `profiles/` 目录并生成经过真实中英文 PDF 校准的默认配置。
+
+### 2.2 复制为自定义配置
+
+不要直接覆盖已经发布或已经用于生产任务的配置。复制为新文件，然后修改身份信息和版本：
+
+```bash
+cp profiles/translation-balanced.v1.json \
+  profiles/translation-strict.v1.json
+```
+
+建议修改：
+
+```json
+{
+  "profile_id": "translation-strict",
+  "name": "翻译 PDF 严格模式",
+  "version": 1,
+  "status": "draft",
+  "description": "适用于正式交付前的严格检查。"
+}
+```
+
+这里只展示需要修改的字段。实际配置必须保留完整 JSON 结构。
+
+### 2.3 使用自定义配置运行
+
+```bash
+.venv/bin/document-qa \
+  source.pdf \
+  target.pdf \
+  --profile profiles/translation-strict.v1.json \
+  --output artifacts/strict-report.json \
+  --render-dir artifacts/pages
+```
+
+终端示例：
+
+```text
+状态=review 分数=91.80 报告=/.../artifacts/strict-report.json
+```
+
+报告包含：
+
+```json
+{
+  "rule_profile_reference": "translation-strict@1",
+  "rule_profile_snapshot": {}
+}
+```
+
+## 3. 完整配置示例
+
+```json
+{
+  "schema_version": 1,
+  "profile_id": "translation-balanced",
+  "name": "翻译 PDF 平衡模式",
+  "version": 1,
+  "status": "published",
+  "description": "适用于机器生成型双语 PDF 的默认平衡配置。",
+  "matching": {
+    "minimum_score": 0.45,
+    "merged_text_coverage_ratio": 0.4,
+    "weights": {
+      "position": 0.4,
+      "size": 0.25,
+      "type": 0.2,
+      "order": 0.15
+    }
+  },
+  "detectors": {
+    "enabled": {
+      "missing_element": true,
+      "region_shifted": true,
+      "font_shrink": true,
+      "content_out_of_page": true,
+      "overlap": true
+    },
+    "thresholds": {
+      "shifted_ratio": 0.05,
+      "severely_shifted_ratio": 0.15,
+      "font_shrink_ratio": -0.2,
+      "overlap_ratio": 0.05,
+      "overlap_increase_ratio": 0.05,
+      "image_caption_area_ratio": 0.005
+    }
+  },
+  "scoring": {
+    "pass_score": 90.0,
+    "fail_score": 75.0,
+    "critical_forces_fail": true,
+    "high_forces_review": true,
+    "severity_deductions": {
+      "info": 0.0,
+      "low": 1.0,
+      "medium": 4.0,
+      "high": 10.0,
+      "critical": 25.0
+    },
+    "issue_type_deduction_caps": {
+      "region_shifted": 12.0,
+      "text_overflow": 25.0,
+      "text_clipped": 25.0,
+      "abnormal_wrap": 10.0,
+      "line_count_explosion": 10.0,
+      "font_shrink": 10.0,
+      "text_overlap": 10.0,
+      "text_image_overlap": 25.0,
+      "content_out_of_page": 25.0,
+      "missing_element": 10.0,
+      "added_element": 3.0,
+      "missing_image": 25.0,
+      "typography_changed": 10.0,
+      "table_structure_changed": 25.0,
+      "page_missing": 25.0,
+      "other": 10.0
+    }
+  }
+}
+```
+
+## 4. 顶层字段
+
+| 字段 | 类型 | 约束 | 说明 |
+| --- | --- | --- | --- |
+| `schema_version` | integer | `>= 1` | Profile JSON 结构版本，当前为 `1` |
+| `profile_id` | string | 2～64 字符 | 稳定 ID，只允许小写字母、数字和连字符 |
+| `name` | string | 1～100 字符 | 人类可读名称，允许中文 |
+| `version` | integer | `>= 1` | 当前 Profile 业务版本 |
+| `status` | enum | 见下表 | 生命周期状态 |
+| `description` | string | 无特殊限制 | 使用场景和变更说明 |
+| `matching` | object | 必填 | Region 匹配配置 |
+| `detectors` | object | 必填 | 检测器开关与阈值 |
+| `scoring` | object | 必填 | 评分和状态规则 |
+
+`status` 允许：
+
+| 值 | 含义 |
+| --- | --- |
+| `draft` | 草稿，可继续修改，不建议用于稳定生产任务 |
+| `published` | 已发布，应视为不可变配置 |
+| `archived` | 已归档，不再用于新任务，但旧报告仍可复现 |
+
+Profile 的稳定引用格式为：
+
+```text
+{profile_id}@{version}
+```
+
+例如：
+
+```text
+translation-strict@2
+```
+
+## 5. Matching 配置
+
+### 5.1 `minimum_score`
+
+```json
+"minimum_score": 0.45
+```
+
+取值范围为 `0～1`。Source Region 与 Target Region 的综合匹配分低于该值时，系统不会接受这组匹配，而会进入缺失/新增元素检查。
+
+- 降低：匹配更宽松，减少未匹配元素，但可能产生错误匹配；
+- 提高：匹配更严格，错误匹配减少，但缺失/新增误报可能增加；
+- 推荐调节范围：`0.40～0.60`；
+- 每次变更必须运行真实双语样本回归。
+
+### 5.2 `merged_text_coverage_ratio`
+
+```json
+"merged_text_coverage_ratio": 0.4
+```
+
+取值范围为 `0～1`。英文 PDF 可能把正文拆成多个文本框，而中文 PDF 将同一区域合并成一个文本框。未匹配源文本被目标文本覆盖达到此比例时，系统将其视为多对一文本合并，而不是元素缺失。
+
+- 降低：更容易认定为正常合并，减少 `missing_element`；
+- 提高：要求版面覆盖更准确，缺失检测更严格；
+- 推荐调节范围：`0.35～0.60`。
+
+### 5.3 Matching 权重
+
+```json
+"weights": {
+  "position": 0.4,
+  "size": 0.25,
+  "type": 0.2,
+  "order": 0.15
+}
+```
+
+综合匹配分：
+
+```text
+match_score =
+    position × position_similarity
+  + size     × size_similarity
+  + type     × type_similarity
+  + order    × order_similarity
+```
+
+| 权重 | 作用 | 提高后的影响 |
+| --- | --- | --- |
+| `position` | 页面位置相似度 | 更偏向匹配相同位置的元素 |
+| `size` | Region 宽高相似度 | 更偏向匹配尺寸相似的元素 |
+| `type` | Heading/Paragraph/Image 类型 | 更严格区分文本、图片和标题 |
+| `order` | 阅读顺序 | 更偏向相同页面顺序 |
+
+四项必须满足：
+
+```text
+position + size + type + order = 1.0
+```
+
+允许浮点误差不超过 `0.000001`。不能只修改一个权重而不重新平衡其他权重。
+
+## 6. Detector 开关
+
+```json
+"enabled": {
+  "missing_element": true,
+  "region_shifted": true,
+  "font_shrink": true,
+  "content_out_of_page": true,
+  "overlap": true
+}
+```
+
+| 字段 | 控制的检测 |
+| --- | --- |
+| `missing_element` | 缺失元素、缺失图片和目标新增元素 |
+| `region_shifted` | 匹配 Region 的位置偏移 |
+| `font_shrink` | 目标字号明显缩小 |
+| `content_out_of_page` | Region 超出页面边界 |
+| `overlap` | 新增文字重叠、文字图片重叠 |
+
+关闭检测器意味着对应 Issue 不再产生，也不参与扣分和状态判定。建议只在明确不适用时关闭，不要通过关闭检测器掩盖阈值问题。
+
+## 7. Detector 阈值
+
+### 7.1 位置偏移
+
+```json
+"shifted_ratio": 0.05,
+"severely_shifted_ratio": 0.15
+```
+
+偏移量以页面宽度或高度归一化：
+
+```text
+shift = max(abs(x_shift_ratio), abs(y_shift_ratio))
+```
+
+- `shift > shifted_ratio`：产生 `MEDIUM REGION_SHIFTED`；
+- `shift > severely_shifted_ratio`：产生 `HIGH REGION_SHIFTED`。
+
+必须满足：
+
+```text
+0 <= shifted_ratio < severely_shifted_ratio <= 1
+```
+
+数值 `0.05` 表示页面尺寸的 5%，不是 5 个 PDF point。
+
+### 7.2 字号缩小
+
+```json
+"font_shrink_ratio": -0.2
+```
+
+计算公式：
+
+```text
+(target_font_size - source_font_size) / source_font_size
+```
+
+`-0.2` 表示目标字号比源字号缩小超过 20% 时产生 `HIGH FONT_SHRINK`。
+
+取值必须位于 `-1～0`：
+
+- 越接近 `0`：越严格，例如 `-0.10`；
+- 越接近 `-1`：越宽松，例如 `-0.40`。
+
+单独的字号缩小不会产生 Critical；如果同时发生裁切或越界，对应检测器会生成 Critical。
+
+### 7.3 重叠比例
+
+```json
+"overlap_ratio": 0.05,
+"overlap_increase_ratio": 0.05
+```
+
+`overlap_ratio` 是两个 Region 交集面积占较小 Region 面积的比例。低于该值的轻微接触被忽略。
+
+`overlap_increase_ratio` 比较 Target 与 Source 的重叠关系。只有 Target 重叠相对 Source 明显增加时才报告，避免把封面背景图叠字等原设计判为异常。
+
+两者取值范围均为 `0～1`。
+
+### 7.4 图片 Caption 面积
+
+```json
+"image_caption_area_ratio": 0.005
+```
+
+文字 Region 面积不超过页面面积的 0.5% 时，系统将图片边缘的版权署名、来源和小型 Caption 排除出文字图片重叠检测。
+
+- 降低：更多小文字参与重叠检查，检测更严格；
+- 提高：更多小文字被视为 Caption；
+- 建议不要高于 `0.01`，否则可能忽略小型正文标签。
+
+## 8. Scoring 配置
+
+### 8.1 状态分数线
+
+```json
+"pass_score": 90.0,
+"fail_score": 75.0
+```
+
+必须满足：
+
+```text
+0 <= fail_score < pass_score <= 100
+```
+
+默认状态规则：
+
+```text
+Critical 存在或 Score < 75 → FAIL
+High 存在或 Score < 90     → REVIEW
+其他                        → PASS
+```
+
+### 8.2 状态覆盖开关
+
+```json
+"critical_forces_fail": true,
+"high_forces_review": true
+```
+
+- `critical_forces_fail=true`：即使分数很高，只要存在 Critical 仍为 FAIL；
+- `high_forces_review=true`：即使分数不低于 PASS 线，只要存在 High 仍为 REVIEW。
+
+正式交付配置建议保持两项为 `true`。
+
+### 8.3 Severity 单次扣分
+
+```json
+"severity_deductions": {
+  "info": 0.0,
+  "low": 1.0,
+  "medium": 4.0,
+  "high": 10.0,
+  "critical": 25.0
+}
+```
+
+五个键必须全部存在，扣分不能为负数。
+
+页面基础分为 100。系统先按 Severity 累加同类 Issue 扣分，再应用 IssueType 页内扣分上限。
+
+### 8.4 IssueType 页内扣分上限
+
+例如：
+
+```json
+"font_shrink": 10.0
+```
+
+即使一页图表中出现 12 个 `HIGH FONT_SHRINK`，报告仍保留 12 条 Issue，但该类型最多扣 10 分。这避免 PDF 把一个视觉对象拆成大量小 Region 后重复扣分。
+
+所有 IssueType 必须完整配置：
+
+| IssueType | 当前是否已有检测器 | 默认上限 |
+| --- | ---: | ---: |
+| `region_shifted` | 是 | 12 |
+| `text_overflow` | 否 | 25 |
+| `text_clipped` | 否 | 25 |
+| `abnormal_wrap` | 否 | 10 |
+| `line_count_explosion` | 否 | 10 |
+| `font_shrink` | 是 | 10 |
+| `text_overlap` | 是 | 10 |
+| `text_image_overlap` | 是 | 25 |
+| `content_out_of_page` | 是 | 25 |
+| `missing_element` | 是 | 10 |
+| `added_element` | 是 | 3 |
+| `missing_image` | 是 | 25 |
+| `typography_changed` | 否 | 10 |
+| `table_structure_changed` | 否 | 25 |
+| `page_missing` | 是 | 25 |
+| `other` | 预留 | 10 |
+
+“尚无检测器”表示当前不会自动产生该 Issue，但配置键仍须保留，以保证未来增加检测器时旧 Profile 的评分行为明确。
+
+## 9. 常用配置方案
+
+以下片段只展示需要变化的字段。创建配置时应先导出完整默认 JSON，再修改相应字段。
+
+### 9.1 正式交付严格模式
+
+适合最终交付前检查：
+
+```json
+{
+  "profile_id": "translation-strict",
+  "name": "翻译 PDF 严格模式",
+  "status": "draft",
+  "matching": {
+    "minimum_score": 0.5
+  },
+  "detectors": {
+    "thresholds": {
+      "shifted_ratio": 0.03,
+      "severely_shifted_ratio": 0.1,
+      "font_shrink_ratio": -0.15,
+      "overlap_ratio": 0.03,
+      "overlap_increase_ratio": 0.03
+    }
+  },
+  "scoring": {
+    "pass_score": 95.0,
+    "fail_score": 80.0
+  }
+}
+```
+
+注意：实际文件不能只保留这个片段，必须保留完整字段。
+
+### 9.2 早期宽松预检模式
+
+适合翻译流程早期快速发现明显问题：
+
+```json
+{
+  "profile_id": "translation-preflight",
+  "name": "翻译 PDF 宽松预检",
+  "detectors": {
+    "thresholds": {
+      "shifted_ratio": 0.08,
+      "severely_shifted_ratio": 0.2,
+      "font_shrink_ratio": -0.3,
+      "overlap_ratio": 0.1,
+      "overlap_increase_ratio": 0.1
+    }
+  },
+  "scoring": {
+    "pass_score": 85.0,
+    "fail_score": 65.0
+  }
+}
+```
+
+即使宽松预检，也建议保留页面缺失、图片缺失和越界检测。
+
+### 9.3 只检查致命布局问题
+
+```json
+"enabled": {
+  "missing_element": true,
+  "region_shifted": false,
+  "font_shrink": false,
+  "content_out_of_page": true,
+  "overlap": true
+}
+```
+
+这会减少噪声，但不会产生普通偏移和字号变化问题。
+
+## 10. 配置校验
+
+当前 CLI 在加载 `--profile` 时自动执行完整 Pydantic 校验。要单独验证配置而不处理文档，可以使用 Python：
+
+```bash
+.venv/bin/python -c '
+from pathlib import Path
+from document_qa.profiles import RuleProfileStore
+profile = RuleProfileStore.load(Path("profiles/translation-strict.v1.json"))
+print(profile.reference)
+'
+```
+
+成功输出示例：
+
+```text
+translation-strict@1
+```
+
+后续 FastAPI 配置界面应提供独立的 `/validate` API；现阶段 CLI 加载即校验。
+
+### 10.1 导出 JSON Schema
+
+```bash
+.venv/bin/document-qa \
+  --export-profile-schema profiles/rule-profile.schema.json
+```
+
+JSON Schema 可用于：
+
+- IDE 自动补全；
+- React 动态表单；
+- 浏览器端初步校验；
+- 配置中心字段定义。
+
+服务端 Pydantic 校验仍是最终判定，前端校验不能替代它。
+
+## 11. 常见错误
+
+### 11.1 匹配权重总和不为 1
+
+错误：
+
+```json
+"weights": {
+  "position": 0.5,
+  "size": 0.3,
+  "type": 0.2,
+  "order": 0.1
+}
+```
+
+总和为 1.1，加载时会出现：
+
+```text
+匹配权重总和必须等于 1
+```
+
+### 11.2 严重偏移阈值小于普通阈值
+
+错误：
+
+```json
+"shifted_ratio": 0.2,
+"severely_shifted_ratio": 0.1
+```
+
+会出现：
+
+```text
+严重偏移阈值必须大于普通偏移阈值
+```
+
+### 11.3 FAIL 分数线高于 PASS
+
+错误：
+
+```json
+"pass_score": 80,
+"fail_score": 90
+```
+
+会出现：
+
+```text
+FAIL 分数线必须低于 PASS 分数线
+```
+
+### 11.4 删除未使用的 IssueType
+
+即使当前没有 `table_structure_changed` 检测器，也不能从 `issue_type_deduction_caps` 删除该键，否则配置校验失败。
+
+### 11.5 使用百分数 5 代替比例 0.05
+
+所有 `ratio` 字段都使用 `0～1` 的比例：
+
+```text
+5%  → 0.05
+20% → 0.20
+```
+
+写成 `5` 会超出允许范围。
+
+### 11.6 添加自定义未知字段
+
+Profile 使用严格 Schema。拼写错误或未支持字段会被拒绝，例如：
+
+```json
+"min_score": 0.5
+```
+
+正确字段是：
+
+```json
+"minimum_score": 0.5
+```
+
+## 12. 版本管理
+
+### 12.1 不覆盖已发布版本
+
+当 `status=published` 的配置已经用于任务时，不应修改原文件。创建下一版本：
+
+```text
+translation-strict.v1.json
+translation-strict.v2.json
+```
+
+并更新 JSON：
+
+```json
+"version": 2
+```
+
+### 12.2 推荐生命周期
+
+```text
+draft → 样本验证 → published → archived
+```
+
+### 12.3 变更记录
+
+建议在 `description` 中记录变更目的：
+
+```json
+"description": "v2：将普通偏移阈值由 5% 调整为 4%，用于正式合同文档。"
+```
+
+后续配置中心应保存独立的 Changelog，而不是完全依赖描述字段。
+
+## 13. 调整阈值的正确流程
+
+不要根据单份报告直接反复调参。推荐流程：
+
+1. 收集 Source/Target 真实 PDF；
+2. 人工标注正常页面与问题页面；
+3. 使用当前 Profile 生成基线报告；
+4. 统计误报和漏报；
+5. 每次只修改一个指标或一组强相关指标；
+6. 使用同一批样本重新运行；
+7. 比较 `PASS / REVIEW / FAIL`、Issue 数量和人工标签；
+8. 运行全部自动测试；
+9. 创建新版本并发布。
+
+运行测试：
+
+```bash
+.venv/bin/python -m unittest discover -s tests -v
+```
+
+运行真实样本：
+
+```bash
+.venv/bin/document-qa \
+  source.pdf target.pdf \
+  --profile profiles/translation-strict.v2.json \
+  --output artifacts/calibration-report.json
+```
+
+## 14. 安全注意事项
+
+- Profile JSON 不能包含 API Key、令牌、密码或文档正文；
+- `profile_id` 不是文件路径；
+- 后续 API 不应接受客户端指定服务器保存路径；
+- 生产环境应限制 Profile JSON 大小；
+- 服务端必须重新执行 Pydantic 校验；
+- 发布配置前必须运行 Golden Sample；
+- 配置文件应纳入版本控制，但真实 PDF 和 QA 中间产物不应提交。
+
+## 15. 当前限制
+
+- CLI 尚无单独的 `validate-profile` 子命令，加载 Profile 时会自动校验；
+- 当前没有 Profile 数据库和 Web 配置界面；
+- Profile 版本号由文件维护，尚未由服务端自动分配；
+- 修改配置不会创建自动 Changelog；
+- 新增检测指标仍需要先修改代码和 RuleProfile Schema，然后才能在 JSON 中配置。
+
+后续 FastAPI 和 React 界面应直接复用当前 `RuleProfile` 与导出的 JSON Schema。
+

@@ -7,6 +7,7 @@ from pydantic import Field
 from document_qa.schemas.common import SchemaModel
 from document_qa.schemas.issue import Issue
 from document_qa.schemas.match import RegionMatch, StructuredDiff
+from document_qa.profiles import RuleProfile
 
 
 class QAStatus(StrEnum):
@@ -43,8 +44,9 @@ class QAReport(SchemaModel):
 
     source_document_id: str = Field(min_length=1)
     target_document_id: str = Field(min_length=1)
+    rule_profile_reference: str = Field(min_length=1)
+    rule_profile_snapshot: RuleProfile
     document_score: float = Field(ge=0, le=100)
     status: QAStatus
     summary: ReportSummary
     pages: list[PageQAResult] = Field(default_factory=list)
-

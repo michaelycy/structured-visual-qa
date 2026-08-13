@@ -28,6 +28,28 @@ document-qa source.pdf target.pdf \
   --render-dir artifacts/pages
 ```
 
+导出内置规则配置：
+
+```bash
+document-qa --export-default-profile profiles/translation-balanced.v1.json
+```
+
+导出供配置界面生成表单的 JSON Schema：
+
+```bash
+document-qa --export-profile-schema profiles/rule-profile.schema.json
+```
+
+使用经过界面或人工编辑并校验的规则配置：
+
+```bash
+document-qa source.pdf target.pdf \
+  --profile profiles/translation-balanced.v1.json \
+  --output artifacts/qa-report.json
+```
+
+每份 QA 报告都会保存 Profile 版本引用和完整快照，后续修改配置不会影响旧任务复现。
+
 也可以直接运行模块：
 
 ```bash
@@ -50,4 +72,3 @@ python -m compileall -q src tests
 ## 许可证提示
 
 本项目选择 PyMuPDF 作为 PDF 引擎。PyMuPDF 开源版本使用 AGPL v3；闭源或商业使用前必须完成许可证评估或取得商业许可证。详细约束见 `docs/project-contract.md`。
-

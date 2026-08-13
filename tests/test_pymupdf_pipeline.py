@@ -62,6 +62,13 @@ class PyMuPDFPipelineTests(unittest.TestCase):
             validated = QAReport.model_validate_json(report_path.read_text("utf-8"))
 
             self.assertEqual(validated.summary.pages, 1)
+            self.assertEqual(
+                validated.rule_profile_reference, "translation-balanced@1"
+            )
+            self.assertEqual(
+                validated.rule_profile_snapshot.profile_id,
+                "translation-balanced",
+            )
             self.assertTrue((root / "rendered/source/page-0001.png").is_file())
             self.assertTrue((root / "rendered/target/page-0001.png").is_file())
 
@@ -83,4 +90,3 @@ class PyMuPDFPipelineTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

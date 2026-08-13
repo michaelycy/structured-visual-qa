@@ -7,6 +7,7 @@ from document_qa.detectors import RuleDetector
 from document_qa.grouping import RegionGrouper
 from document_qa.matching import RegionMatcher
 from document_qa.parsers import PyMuPDFParser
+from document_qa.profiles import RuleProfile, default_rule_profile
 from document_qa.renderers import PyMuPDFRenderer
 from document_qa.schemas import (
     Document,
@@ -28,6 +29,7 @@ class DocumentQAPipeline:
     def __init__(
         self,
         *,
+        profile: RuleProfile | None = None,
         parser: PyMuPDFParser | None = None,
         renderer: PyMuPDFRenderer | None = None,
         grouper: RegionGrouper | None = None,
@@ -35,14 +37,16 @@ class DocumentQAPipeline:
         detector: RuleDetector | None = None,
         scorer: QAScorer | None = None,
     ) -> None:
-        """支持依赖注入，便于测试和后续替换 PDF 引擎。"""
+        """支持注入 Profile 与组件，便于界面配置、测试和替换 PDF 引擎。"""
 
+        self.profile = profile or default_rule_profile()
         self.parser = parser or PyMuPDFParser()
         self.renderer = renderer or PyMuPDFRenderer()
         self.grouper = grouper or RegionGrouper()
-        self.matcher = matcher or RegionMatcher()
-        self.detector = detector or RuleDetector()
-        self.scorer = scorer or QAScorer()
+        # 默认组件必须共享同一个 Profile，确保界面中一次配置修改贯穿全流程。
+        self.matcher = matcher or RegionMatcher(self.profile)
+        self.detector = detector or RuleDetector(self.profile)
+        self.scorer = scorer or QAScorer(self.profile)
 
     def compare(
         self,
@@ -130,8 +134,8 @@ class DocumentQAPipeline:
             issues=issues,
         )
 
-    @staticmethod
     def _build_report(
+        self,
         source: Document,
         target: Document,
         page_results: list[PageQAResult],
@@ -171,9 +175,10 @@ class DocumentQAPipeline:
         return QAReport(
             source_document_id=source.document_id,
             target_document_id=target.document_id,
+            rule_profile_reference=self.profile.reference,
+            rule_profile_snapshot=self.profile,
             document_score=document_score,
             status=status,
             summary=summary,
             pages=page_results,
         )
-

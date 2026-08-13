@@ -2,12 +2,12 @@
 
 from itertools import combinations
 
-from document_qa.config import QAThresholds
 from document_qa.matching.geometry import (
     intersection_ratio,
     position_similarity,
     size_similarity,
 )
+from document_qa.profiles import RuleProfile, default_rule_profile
 from document_qa.schemas import (
     BoundingBox,
     ElementType,
@@ -32,10 +32,10 @@ class RuleDetector:
         ElementType.FOOTER,
     }
 
-    def __init__(self, thresholds: QAThresholds | None = None) -> None:
-        """初始化集中管理的检测阈值。"""
+    def __init__(self, profile: RuleProfile | None = None) -> None:
+        """初始化带版本的检测器开关和阈值。"""
 
-        self.thresholds = thresholds or QAThresholds()
+        self.profile = profile or default_rule_profile()
 
     def detect(
         self, source: Page, target: Page, match_result: PageMatchResult
@@ -43,10 +43,15 @@ class RuleDetector:
         """按确定顺序运行各规则，保证报告输出稳定。"""
 
         issues: list[Issue] = []
-        issues.extend(self._detect_missing(source, target, match_result))
-        issues.extend(self._detect_geometry(target, match_result))
-        issues.extend(self._detect_out_of_page(target))
-        issues.extend(self._detect_overlaps(source, target, match_result))
+        enabled = self.profile.detectors.enabled
+        if enabled.missing_element:
+            issues.extend(self._detect_missing(source, target, match_result))
+        if enabled.region_shifted or enabled.font_shrink:
+            issues.extend(self._detect_geometry(target, match_result))
+        if enabled.content_out_of_page:
+            issues.extend(self._detect_out_of_page(target))
+        if enabled.overlap:
+            issues.extend(self._detect_overlaps(source, target, match_result))
         return issues
 
     def _detect_missing(
@@ -104,7 +109,7 @@ class RuleDetector:
         return any(
             region.type in self._TEXT_TYPES
             and intersection_ratio(source_region.bbox, region.bbox)
-            >= self.thresholds.merged_text_coverage_ratio
+            >= self.profile.matching.merged_text_coverage_ratio
             for region in target.regions
         )
 
@@ -114,14 +119,16 @@ class RuleDetector:
         """检测显著位移和字体缩小，并保留触发规则的比例。"""
 
         target_regions = {region.id: region for region in target.regions}
+        thresholds = self.profile.detectors.thresholds
+        enabled = self.profile.detectors.enabled
         issues: list[Issue] = []
         for diff in result.diffs:
             target_region = target_regions[diff.target_region_id]
             shift = max(abs(diff.x_shift_ratio), abs(diff.y_shift_ratio))
-            if shift > self.thresholds.shifted_ratio:
+            if enabled.region_shifted and shift > thresholds.shifted_ratio:
                 severity = (
                     Severity.HIGH
-                    if shift > self.thresholds.severely_shifted_ratio
+                    if shift > thresholds.severely_shifted_ratio
                     else Severity.MEDIUM
                 )
                 issues.append(
@@ -143,7 +150,11 @@ class RuleDetector:
                 )
 
             font_change = diff.font_size_change_ratio
-            if font_change is not None and font_change < self.thresholds.font_shrink_ratio:
+            if (
+                enabled.font_shrink
+                and font_change is not None
+                and font_change < thresholds.font_shrink_ratio
+            ):
                 issues.append(
                     Issue(
                         id=f"p{target.page}-font-{diff.target_region_id}",
@@ -198,9 +209,10 @@ class RuleDetector:
         """只报告翻译后新增或显著加剧的区域重叠。"""
 
         issues: list[Issue] = []
+        thresholds = self.profile.detectors.thresholds
         for first, second in combinations(target.regions, 2):
             ratio = intersection_ratio(first.bbox, second.bbox)
-            if ratio <= self.thresholds.overlap_ratio:
+            if ratio <= thresholds.overlap_ratio:
                 continue
             first_is_text = first.type in self._TEXT_TYPES
             second_is_text = second.type in self._TEXT_TYPES
@@ -225,7 +237,7 @@ class RuleDetector:
                 # 标注不属于正文侵入图片，不应产生 Critical。
                 if (
                     target_text.bbox.area / (target.width * target.height)
-                    <= self.thresholds.image_caption_area_ratio
+                    <= thresholds.image_caption_area_ratio
                 ):
                     continue
                 source_text = source_first if first_is_text else source_second
@@ -243,7 +255,7 @@ class RuleDetector:
                 if not target_center_inside or source_center_inside:
                     continue
             # 背景照片、色块等常与文字天然叠放；只有目标重叠明显增加才是翻译异常。
-            if ratio - source_ratio <= self.thresholds.overlap_increase_ratio:
+            if ratio - source_ratio <= thresholds.overlap_increase_ratio:
                 continue
 
             issue_type = (
@@ -303,7 +315,7 @@ class RuleDetector:
             ) + 0.3 * size_similarity(candidate.bbox, target_region.bbox)
 
         best = max(candidates, key=layout_score)
-        return best if layout_score(best) >= self.thresholds.minimum_match_score else None
+        return best if layout_score(best) >= self.profile.matching.minimum_score else None
 
     @staticmethod
     def _center_inside(inner: BoundingBox, outer: BoundingBox) -> bool:

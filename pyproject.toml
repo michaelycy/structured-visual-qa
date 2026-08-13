@@ -1,0 +1,21 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "document-qa"
+version = "0.1.0"
+description = "Structured visual QA models for translated documents"
+requires-python = ">=3.11"
+dependencies = [
+  "numpy>=2,<3",
+  "pydantic>=2.8,<3",
+  "pymupdf>=1.26,<2",
+  "scipy>=1.15,<2",
+]
+
+[project.scripts]
+document-qa = "document_qa.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/document_qa"]

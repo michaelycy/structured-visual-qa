@@ -6,10 +6,12 @@ from document_qa.schemas import (
     BoundingBox,
     Content,
     ElementType,
+    Issue,
     IssueType,
     Page,
     QAStatus,
     Region,
+    Severity,
     TextStyle,
 )
 from document_qa.scoring import QAScorer
@@ -91,7 +93,157 @@ class MatchingAndDetectionTests(unittest.TestCase):
         self.assertEqual(len(image_issues), 1)
         self.assertEqual(QAScorer().score(issues)[1], QAStatus.FAIL)
 
+    def test_ignores_source_text_merged_into_target_text_box(self) -> None:
+        """目标文本框覆盖多个源段落时，不应把额外源段落判为缺失。"""
+
+        source = Page(
+            document_id="source",
+            page=1,
+            width=200,
+            height=200,
+            regions=[
+                Region(
+                    id="source-a",
+                    page=1,
+                    type=ElementType.PARAGRAPH,
+                    bbox=BoundingBox(x=10, y=10, width=100, height=20),
+                ),
+                Region(
+                    id="source-b",
+                    page=1,
+                    type=ElementType.PARAGRAPH,
+                    bbox=BoundingBox(x=10, y=35, width=100, height=20),
+                ),
+            ],
+        )
+        target = Page(
+            document_id="target",
+            page=1,
+            width=200,
+            height=200,
+            regions=[
+                Region(
+                    id="target-merged",
+                    page=1,
+                    type=ElementType.PARAGRAPH,
+                    bbox=BoundingBox(x=10, y=10, width=100, height=50),
+                )
+            ],
+        )
+        result = RegionMatcher().match_page(source, target)
+
+        issues = RuleDetector().detect(source, target, result)
+
+        self.assertNotIn(IssueType.MISSING_ELEMENT, {issue.type for issue in issues})
+
+    def test_ignores_preexisting_text_image_overlap(self) -> None:
+        """源目标都存在的背景图叠字属于设计关系，不应报告异常。"""
+
+        source = Page(
+            document_id="source",
+            page=1,
+            width=200,
+            height=200,
+            regions=[
+                Region(
+                    id="source-image",
+                    page=1,
+                    type=ElementType.IMAGE,
+                    bbox=BoundingBox(x=0, y=0, width=200, height=200),
+                ),
+                Region(
+                    id="source-text",
+                    page=1,
+                    type=ElementType.PARAGRAPH,
+                    bbox=BoundingBox(x=20, y=20, width=100, height=30),
+                ),
+            ],
+        )
+        target = source.model_copy(
+            update={
+                "document_id": "target",
+                "regions": [
+                    source.regions[0].model_copy(update={"id": "target-image"}),
+                    source.regions[1].model_copy(update={"id": "target-text"}),
+                ],
+            }
+        )
+        result = RegionMatcher().match_page(source, target)
+
+        issues = RuleDetector().detect(source, target, result)
+
+        self.assertNotIn(
+            IssueType.TEXT_IMAGE_OVERLAP, {issue.type for issue in issues}
+        )
+
+    def test_detects_new_text_image_overlap(self) -> None:
+        """目标文本移动到图片上时，新增拓扑重叠必须报告。"""
+
+        source = Page(
+            document_id="source",
+            page=1,
+            width=200,
+            height=200,
+            regions=[
+                Region(
+                    id="source-image",
+                    page=1,
+                    type=ElementType.IMAGE,
+                    bbox=BoundingBox(x=0, y=100, width=200, height=100),
+                ),
+                Region(
+                    id="source-text",
+                    page=1,
+                    type=ElementType.PARAGRAPH,
+                    bbox=BoundingBox(x=20, y=20, width=100, height=30),
+                ),
+            ],
+        )
+        target = Page(
+            document_id="target",
+            page=1,
+            width=200,
+            height=200,
+            regions=[
+                Region(
+                    id="target-image",
+                    page=1,
+                    type=ElementType.IMAGE,
+                    bbox=BoundingBox(x=0, y=100, width=200, height=100),
+                ),
+                Region(
+                    id="target-text",
+                    page=1,
+                    type=ElementType.PARAGRAPH,
+                    bbox=BoundingBox(x=20, y=110, width=100, height=30),
+                ),
+            ],
+        )
+        result = RegionMatcher().match_page(source, target)
+
+        issues = RuleDetector().detect(source, target, result)
+
+        self.assertIn(IssueType.TEXT_IMAGE_OVERLAP, {issue.type for issue in issues})
+
+    def test_repeated_issue_type_has_page_deduction_cap(self) -> None:
+        """重复图表标签问题应全部保留，但不能无限重复扣减页面分数。"""
+
+        issues = [
+            Issue(
+                id=f"font-{index}",
+                page=1,
+                type=IssueType.FONT_SHRINK,
+                severity=Severity.HIGH,
+                description="图表标签字号缩小。",
+            )
+            for index in range(12)
+        ]
+
+        score, status = QAScorer().score(issues)
+
+        self.assertEqual(score, 90.0)
+        self.assertEqual(status, QAStatus.REVIEW)
+
 
 if __name__ == "__main__":
     unittest.main()
-

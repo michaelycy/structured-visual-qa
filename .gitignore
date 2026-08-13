@@ -8,7 +8,7 @@ venv/
 dist/
 build/
 *.egg-info/
+tmp/
 .env
 .env.*
 !.env.example
-

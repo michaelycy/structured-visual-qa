@@ -3,13 +3,19 @@
 from itertools import combinations
 
 from document_qa.config import QAThresholds
-from document_qa.matching.geometry import intersection_ratio
+from document_qa.matching.geometry import (
+    intersection_ratio,
+    position_similarity,
+    size_similarity,
+)
 from document_qa.schemas import (
+    BoundingBox,
     ElementType,
     Issue,
     IssueType,
     Page,
     PageMatchResult,
+    Region,
     Severity,
 )
 
@@ -40,7 +46,7 @@ class RuleDetector:
         issues.extend(self._detect_missing(source, target, match_result))
         issues.extend(self._detect_geometry(target, match_result))
         issues.extend(self._detect_out_of_page(target))
-        issues.extend(self._detect_overlaps(target))
+        issues.extend(self._detect_overlaps(source, target, match_result))
         return issues
 
     def _detect_missing(
@@ -54,6 +60,10 @@ class RuleDetector:
         for region_id in result.unmatched_source_region_ids:
             region = source_regions[region_id]
             is_image = region.type == ElementType.IMAGE
+            # 不同语言的 PDF 导出器经常把多个英文段落合并为一个中文文本框。
+            # 只要目标文本在同一版面范围内充分覆盖该源文本，就不能判为内容缺失。
+            if not is_image and self._is_covered_by_target_text(region, target):
+                continue
             issues.append(
                 Issue(
                     id=f"p{source.page}-missing-{region_id}",
@@ -87,6 +97,16 @@ class RuleDetector:
                 )
             )
         return issues
+
+    def _is_covered_by_target_text(self, source_region: Region, target: Page) -> bool:
+        """判断未匹配源文本是否已被目标文本框通过多对一方式承载。"""
+
+        return any(
+            region.type in self._TEXT_TYPES
+            and intersection_ratio(source_region.bbox, region.bbox)
+            >= self.thresholds.merged_text_coverage_ratio
+            for region in target.regions
+        )
 
     def _detect_geometry(
         self, target: Page, result: PageMatchResult
@@ -124,17 +144,14 @@ class RuleDetector:
 
             font_change = diff.font_size_change_ratio
             if font_change is not None and font_change < self.thresholds.font_shrink_ratio:
-                severity = (
-                    Severity.CRITICAL
-                    if font_change < self.thresholds.critical_font_shrink_ratio
-                    else Severity.HIGH
-                )
                 issues.append(
                     Issue(
                         id=f"p{target.page}-font-{diff.target_region_id}",
                         page=target.page,
                         type=IssueType.FONT_SHRINK,
-                        severity=severity,
+                        # 字号缩小本身需要人工复核；只有同时出现裁切、越界等
+                        # 可见内容损失时，才由相应规则升级为 Critical。
+                        severity=Severity.HIGH,
                         source_region=diff.source_region_id,
                         target_region=diff.target_region_id,
                         bbox=target_region.bbox,
@@ -175,8 +192,10 @@ class RuleDetector:
                 )
         return issues
 
-    def _detect_overlaps(self, target: Page) -> list[Issue]:
-        """检测独立 Region 之间具有交付风险的面积重叠。"""
+    def _detect_overlaps(
+        self, source: Page, target: Page, result: PageMatchResult
+    ) -> list[Issue]:
+        """只报告翻译后新增或显著加剧的区域重叠。"""
 
         issues: list[Issue] = []
         for first, second in combinations(target.regions, 2):
@@ -189,6 +208,42 @@ class RuleDetector:
                 first_is_text and second.type == ElementType.IMAGE
             ) or (second_is_text and first.type == ElementType.IMAGE)
             if not is_text_image and not (first_is_text and second_is_text):
+                continue
+
+            source_ratio = 0.0
+            source_first = self._find_layout_analog(first, source, target)
+            source_second = self._find_layout_analog(second, source, target)
+            if source_first is not None and source_second is not None:
+                source_ratio = intersection_ratio(
+                    source_first.bbox,
+                    source_second.bbox,
+                )
+            if is_text_image:
+                target_text = first if first_is_text else second
+                target_image = second if first_is_text else first
+                # 照片署名、版权来源和页脚通常有意叠在图片边缘；这类小型
+                # 标注不属于正文侵入图片，不应产生 Critical。
+                if (
+                    target_text.bbox.area / (target.width * target.height)
+                    <= self.thresholds.image_caption_area_ratio
+                ):
+                    continue
+                source_text = source_first if first_is_text else source_second
+                source_image = source_second if first_is_text else source_first
+                target_center_inside = self._center_inside(
+                    target_text.bbox, target_image.bbox
+                )
+                source_center_inside = bool(
+                    source_text
+                    and source_image
+                    and self._center_inside(source_text.bbox, source_image.bbox)
+                )
+                # 图片署名和背景图叠字在源版中已经存在。面积比例会因中英文
+                # 字符宽度而变化，因此以文字中心是否新进入图片作为拓扑判据。
+                if not target_center_inside or source_center_inside:
+                    continue
+            # 背景照片、色块等常与文字天然叠放；只有目标重叠明显增加才是翻译异常。
+            if ratio - source_ratio <= self.thresholds.overlap_increase_ratio:
                 continue
 
             issue_type = (
@@ -206,6 +261,8 @@ class RuleDetector:
                     bbox=first.bbox,
                     metrics={
                         "overlap_ratio": ratio,
+                        "source_overlap_ratio": source_ratio,
+                        "overlap_increase_ratio": ratio - source_ratio,
                         "other_region": second.id,
                     },
                     description="目标文本与图片发生明显重叠。"
@@ -216,3 +273,45 @@ class RuleDetector:
             )
         return issues
 
+    def _find_layout_analog(
+        self, target_region: Region, source: Page, target: Page
+    ) -> Region | None:
+        """独立查找同类型且版面最接近的源区域，用于比较拓扑关系。"""
+
+        candidates = [
+            region
+            for region in source.regions
+            if (
+                region.type == target_region.type
+                or (
+                    region.type in self._TEXT_TYPES
+                    and target_region.type in self._TEXT_TYPES
+                )
+            )
+        ]
+        if not candidates:
+            return None
+
+        def layout_score(candidate: Region) -> float:
+            """拓扑对照更重视位置，尺寸只用于区分同位置的多个对象。"""
+
+            return 0.7 * position_similarity(
+                candidate.bbox,
+                target_region.bbox,
+                max(source.width, target.width),
+                max(source.height, target.height),
+            ) + 0.3 * size_similarity(candidate.bbox, target_region.bbox)
+
+        best = max(candidates, key=layout_score)
+        return best if layout_score(best) >= self.thresholds.minimum_match_score else None
+
+    @staticmethod
+    def _center_inside(inner: BoundingBox, outer: BoundingBox) -> bool:
+        """判断第一个 BBox 的中心是否位于第二个 BBox 内部。"""
+
+        center_x = inner.x + inner.width / 2
+        center_y = inner.y + inner.height / 2
+        return (
+            outer.x <= center_x <= outer.right
+            and outer.y <= center_y <= outer.bottom
+        )

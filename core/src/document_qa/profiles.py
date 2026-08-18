@@ -66,6 +66,8 @@ class DetectorToggles(SchemaModel):
     font_shrink: bool = True
     content_out_of_page: bool = True
     overlap: bool = True
+    number_mismatch: bool = True
+    untranslated_text: bool = True
 
 
 class DetectorThresholds(SchemaModel):
@@ -77,6 +79,8 @@ class DetectorThresholds(SchemaModel):
     overlap_ratio: float = Field(default=0.05, ge=0, le=1)
     overlap_increase_ratio: float = Field(default=0.05, ge=0, le=1)
     image_caption_area_ratio: float = Field(default=0.005, ge=0, le=1)
+    # 目标文本区中仍保留源语言文字的字符占比达到该值即判为未翻译。
+    untranslated_ratio: float = Field(default=0.7, ge=0, le=1)
 
     @model_validator(mode="after")
     def validate_threshold_order(self) -> "DetectorThresholds":
@@ -127,6 +131,8 @@ class ScoringSettings(SchemaModel):
             IssueType.TYPOGRAPHY_CHANGED: 10.0,
             IssueType.TABLE_STRUCTURE_CHANGED: 25.0,
             IssueType.PAGE_MISSING: 25.0,
+            IssueType.NUMBER_MISMATCH: 12.0,
+            IssueType.UNTRANSLATED_TEXT: 12.0,
             IssueType.OTHER: 10.0,
         }
     )

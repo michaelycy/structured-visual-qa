@@ -180,6 +180,16 @@ main { min-height: 300px; }
 }
 .issue-active { border-color: var(--bad); box-shadow: 0 0 0 1px var(--bad); }
 
+/* 人工复核判定 */
+.review-progress { font-size: 12px; color: var(--text-dim); margin: 8px 0; }
+.decision-badge { font-size: 11px; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
+.dec-confirmed { background: #fef1f0; color: var(--bad); }
+.dec-false_positive { background: #effaf2; color: var(--ok); }
+.dec-ignored { background: #eceff1; color: var(--text-dim); }
+.decision-row { display: flex; gap: 8px; margin-top: 10px; }
+.decision-btn { font-size: 12px; padding: 5px 12px; }
+.decision-btn.chosen { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+
 @media (max-width: 900px) {
   .run-bar { grid-template-columns: 1fr; }
   .stat-row { grid-template-columns: repeat(2, 1fr); }

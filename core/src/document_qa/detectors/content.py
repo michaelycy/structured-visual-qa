@@ -1,0 +1,217 @@
+"""内容级确定性检测：数字一致性与漏译（未翻译）。
+
+与布局检测同构：消费 Matcher 的配对结果 + Region 文本内容，输出统一
+Issue。不使用任何模型或外部服务，跨语言判断基于确定性字符集规则。
+"""
+
+from __future__ import annotations
+
+import re
+from collections import Counter
+
+from document_qa.profiles import RuleProfile, default_rule_profile
+from document_qa.schemas import Issue, IssueType, Page, PageMatchResult, Region, Severity, TEXT_TYPES
+
+# 数字抽取：整数、小数、千分位、百分号；范围数字（2020-2024）拆两端。
+_NUMBER_PATTERN = re.compile(r"\d+(?:[.,]\d+)?")
+# 判定为"源语言文字"的 Unicode 区块；中英互译场景覆盖 CJK 与拉丁字母。
+_CJK_PATTERN = re.compile(r"[\u4e00-\u9fff\u3400-\u4dbf]")
+_LATIN_PATTERN = re.compile(r"[A-Za-z]")
+# 全大写字母词（机构缩写：UNICEF、WHO、CSAM）通常保留原文不翻译。
+_ACRONYM_PATTERN = re.compile(r"\b[A-Z]{2,}\b")
+
+
+class ContentDetector:
+    """检查配对区域之间的数字一致性与目标文本的翻译完整性。"""
+
+    def __init__(self, profile: RuleProfile | None = None) -> None:
+        """初始化带版本的检测开关和阈值。"""
+
+        self.profile = profile or default_rule_profile()
+
+    def detect(
+        self, source: Page, target: Page, result: PageMatchResult
+    ) -> list[Issue]:
+        """按固定顺序运行内容规则，保证报告输出稳定。"""
+
+        issues: list[Issue] = []
+        enabled = self.profile.detectors.enabled
+        if enabled.number_mismatch:
+            issues.extend(self._detect_number_mismatch(source, target, result))
+        if enabled.untranslated_text:
+            issues.extend(self._detect_untranslated(source, target, result))
+        return issues
+
+    def _detect_number_mismatch(
+        self, source: Page, target: Page, result: PageMatchResult
+    ) -> list[Issue]:
+        """页面级数字集合守恒检查：总量不一致才报告，附差集明细。
+
+        翻译中数字位置常在配对 Region 间移动（页眉日期 vs 正文年份），
+        逐对比较会误报互换；页面级守恒只捕获真实的错漏译。
+        """
+
+        source_numbers = Counter()
+        target_numbers = Counter()
+        for region in source.regions:
+            source_numbers += self._extract_numbers(region)
+        for region in target.regions:
+            target_numbers += self._extract_numbers(region)
+        if not source_numbers and not target_numbers:
+            return []
+        missing = source_numbers - target_numbers
+        extra = target_numbers - source_numbers
+        if not missing and not extra:
+            return []
+        # 用包含缺失数字的源区域做定位；找不到时退到页面级 Issue。
+        anchor = self._find_number_anchor(source, missing)
+        return [
+            Issue(
+                id=f"p{target.page}-numbers",
+                page=target.page,
+                type=IssueType.NUMBER_MISMATCH,
+                severity=Severity.HIGH,
+                source_region=anchor.id if anchor else None,
+                bbox=anchor.bbox if anchor else None,
+                metrics={
+                    "source_numbers": sorted(source_numbers.elements()),
+                    "target_numbers": sorted(target_numbers.elements()),
+                    "missing_numbers": sorted(missing.elements()),
+                    "extra_numbers": sorted(extra.elements()),
+                },
+                description="目标页面数字与源页面不一致，可能存在错漏译。",
+                detector="content-numbers",
+            )
+        ]
+
+    @staticmethod
+    def _find_number_anchor(
+        source: Page, missing: Counter
+    ) -> Region | None:
+        """找到包含缺失数字的源区域，用于问题定位。"""
+
+        for region in source.regions:
+            numbers = ContentDetector._extract_numbers(region)
+            if numbers & missing:
+                return region
+        return None
+
+    def _detect_untranslated(
+        self, source: Page, target: Page, result: PageMatchResult
+    ) -> list[Issue]:
+        """目标文本框仍大量保留源语言文字时判为漏译。
+
+        判据是"源语言为主、目标语言占比极低"：以源页面主导语言为参照，
+        目标区域中源语言字符占比超过阈值且目标语言字符近乎为零。
+        """
+
+        source_regions = {region.id: region for region in source.regions}
+        target_regions = {region.id: region for region in target.regions}
+        source_language = self._dominant_language(
+            [region for region in source_regions.values()]
+        )
+        target_language = self._dominant_language(
+            list(target_regions.values())
+        )
+        if source_language == target_language or source_language is None:
+            # 双语同文或源语言无法判定时跳过，避免误报。
+            return []
+        issues: list[Issue] = []
+        threshold = self.profile.detectors.thresholds.untranslated_ratio
+        for match in result.matches:
+            source_region = source_regions.get(match.source_region_id)
+            target_region = target_regions.get(match.target_region_id)
+            if source_region is None or target_region is None:
+                continue
+            if target_region.type not in TEXT_TYPES:
+                continue
+            text = target_region.content.text if target_region.content else None
+            if not text:
+                continue
+            # 机构名、版权行（© WHO、© UNFPA）本来就保留原文；
+            # 字母字符过少或全由大写缩写构成的短文本不参与漏译判定。
+            letters = _CJK_PATTERN.findall(text) + _LATIN_PATTERN.findall(text)
+            if len(letters) < 8:
+                continue
+            without_acronyms = _ACRONYM_PATTERN.sub("", text)
+            remaining = (
+                _CJK_PATTERN.findall(without_acronyms)
+                + _LATIN_PATTERN.findall(without_acronyms)
+            )
+            if len(remaining) < 8:
+                continue
+            ratio = self._language_ratio(text, source_language)
+            if ratio >= threshold:
+                issues.append(
+                    Issue(
+                        id=f"p{target.page}-untranslated-{target_region.id}",
+                        page=target.page,
+                        type=IssueType.UNTRANSLATED_TEXT,
+                        severity=Severity.HIGH,
+                        source_region=source_region.id,
+                        target_region=target_region.id,
+                        bbox=target_region.bbox,
+                        metrics={
+                            "source_language_ratio": round(ratio, 3),
+                            "threshold": threshold,
+                            "sample": text[:60],
+                        },
+                        description="目标文本区仍保留源语言内容，疑似漏译。",
+                        detector="content-untranslated",
+                    )
+                )
+        return issues
+
+    @staticmethod
+    def _extract_numbers(region: Region) -> Counter:
+        """抽取区域文本中的数字（千分位归一化：1,137 与 1137 等价）。
+
+        中文排版常去掉千分位逗号，格式差异不应判为数字错漏。
+        """
+
+        text = region.content.text if region.content else None
+        if not text:
+            return Counter()
+        normalized = text.replace("，", ",").replace("。", ".")
+        raw = _NUMBER_PATTERN.findall(normalized)
+        return Counter(number.replace(",", "") for number in raw)
+
+    @staticmethod
+    def _dominant_language(regions: list[Region]) -> str | None:
+        """按各 Region 主语言的数量投票判断页面主导语言。
+
+        用区域数而非字符数投票：英文单词字母多、中文汉字信息密度高，
+        按字符数统计会把"中文为主夹一段英文"的页面误判为英文。
+        """
+
+        votes: Counter = Counter()
+        for region in regions:
+            # 图片等 Region 的 content.text 可能为 None，需先判空。
+            text = region.content.text if region.content else ""
+            if not text:
+                continue
+            cjk = len(_CJK_PATTERN.findall(text))
+            latin = len(_LATIN_PATTERN.findall(text))
+            if cjk == 0 and latin == 0:
+                continue
+            if cjk > latin:
+                votes["cjk"] += 1
+            elif latin > cjk:
+                votes["latin"] += 1
+        if not votes:
+            return None
+        top = votes.most_common(2)
+        # 平票视为混排，无法定义"源语言"，漏译判定跳过。
+        if len(top) == 2 and top[0][1] == top[1][1]:
+            return "mixed"
+        return top[0][0]
+
+    @staticmethod
+    def _language_ratio(text: str, language: str) -> float:
+        """计算文本中指定语言字母（排除数字与标点）的占比。"""
+
+        pattern = _CJK_PATTERN if language == "cjk" else _LATIN_PATTERN
+        letters = _CJK_PATTERN.findall(text) + _LATIN_PATTERN.findall(text)
+        if not letters:
+            return 0.0
+        return len(pattern.findall(text)) / len(letters)

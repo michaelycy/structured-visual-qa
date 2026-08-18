@@ -167,8 +167,15 @@ class StagedVerifier:
                 match_result = self.pipeline.matcher.match_page(
                     source_page, target_page
                 )
+                # 与 DocumentQAPipeline._compare_page 相同的检测顺序：
+                # 布局规则在前，内容级检测（数字/漏译）在后。
                 issues.extend(
                     self.pipeline.detector.detect(source_page, target_page, match_result)
+                )
+                issues.extend(
+                    self.pipeline.content_detector.detect(
+                        source_page, target_page, match_result
+                    )
                 )
             self._documents["issues"] = issues
             data = {

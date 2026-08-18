@@ -1,5 +1,9 @@
 import { useState } from "react"
-import { api, type CompareResponse } from "./api"
+import {
+  api,
+  type CompareResponse,
+  type ReviewDecision,
+} from "./api"
 import { ReportOverview } from "./views/ReportOverview"
 import { PageDetails } from "./views/PageDetails"
 import { StageView } from "./views/StageView"
@@ -18,6 +22,9 @@ export function App() {
   const [result, setResult] = useState<CompareResponse | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState("")
+  // 复核闭环：比较完成后生成任务 ID，判定按 Issue 粒度持久化。
+  const [taskId, setTaskId] = useState<string | null>(null)
+  const [decisions, setDecisions] = useState<Record<string, ReviewDecision>>({})
 
   const runCompare = async () => {
     setBusy(true)
@@ -26,11 +33,36 @@ export function App() {
       const response = await api.compare(source.path, target.path)
       setResult(response)
       setTab("overview")
+      // 任务 ID 由双方文档摘要组成，同一对文档的复核记录自然延续。
+      const srcId = response.report.source_document_id.slice(0, 12)
+      const tgtId = response.report.target_document_id.slice(0, 12)
+      const id = `${srcId}-${tgtId}`
+      setTaskId(id)
+      setDecisions({})
+      // 尝试恢复该文档对的历史判定。
+      api
+        .reviewTask(id)
+        .then((record) =>
+          setDecisions(
+            Object.fromEntries(
+              Object.entries(record.decisions).map(([k, v]) => [k, v.decision]),
+            ),
+          ),
+        )
+        .catch(() => undefined)
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc))
     } finally {
       setBusy(false)
     }
+  }
+
+  const decide = (issueId: string, decision: ReviewDecision) => {
+    if (!taskId || !result) return
+    setDecisions((prev) => ({ ...prev, [issueId]: decision }))
+    api
+      .reviewDecision(taskId, result.report, issueId, decision)
+      .catch((exc) => setError(exc instanceof Error ? exc.message : String(exc)))
   }
 
   return (
@@ -96,7 +128,13 @@ export function App() {
           ))}
         {tab === "pages" &&
           (result ? (
-            <PageDetails report={result.report} rendered={result.rendered} />
+            <PageDetails
+              report={result.report}
+              rendered={result.rendered}
+              taskId={taskId}
+              decisions={decisions}
+              onDecide={decide}
+            />
           ) : (
             <p className="empty">先执行一次比较，再查看逐页详情。</p>
           ))}

@@ -12,6 +12,7 @@ from document_qa_server.services import (
     CompareService,
     FileService,
     ProfileService,
+    ReviewService,
     VerifyService,
 )
 
@@ -51,9 +52,11 @@ def create_app(*, artifacts_dir: Path | None = None) -> FastAPI:
     app.state.verify = verify_service
     app.state.profiles = profile_service
     app.state.files = file_service
+    app.state.reviews = ReviewService(artifacts_dir=root)
 
     from document_qa_server.api.routes_compare import router as compare_router
     from document_qa_server.api.routes_files import router as files_router
+    from document_qa_server.api.routes_review import router as review_router
     from document_qa_server.api.routes_profile import router as profile_router
     from document_qa_server.api.routes_verify import router as verify_router
 
@@ -61,6 +64,7 @@ def create_app(*, artifacts_dir: Path | None = None) -> FastAPI:
     app.include_router(verify_router)
     app.include_router(profile_router)
     app.include_router(files_router)
+    app.include_router(review_router)
 
     @app.get("/api/health")
     def health() -> dict:

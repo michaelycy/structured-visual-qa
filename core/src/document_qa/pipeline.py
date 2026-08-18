@@ -4,7 +4,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Literal
 
-from document_qa.detectors import RuleDetector
+from document_qa.detectors import ContentDetector, RuleDetector
 from document_qa.grouping import RegionGrouper
 from document_qa.matching import PageAligner, RegionMatcher
 from document_qa.parsers import PyMuPDFParser
@@ -39,6 +39,7 @@ class DocumentQAPipeline:
         page_aligner: PageAligner | None = None,
         matcher: RegionMatcher | None = None,
         detector: RuleDetector | None = None,
+        content_detector: ContentDetector | None = None,
         scorer: QAScorer | None = None,
     ) -> None:
         """支持注入 Profile 与组件，便于界面配置、测试和替换 PDF 引擎。"""
@@ -51,6 +52,7 @@ class DocumentQAPipeline:
         self.page_aligner = page_aligner or PageAligner(self.profile)
         self.matcher = matcher or RegionMatcher(self.profile)
         self.detector = detector or RuleDetector(self.profile)
+        self.content_detector = content_detector or ContentDetector(self.profile)
         self.scorer = scorer or QAScorer(self.profile)
 
     def compare(
@@ -173,6 +175,8 @@ class DocumentQAPipeline:
 
         match_result = self.matcher.match_page(source, target)
         issues = self.detector.detect(source, target, match_result)
+        # 内容级检测（数字/漏译）复用同一匹配结果，位于布局规则之后。
+        issues.extend(self.content_detector.detect(source, target, match_result))
         score, status = self.scorer.score(issues)
         return PageQAResult(
             page=page_number,

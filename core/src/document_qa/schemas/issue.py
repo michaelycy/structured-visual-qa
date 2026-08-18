@@ -36,6 +36,8 @@ class IssueType(StrEnum):
     TYPOGRAPHY_CHANGED = "typography_changed"
     TABLE_STRUCTURE_CHANGED = "table_structure_changed"
     PAGE_MISSING = "page_missing"
+    NUMBER_MISMATCH = "number_mismatch"
+    UNTRANSLATED_TEXT = "untranslated_text"
     OTHER = "other"
 
 

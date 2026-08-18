@@ -55,6 +55,16 @@ export interface RuleProfile {
   [key: string]: unknown
 }
 
+export type ReviewDecision = "confirmed" | "false_positive" | "ignored"
+
+export interface ReviewRecord {
+  source_document_id: string
+  target_document_id: string
+  rule_profile_reference: string
+  decisions: Record<string, { issue_id: string; decision: ReviewDecision; note: string; reviewed_at: string }>
+  updated_at: string
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     headers: { "Content-Type": "application/json" },
@@ -93,4 +103,26 @@ export const api = {
     }),
   sampleFiles: () =>
     request<{ samples: string[] }>("/api/files/samples").then((r) => r.samples),
+  reviewDecision: (
+    taskId: string,
+    report: QAReport,
+    issueId: string,
+    decision: ReviewDecision,
+    note = "",
+  ) =>
+    request<ReviewRecord>("/api/review/decision", {
+      method: "POST",
+      body: JSON.stringify({
+        task_id: taskId,
+        report_summary: {
+          source_document_id: report.source_document_id,
+          target_document_id: report.target_document_id,
+          rule_profile_reference: report.rule_profile_reference,
+        },
+        issue_id: issueId,
+        decision,
+        note,
+      }),
+    }),
+  reviewTask: (taskId: string) => request<ReviewRecord>(`/api/review/task/${taskId}`),
 }

@@ -15,7 +15,9 @@ SOURCE_PDF = EXAMPLE_DIR / "un-china-2024-en.pdf"
 TARGET_PDF = EXAMPLE_DIR / "un-china-2024-zh.pdf"
 
 # 内置 translation-balanced v1 在 2024-08 校准的基线。
-BASELINE_SCORE = 91.804
+# 2025-08 增补内容级检测（数字一致性）后更新：review→fail，91.80→86.80；
+# untranslated_text 经机构缩写豁免校准后在真实样例上为 0。
+BASELINE_SCORE = 86.80
 BASELINE_PAGES = 46
 SCORE_TOLERANCE = 0.5
 
@@ -36,7 +38,7 @@ class GoldenSampleRegressionTests(unittest.TestCase):
     def test_document_status_and_score_are_stable(self) -> None:
         """文档状态和总分必须停留在基线附近。"""
 
-        self.assertEqual(self.report.status.value, "review")
+        self.assertEqual(self.report.status.value, "fail")
         self.assertAlmostEqual(
             self.report.document_score, BASELINE_SCORE, delta=SCORE_TOLERANCE
         )

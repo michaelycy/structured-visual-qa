@@ -1,10 +1,16 @@
 import { useRef, useState } from "react"
-import type { Issue, QAReport } from "../api"
+import type { Issue, QAReport, ReviewDecision } from "../api"
 
 const STATUS_LABEL: Record<string, string> = {
   pass: "通过",
   review: "复核",
   fail: "失败",
+}
+
+const DECISION_LABEL: Record<ReviewDecision, string> = {
+  confirmed: "确认问题",
+  false_positive: "误报",
+  ignored: "忽略",
 }
 
 /** 页码 → 渲染文件名（与渲染器命名规则一致）。 */
@@ -19,15 +25,19 @@ function pageImage(
     : null
 }
 
-/** 单条问题的可展开行：描述、位置与触发指标。 */
+/** 单条问题的可展开行：描述、位置、触发指标与人工判定按钮。 */
 function IssueRow({
   issue,
   active,
   onActivate,
+  decision,
+  onDecide,
 }: {
   issue: Issue
   active: boolean
   onActivate: () => void
+  decision: ReviewDecision | undefined
+  onDecide: (decision: ReviewDecision) => void
 }) {
   const [open, setOpen] = useState(false)
   return (
@@ -42,6 +52,11 @@ function IssueRow({
         <span className={`sev-badge sev-${issue.severity}`}>{issue.severity}</span>
         <span className="issue-type">{issue.type}</span>
         <span className="issue-desc">{issue.description}</span>
+        {decision && (
+          <span className={`decision-badge dec-${decision}`}>
+            {DECISION_LABEL[decision]}
+          </span>
+        )}
         <span className="issue-caret">{open ? "收起" : "指标"}</span>
       </button>
       {open && (
@@ -53,6 +68,17 @@ function IssueRow({
             </p>
           )}
           <pre>{JSON.stringify(issue.metrics, null, 2)}</pre>
+          <div className="decision-row">
+            {(Object.keys(DECISION_LABEL) as ReviewDecision[]).map((key) => (
+              <button
+                key={key}
+                className={decision === key ? "decision-btn chosen" : "decision-btn"}
+                onClick={() => onDecide(key)}
+              >
+                {DECISION_LABEL[key]}
+              </button>
+            ))}
+          </div>
         </div>
       )}
     </li>
@@ -134,13 +160,19 @@ function PageCompare({
   )
 }
 
-/** 左侧页面列表 + 右侧对比图与问题明细。 */
+/** 左侧页面列表 + 右侧对比图与问题明细（含人工判定）。 */
 export function PageDetails({
   report,
   rendered,
+  taskId,
+  decisions,
+  onDecide,
 }: {
   report: QAReport
   rendered?: { source: string[]; target: string[] }
+  taskId: string | null
+  decisions: Record<string, ReviewDecision>
+  onDecide: (issueId: string, decision: ReviewDecision) => void
 }) {
   const problems = report.pages.filter((page) => page.status !== "pass")
   const [selected, setSelected] = useState<number | null>(
@@ -148,6 +180,8 @@ export function PageDetails({
   )
   const [activeIssueId, setActiveIssueId] = useState<string | null>(null)
   const page = report.pages.find((item) => item.page === selected)
+  const reviewed = Object.keys(decisions).length
+  const totalIssues = report.pages.reduce((sum, p) => sum + p.issues.length, 0)
 
   return (
     <section className="pages">
@@ -182,16 +216,25 @@ export function PageDetails({
               activeIssueId={activeIssueId}
             />
             {page.issues.length ? (
-              <ul className="issue-list">
-                {page.issues.map((issue) => (
-                  <IssueRow
-                    key={issue.id}
-                    issue={issue}
-                    active={issue.id === activeIssueId}
-                    onActivate={() => setActiveIssueId(issue.id)}
-                  />
-                ))}
-              </ul>
+              <>
+                {taskId && (
+                  <p className="review-progress">
+                    复核进度：{reviewed} / {totalIssues} 条
+                  </p>
+                )}
+                <ul className="issue-list">
+                  {page.issues.map((issue) => (
+                    <IssueRow
+                      key={issue.id}
+                      issue={issue}
+                      active={issue.id === activeIssueId}
+                      decision={decisions[issue.id]}
+                      onActivate={() => setActiveIssueId(issue.id)}
+                      onDecide={(decision) => onDecide(issue.id, decision)}
+                    />
+                  ))}
+                </ul>
+              </>
             ) : (
               <p className="empty">本页没有发现问题。</p>
             )}

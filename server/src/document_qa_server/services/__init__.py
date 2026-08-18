@@ -8,12 +8,14 @@
 from document_qa_server.services.compare_service import CompareService
 from document_qa_server.services.file_service import FileService
 from document_qa_server.services.profile_service import ProfileService
+from document_qa_server.services.review_service import ReviewService
 from document_qa_server.services.verify_service import VerifyService, VerifyStageResult
 
 __all__ = [
     "CompareService",
     "FileService",
     "ProfileService",
+    "ReviewService",
     "VerifyService",
     "VerifyStageResult",
 ]

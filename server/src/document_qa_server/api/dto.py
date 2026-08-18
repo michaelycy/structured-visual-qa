@@ -14,6 +14,8 @@ class CompareRequest(BaseModel):
 
     source: str = Field(min_length=1)
     target: str = Field(min_length=1)
+    source_display: str = ""
+    target_display: str = ""
     profile_path: str | None = None
     render: bool = True
     render_scope: Literal["all", "issues"] = "issues"

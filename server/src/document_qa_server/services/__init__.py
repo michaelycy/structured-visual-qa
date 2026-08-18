@@ -7,6 +7,7 @@
 
 from document_qa_server.services.compare_service import CompareService
 from document_qa_server.services.file_service import FileService
+from document_qa_server.services.history_service import CompareHistoryService
 from document_qa_server.services.normalization_service import (
     NormalizationError,
     NormalizationService,
@@ -16,6 +17,7 @@ from document_qa_server.services.review_service import ReviewService
 from document_qa_server.services.verify_service import VerifyService, VerifyStageResult
 
 __all__ = [
+    "CompareHistoryService",
     "CompareService",
     "FileService",
     "NormalizationError",

@@ -59,4 +59,14 @@ def compare(request: CompareRequest, http: Request) -> dict:
     except NormalizationError as exc:
         # LibreOffice 缺失/转换失败映射为 503，detail 含安装指引。
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    return {"report": report.model_dump(mode="json"), "rendered": rendered}
+
+    # 比较成功后落一条对比记录，供「对比记录」页列出与回看。
+    report_data = report.model_dump(mode="json")
+    http.app.state.history.add(
+        report=report_data,
+        source_path=str(source),
+        target_path=str(target),
+        source_display=request.source_display or source.name,
+        target_display=request.target_display or target.name,
+    )
+    return {"report": report_data, "rendered": rendered}

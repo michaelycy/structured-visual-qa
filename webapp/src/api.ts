@@ -65,6 +65,20 @@ export interface ReviewRecord {
   updated_at: string
 }
 
+export interface HistoryRecord {
+  record_id: string
+  created_at: string
+  source_display: string
+  target_display: string
+  status: string
+  document_score: number
+  pages: number
+  issue_total: number
+  rule_profile_reference: string
+  normalized_from?: Record<string, string | null> | null
+  report?: QAReport
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     headers: { "Content-Type": "application/json" },
@@ -84,10 +98,23 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  compare: (source: string, target: string, render = true) =>
+  compare: (
+    source: string,
+    target: string,
+    sourceDisplay = "",
+    targetDisplay = "",
+    render = true,
+  ) =>
     request<CompareResponse>("/api/compare", {
       method: "POST",
-      body: JSON.stringify({ source, target, render, render_scope: "issues" }),
+      body: JSON.stringify({
+        source,
+        target,
+        source_display: sourceDisplay,
+        target_display: targetDisplay,
+        render,
+        render_scope: "issues",
+      }),
     }),
   verify: (source: string, target: string, stopAfter: string) =>
     request<{ stages: StageItem[] }>("/api/verify", {
@@ -143,4 +170,10 @@ export const api = {
       }),
     }),
   reviewTask: (taskId: string) => request<ReviewRecord>(`/api/review/task/${taskId}`),
+  historyList: () =>
+    request<{ records: Omit<HistoryRecord, "report">[] }>("/api/history/list").then(
+      (r) => r.records,
+    ),
+  historyItem: (recordId: string) =>
+    request<HistoryRecord>(`/api/history/item/${encodeURIComponent(recordId)}`),
 }

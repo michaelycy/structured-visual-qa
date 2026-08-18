@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from document_qa_server.services import (
+    CompareHistoryService,
     CompareService,
     FileService,
     NormalizationService,
@@ -57,9 +58,11 @@ def create_app(
     app.state.files = file_service
     app.state.normalizer = normalizer
     app.state.reviews = ReviewService(artifacts_dir=root)
+    app.state.history = CompareHistoryService(artifacts_dir=root)
 
     from document_qa_server.api.routes_compare import router as compare_router
     from document_qa_server.api.routes_files import router as files_router
+    from document_qa_server.api.routes_history import router as history_router
     from document_qa_server.api.routes_normalize import router as normalize_router
     from document_qa_server.api.routes_review import router as review_router
     from document_qa_server.api.routes_profile import router as profile_router
@@ -71,6 +74,7 @@ def create_app(
     app.include_router(files_router)
     app.include_router(normalize_router)
     app.include_router(review_router)
+    app.include_router(history_router)
 
     @app.get("/api/health")
     def health() -> dict:

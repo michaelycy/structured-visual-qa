@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>QA 验收报告 {{ report.rule_profile_reference }}</title>
+<style>
+  body { font-family: -apple-system, "PingFang SC", "Segoe UI", sans-serif;
+         margin: 0; background: #f6f7f8; color: #1c2733; }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 28px 24px 48px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: #5b6b7a; font-size: 13px; margin-bottom: 20px; }
+  .stats { display: flex; gap: 12px; margin-bottom: 24px; flex-wrap: wrap; }
+  .stat { background: #fff; border: 1px solid #d9dee2; border-radius: 8px;
+          padding: 12px 18px; min-width: 110px; }
+  .stat .label { font-size: 12px; color: #5b6b7a; }
+  .stat .value { font-size: 20px; font-weight: 650; margin-top: 4px; }
+  .stat.pass .value { color: #1a7f37; } .stat.review .value { color: #b45309; }
+  .stat.fail .value { color: #b42318; }
+  table { width: 100%; border-collapse: collapse; background: #fff;
+          border: 1px solid #d9dee2; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid #e6eaee; }
+  th { background: #eef1f3; font-size: 12px; color: #5b6b7a; }
+  .sev { padding: 1px 8px; border-radius: 999px; font-size: 11px; }
+  .sev.critical, .sev.high { background: #fef1f0; color: #b42318; }
+  .sev.medium { background: #fdf5e7; color: #b45309; }
+  .sev.low { background: #effaf2; color: #1a7f37; }
+  .sev.info { background: #eceff1; color: #5b6b7a; }
+  h2 { font-size: 15px; margin: 26px 0 10px; }
+  .note { background: #fdf5e7; border: 1px solid #f0d9a8; border-radius: 8px;
+          padding: 10px 14px; font-size: 13px; color: #7a5410; margin-bottom: 18px; }
+  .empty { color: #5b6b7a; padding: 16px 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>翻译文档 QA 验收报告</h1>
+  <div class="sub">规则配置 {{ report.rule_profile_reference }} ·
+    源 {{ report.source_document_id[:12] }} / 目标 {{ report.target_document_id[:12] }}</div>
+
+  {% if normalized_from %}
+  <div class="note">本报告含归一化转换（{{ normalized_from }}），
+    版面结论已叠加转换噪声容差，请结合人工复核确认。</div>
+  {% endif %}
+
+  <div class="stats">
+    <div class="stat {{ report.status.value }}">
+      <div class="label">文档状态</div><div class="value">{{ report.status.value }}</div>
+    </div>
+    <div class="stat"><div class="label">文档分数</div>
+      <div class="value">{{ "%.2f"|format(report.document_score) }}</div></div>
+    <div class="stat"><div class="label">页面</div>
+      <div class="value">{{ summary.pages }}</div></div>
+    <div class="stat"><div class="label">问题总数</div>
+      <div class="value">{{ summary.issue_counts.values()|sum }}</div></div>
+  </div>
+
+  {% for page in pages %}
+  <h2>第 {{ page.page }} 页 · {{ page.status }} · {{ page.score }} 分</h2>
+  {% if page.issues %}
+  <table>
+    <tr><th>严重度</th><th>类型</th><th>描述</th></tr>
+    {% for issue in page.issues %}
+    <tr>
+      <td><span class="sev {{ issue.severity }}">{{ issue.severity }}</span></td>
+      <td>{{ issue.type }}</td>
+      <td>{{ issue.description }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="empty">本页没有发现问题。</p>
+  {% endif %}
+  {% endfor %}
+
+  {% if not pages %}<p class="empty">全部页面通过，没有需要复核的内容。</p>{% endif %}
+</div>
+</body>
+</html>

@@ -81,6 +81,9 @@ class DetectorThresholds(SchemaModel):
     image_caption_area_ratio: float = Field(default=0.005, ge=0, le=1)
     # 目标文本区中仍保留源语言文字的字符占比达到该值即判为未翻译。
     untranslated_ratio: float = Field(default=0.7, ge=0, le=1)
+    # LibreOffice 归一化带来的版面转换噪声容差；偏移类检测阈值自动
+    # 叠加该值，纯 PDF 流水线（未归一化）不受影响。
+    conversion_noise_ratio: float = Field(default=0.03, ge=0, le=0.2)
 
     @model_validator(mode="after")
     def validate_threshold_order(self) -> "DetectorThresholds":

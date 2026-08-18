@@ -42,3 +42,7 @@ PYTHONPATH=core/src .venv/bin/python -m unittest discover -s tests -v
 - `server/api/` 只做协议转换（DTO、状态码、静态挂载）；`server/services/` 做用例编排（互斥锁、产物目录）
 - core 不感知 HTTP；新增核心能力先进 core，服务层只做包装
 - 详见 docs/project-contract.md §7
+
+## 待办管理
+
+需求与技术采纳待办统一登记在 `docs/todo/tech-adoption-plan.md`（T 编号）：新待办必须含问题/方案/验收三段；完成后更新状态列并附验证证据。

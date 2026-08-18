@@ -72,6 +72,20 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="PATH",
         help="导出 Rule Profile JSON Schema 后退出，供配置界面生成表单",
     )
+    parser.add_argument(
+        "--export-xlsx",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="比较完成后额外导出 XLSX 验收问题清单",
+    )
+    parser.add_argument(
+        "--export-html",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="比较完成后额外导出 HTML 验收报告",
+    )
     return parser
 
 
@@ -119,6 +133,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             render_scope=args.render_scope,
         )
         output_path = JSONReporter().write(report, args.output)
+        # 可选的验收交付物导出；失败按输入错误处理并保留 JSON 报告。
+        exports = []
+        if args.export_xlsx is not None:
+            from document_qa.reporting.xlsx_reporter import export_xlsx
+
+            exports.append(export_xlsx(report, args.export_xlsx))
+        if args.export_html is not None:
+            from document_qa.reporting.html_reporter import export_html
+
+            exports.append(export_html(report, args.export_html))
     except (DocumentParsingError, ValueError) as exc:
         print(f"处理失败: {exc}", file=sys.stderr)
         return 2
@@ -127,6 +151,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         f"状态={report.status.value} 分数={report.document_score:.2f} "
         f"报告={output_path}"
     )
+    for path in exports:
+        print(f"已导出: {path}")
     return 0
 
 

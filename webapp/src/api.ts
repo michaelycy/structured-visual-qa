@@ -96,6 +96,24 @@ export const api = {
     }),
   defaultProfile: () => request<RuleProfile>("/api/profile/default"),
   profileSchema: () => request<Record<string, unknown>>("/api/profile/schema"),
+  profileList: () =>
+    request<{
+      profiles: {
+        filename: string
+        profile_id: string
+        name: string
+        version: number
+        status: string
+        reference: string
+      }[]
+    }>("/api/profile/list").then((r) => r.profiles),
+  profileItem: (filename: string) =>
+    request<RuleProfile>(`/api/profile/item/${encodeURIComponent(filename)}`),
+  profileDelete: (filename: string) =>
+    request<{ deleted: string }>(
+      `/api/profile/item/${encodeURIComponent(filename)}`,
+      { method: "DELETE" },
+    ),
   saveProfile: (profile: RuleProfile) =>
     request<{ path: string; reference: string }>("/api/profile/save", {
       method: "POST",

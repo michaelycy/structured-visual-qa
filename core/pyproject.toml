@@ -12,6 +12,8 @@ dependencies = [
   "pydantic>=2.8,<3",
   "pymupdf>=1.26,<2",
   "scipy>=1.15,<2",
+  "openpyxl>=3.1,<4",
+  "jinja2>=3.1,<4",
 ]
 
 [project.scripts]

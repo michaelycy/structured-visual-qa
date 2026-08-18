@@ -8,9 +8,10 @@ import { ReportOverview } from "./views/ReportOverview"
 import { PageDetails } from "./views/PageDetails"
 import { StageView } from "./views/StageView"
 import { ProfileEditor } from "./views/ProfileEditor"
+import { ProfileManager } from "./views/ProfileManager"
 import { PdfPicker } from "./views/PdfPicker"
 
-type Tab = "overview" | "pages" | "stages" | "profile"
+type Tab = "overview" | "pages" | "stages" | "profile" | "manager"
 
 /** 共享的任务输入状态：三个视图都围绕同一对 PDF 工作。 */
 export function App() {
@@ -104,7 +105,8 @@ export function App() {
             ["overview", "报告总览"],
             ["pages", "逐页详情"],
             ["stages", "分阶段验证"],
-            ["profile", "规则配置"],
+            ["manager", "规则管理"],
+            ["profile", "快速配置"],
           ] as [Tab, string][]
         ).map(([key, label]) => (
           <button
@@ -141,6 +143,7 @@ export function App() {
         {tab === "stages" && (
           <StageView source={source.path} target={target.path} />
         )}
+        {tab === "manager" && <ProfileManager />}
         {tab === "profile" && <ProfileEditor />}
       </main>
     </div>

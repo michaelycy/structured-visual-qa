@@ -7,6 +7,10 @@
 
 from document_qa_server.services.compare_service import CompareService
 from document_qa_server.services.file_service import FileService
+from document_qa_server.services.normalization_service import (
+    NormalizationError,
+    NormalizationService,
+)
 from document_qa_server.services.profile_service import ProfileService
 from document_qa_server.services.review_service import ReviewService
 from document_qa_server.services.verify_service import VerifyService, VerifyStageResult
@@ -14,6 +18,8 @@ from document_qa_server.services.verify_service import VerifyService, VerifyStag
 __all__ = [
     "CompareService",
     "FileService",
+    "NormalizationError",
+    "NormalizationService",
     "ProfileService",
     "ReviewService",
     "VerifyService",

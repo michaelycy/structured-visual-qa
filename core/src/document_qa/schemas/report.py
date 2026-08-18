@@ -50,3 +50,5 @@ class QAReport(SchemaModel):
     status: QAStatus
     summary: ReportSummary
     pages: list[PageQAResult] = Field(default_factory=list)
+    # 执行环境备注（如归一化来源），不影响评分与状态。
+    metadata: dict[str, "str | list | dict | None"] = Field(default_factory=dict)

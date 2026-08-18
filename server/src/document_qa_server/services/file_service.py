@@ -1,4 +1,4 @@
-"""文件服务：处理界面上传的 PDF 与服务器样例文件列表。"""
+"""文件服务：处理界面上传的 PDF/Office 文档与服务器样例文件列表。"""
 
 from __future__ import annotations
 
@@ -8,15 +8,27 @@ from pathlib import Path
 
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024
 
+# 上传直接受的格式：PDF 加可归一化的 Office 格式（转换在比较时进行）。
+from document_qa_server.services.normalization_service import SUPPORTED_FORMATS
+
+ACCEPTED_SUFFIXES = (".pdf", *sorted(SUPPORTED_FORMATS))
+
 
 class FileService:
     """封装上传文件的落盘与样例目录枚举。"""
 
-    def __init__(self, *, artifacts_dir: Path, samples_dir: Path) -> None:
-        """注入产物根目录（上传写入 uploads/ 子目录）与样例目录。"""
+    def __init__(
+        self,
+        *,
+        artifacts_dir: Path,
+        samples_dir: Path,
+        max_upload_bytes: int = MAX_UPLOAD_BYTES,
+    ) -> None:
+        """注入产物根目录、样例目录与上传大小上限（默认 100 MiB）。"""
 
         self._uploads_dir = artifacts_dir / "uploads"
         self._samples_dir = samples_dir
+        self._max_upload_bytes = max_upload_bytes
 
     def save_upload(self, filename: str, content: bytes) -> Path:
         """校验并保存上传文件，返回服务器端路径。
@@ -25,11 +37,15 @@ class FileService:
         文件名只用于展示，不参与路径拼接（契约 §9 输入安全）。
         """
 
-        if not filename.lower().endswith(".pdf"):
-            raise ValueError("只接受 .pdf 文件")
-        if len(content) > MAX_UPLOAD_BYTES:
-            raise ValueError("文件大小超过 100 MiB 限制")
-        if not content.startswith(b"%PDF"):
+        if filename.lower().endswith(ACCEPTED_SUFFIXES) is False:
+            raise ValueError(
+                f"只接受 PDF 或可归一化的 Office 格式: {', '.join(ACCEPTED_SUFFIXES)}"
+            )
+        if len(content) > self._max_upload_bytes:
+            raise ValueError(
+                f"文件大小超过 {self._max_upload_bytes // (1024 * 1024)} MiB 限制"
+            )
+        if filename.lower().endswith(".pdf") and not content.startswith(b"%PDF"):
             raise ValueError("不是有效的 PDF 文件")
         self._uploads_dir.mkdir(parents=True, exist_ok=True)
         digest = sha256(content).hexdigest()[:16]

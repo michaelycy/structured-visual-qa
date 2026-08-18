@@ -11,23 +11,23 @@ from fastapi.staticfiles import StaticFiles
 from document_qa_server.services import (
     CompareService,
     FileService,
+    NormalizationService,
     ProfileService,
     ReviewService,
     VerifyService,
 )
+from document_qa_server.settings import ServerSettings, load_settings
 
 
-def create_app(*, artifacts_dir: Path | None = None) -> FastAPI:
-    """构建应用实例；artifacts_dir 缺省落在项目根 webapp-artifacts/。"""
+def create_app(
+    *,
+    artifacts_dir: Path | None = None,
+    settings: ServerSettings | None = None,
+) -> FastAPI:
+    """构建应用实例；配置缺省来自 DQA_ 环境变量/.env（见 settings.py）。"""
 
-    # api/app.py 位于 <root>/server/src/document_qa_server/api/，上退五级
-    # 到项目根；产物目录 webapp-artifacts/ 保持不入源码树。
-    project_root = (
-        artifacts_dir.resolve().parent.parent
-        if artifacts_dir
-        else Path(__file__).resolve().parents[4]
-    )
-    root = artifacts_dir or project_root / "webapp-artifacts"
+    config = settings or load_settings()
+    root = artifacts_dir or config.artifacts_dir
     root.mkdir(parents=True, exist_ok=True)
 
     # 服务实例在应用级创建一次；互斥锁因此对全部请求生效。
@@ -35,14 +35,17 @@ def create_app(*, artifacts_dir: Path | None = None) -> FastAPI:
     verify_service = VerifyService(artifacts_dir=root)
     profile_service = ProfileService(artifacts_dir=root)
     file_service = FileService(
-        artifacts_dir=root, samples_dir=project_root / "examples"
+        artifacts_dir=root,
+        samples_dir=config.samples_dir,
+        max_upload_bytes=config.max_upload_bytes,
     )
+    normalizer = NormalizationService(artifacts_dir=root)
 
     app = FastAPI(title="Structured Visual QA", version="0.1.0")
     # 前端开发服务器运行在其他端口，需要允许跨源访问本 API。
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=config.cors_origins,
         allow_methods=["*"],
         allow_headers=["*"],
     )
@@ -52,10 +55,12 @@ def create_app(*, artifacts_dir: Path | None = None) -> FastAPI:
     app.state.verify = verify_service
     app.state.profiles = profile_service
     app.state.files = file_service
+    app.state.normalizer = normalizer
     app.state.reviews = ReviewService(artifacts_dir=root)
 
     from document_qa_server.api.routes_compare import router as compare_router
     from document_qa_server.api.routes_files import router as files_router
+    from document_qa_server.api.routes_normalize import router as normalize_router
     from document_qa_server.api.routes_review import router as review_router
     from document_qa_server.api.routes_profile import router as profile_router
     from document_qa_server.api.routes_verify import router as verify_router
@@ -64,6 +69,7 @@ def create_app(*, artifacts_dir: Path | None = None) -> FastAPI:
     app.include_router(verify_router)
     app.include_router(profile_router)
     app.include_router(files_router)
+    app.include_router(normalize_router)
     app.include_router(review_router)
 
     @app.get("/api/health")

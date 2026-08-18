@@ -1,20 +1,30 @@
 import { useEffect, useState } from "react"
 import { api, type RuleProfile } from "../api"
 
+export interface ProfileEditorProps {
+  /** 外部初始配置（规则管理页加载的已有 Profile）；缺省用内置默认值。 */
+  initial?: RuleProfile
+  /** 保存成功回调，参数为版本引用（如 translation-balanced@1）。 */
+  onSaved?: (reference: string) => void
+}
+
 /**
- * 规则配置编辑器：加载内置默认值，编辑关键数字项后交由服务端
- * Pydantic 严格校验保存。完整 Schema 项以只读分组展示，避免
- * 自制表单与核心校验规则漂移。
+ * 规则配置编辑器：编辑关键数字项后交由服务端 Pydantic 严格校验保存。
+ * 完整 Schema 项以只读分组展示，避免自制表单与核心校验规则漂移。
  */
-export function ProfileEditor() {
-  const [profile, setProfile] = useState<RuleProfile | null>(null)
+export function ProfileEditor({ initial, onSaved }: ProfileEditorProps) {
+  const [profile, setProfile] = useState<RuleProfile | null>(initial ?? null)
   const [message, setMessage] = useState("")
   const [error, setError] = useState("")
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
+    if (initial) {
+      setProfile(initial)
+      return
+    }
     api.defaultProfile().then(setProfile).catch(() => setError("无法加载默认配置"))
-  }, [])
+  }, [initial])
 
   if (!profile) {
     return <p className="empty">{error || "加载默认配置…"}</p>
@@ -39,6 +49,7 @@ export function ProfileEditor() {
     try {
       const saved = await api.saveProfile(profile)
       setMessage(`已保存 ${saved.reference} → ${saved.path}`)
+      onSaved?.(saved.reference)
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc))
     } finally {

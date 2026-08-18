@@ -96,7 +96,7 @@ export function App() {
           ))}
         {tab === "pages" &&
           (result ? (
-            <PageDetails report={result.report} />
+            <PageDetails report={result.report} rendered={result.rendered} />
           ) : (
             <p className="empty">先执行一次比较，再查看逐页详情。</p>
           ))}

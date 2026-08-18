@@ -15,20 +15,14 @@ from document_qa.schemas import (
     Region,
     RegionMatch,
     StructuredDiff,
+    TEXT_TYPES,
 )
 
 
 class RegionMatcher:
     """综合位置、尺寸、类型和顺序进行一对一匹配。"""
 
-    _TEXT_TYPES = {
-        ElementType.TEXT,
-        ElementType.PARAGRAPH,
-        ElementType.HEADING,
-        ElementType.LIST,
-        ElementType.HEADER,
-        ElementType.FOOTER,
-    }
+    _TEXT_TYPES = TEXT_TYPES
 
     def __init__(self, profile: RuleProfile | None = None) -> None:
         """允许调用方注入经过版本管理和样本校准的规则配置。"""
@@ -36,10 +30,12 @@ class RegionMatcher:
         self.profile = profile or default_rule_profile()
 
     def match_page(self, source: Page, target: Page) -> PageMatchResult:
-        """构建代价矩阵，并通过线性分配获得全局最优匹配。"""
+        """构建代价矩阵，并通过线性分配获得全局最优匹配。
 
-        if source.page != target.page:
-            raise ValueError("只能匹配页码相同的页面")
+        页与页之间由 PageAligner 负责对齐，这里接受任意两张已对齐的页面，
+        报告中的页码统一采用源页面页码。
+        """
+
         if not source.regions or not target.regions:
             return PageMatchResult(
                 page=source.page,

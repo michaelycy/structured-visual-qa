@@ -25,8 +25,13 @@ def position_similarity(
 def size_similarity(source: BoundingBox, target: BoundingBox) -> float:
     """分别比较宽高比例，避免面积相同但形状完全不同的误匹配。"""
 
-    width_score = min(source.width, target.width) / max(source.width, target.width)
-    height_score = min(source.height, target.height) / max(source.height, target.height)
+    # Schema 校验已保证宽高为正，这里仍做防御，兼容绕过校验的调用方。
+    max_width = max(source.width, target.width)
+    max_height = max(source.height, target.height)
+    if max_width <= 0 or max_height <= 0:
+        return 0.0
+    width_score = min(source.width, target.width) / max_width
+    height_score = min(source.height, target.height) / max_height
     return (width_score + height_score) / 2
 
 

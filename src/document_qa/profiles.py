@@ -46,6 +46,18 @@ class MatchingSettings(SchemaModel):
     weights: MatchingWeights = Field(default_factory=MatchingWeights)
 
 
+class PageAlignmentSettings(SchemaModel):
+    """控制跨页对齐：容忍翻译导致的整体移页。"""
+
+    enabled: bool = True
+    # 允许参与配对的最大页码差；窗口外相似度不计算也不可配对。
+    max_shift: int = Field(default=3, ge=0, le=50)
+    # 跳过一页（判定缺失/新增）付出的代价，单位与页相似度一致（0-1）。
+    skip_penalty: float = Field(default=0.5, ge=0, le=10)
+    # 动态规划对齐比按页码直配每偏离一页需要高出的最小余量，抑制噪声移页。
+    shift_margin: float = Field(default=0.01, ge=0, le=10)
+
+
 class DetectorToggles(SchemaModel):
     """允许配置界面逐项启用或关闭检测器。"""
 
@@ -148,6 +160,7 @@ class RuleProfile(SchemaModel):
     status: ProfileStatus = ProfileStatus.DRAFT
     description: str = ""
     matching: MatchingSettings = Field(default_factory=MatchingSettings)
+    alignment: PageAlignmentSettings = Field(default_factory=PageAlignmentSettings)
     detectors: DetectorSettings = Field(default_factory=DetectorSettings)
     scoring: ScoringSettings = Field(default_factory=ScoringSettings)
 

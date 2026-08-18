@@ -31,6 +31,19 @@ class ElementType(StrEnum):
     OTHER = "other"
 
 
+# 文本类元素的唯一权威定义；匹配器和检测器必须共用，避免两处漂移。
+TEXT_TYPES = frozenset(
+    {
+        ElementType.TEXT,
+        ElementType.PARAGRAPH,
+        ElementType.HEADING,
+        ElementType.LIST,
+        ElementType.HEADER,
+        ElementType.FOOTER,
+    }
+)
+
+
 class HorizontalAlignment(StrEnum):
     """文本区域支持的水平对齐方式。"""
 

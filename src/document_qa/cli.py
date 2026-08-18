@@ -35,6 +35,33 @@ def build_parser() -> argparse.ArgumentParser:
         help="可选页面 PNG 输出目录",
     )
     parser.add_argument(
+        "--render-scope",
+        choices=["all", "issues"],
+        default="all",
+        help="渲染范围：all 渲染全部页面，issues 只渲染状态非 PASS 的页面",
+    )
+    parser.add_argument(
+        "--verify-stage",
+        choices=["parse", "group", "alignment", "match", "detect", "report"],
+        default=None,
+        help="分阶段验证模式：执行到指定阶段并在终端输出各阶段摘要后退出",
+    )
+    parser.add_argument(
+        "--verify-dir",
+        type=Path,
+        default=Path("verify-artifacts"),
+        help="分阶段验证模式的中间产物输出目录",
+    )
+    parser.add_argument(
+        "--serve",
+        nargs="?",
+        type=int,
+        const=8765,
+        default=None,
+        metavar="PORT",
+        help="启动界面化 API 服务（默认端口 8765），配合 webapp/ 前端使用",
+    )
+    parser.add_argument(
         "--profile",
         type=Path,
         default=None,
@@ -61,6 +88,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     """执行比较任务；预期输入错误返回 2，避免向终端输出内部堆栈。"""
 
     args = build_parser().parse_args(argv)
+    if args.serve is not None:
+        # 界面化入口独立于比较任务，只在本机回环地址监听。
+        import uvicorn
+
+        from document_qa.server import app
+
+        uvicorn.run(app, host="127.0.0.1", port=args.serve, log_level="info")
+        return 0
     try:
         if args.export_default_profile is not None:
             output_path = RuleProfileStore.save(
@@ -81,8 +116,24 @@ def main(argv: Sequence[str] | None = None) -> int:
             if args.profile is not None
             else default_rule_profile()
         )
+        if args.verify_stage is not None:
+            from document_qa.verify import Stage, StagedVerifier, save_artifacts
+
+            verifier = StagedVerifier(
+                DocumentQAPipeline(profile=profile)
+            )
+            artifacts = verifier.run(
+                args.source, args.target, stop_after=Stage(args.verify_stage)
+            )
+            paths = save_artifacts(artifacts, args.verify_dir)
+            for artifact, path in zip(artifacts, paths, strict=True):
+                print(f"{artifact.summary}  产物={path}")
+            return 0
         report = DocumentQAPipeline(profile=profile).compare(
-            args.source, args.target, render_dir=args.render_dir
+            args.source,
+            args.target,
+            render_dir=args.render_dir,
+            render_scope=args.render_scope,
         )
         output_path = JSONReporter().write(report, args.output)
     except (DocumentParsingError, ValueError) as exc:

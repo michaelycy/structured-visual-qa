@@ -100,11 +100,29 @@ PyMuPDF 开源版本使用 GNU AGPL v3。项目进入闭源分发、SaaS 或商�
 ```text
 Parser → Page/Block
 Grouper → Page/Region
+PageAligner → PageAlignment
 Matcher → RegionMatch/StructuredDiff
 Detector → Issue
 Scorer → Score/Status
 Reporter → QAReport/JSON
 ```
+
+界面化分层（2025-08 增补）：
+
+```text
+webapp/（React+Vite+TS 前端）
+  ↓ HTTP /api
+api/（FastAPI 协议层：DTO、状态码映射、静态挂载）
+  ↓
+services/（应用服务：任务互斥、产物目录、用例编排）
+  ↓
+核心引擎（pipeline/matching/detectors/scoring，不感知 HTTP）
+```
+
+- API 层不 import 核心引擎模块，只调用 services；
+- services 返回核心模型或纯数据，不感知 HTTP；
+- 核心引擎永远不 import fastapi/api/services；
+- API 的请求 DTO 与核心 schemas 分开演化，互不强制联动。
 
 - Parser 不负责问题判定；
 - Grouper 不访问源文档与目标文档的对应关系；

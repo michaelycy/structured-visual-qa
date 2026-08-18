@@ -18,8 +18,10 @@ class PyMuPDFRenderer:
         self.dpi = dpi
         self.max_pages = max_pages
 
-    def render(self, pdf_path: Path, output_dir: Path) -> list[Path]:
-        """渲染全部页面，输出文件名只使用页码以避免路径注入。"""
+    def render(
+        self, pdf_path: Path, output_dir: Path, pages: set[int] | None = None
+    ) -> list[Path]:
+        """渲染页面；pages 为 None 时渲染全部，否则只渲染指定页码集合。"""
 
         source_path = pdf_path.expanduser().resolve()
         if not source_path.is_file() or source_path.suffix.lower() != ".pdf":
@@ -36,9 +38,12 @@ class PyMuPDFRenderer:
                         f"PDF 页数 {pdf.page_count} 超过限制 {self.max_pages}"
                     )
                 for page_index, page in enumerate(pdf):
+                    page_number = page_index + 1
+                    if pages is not None and page_number not in pages:
+                        continue
                     # DPI 直接交给 MuPDF 处理，避免自行换算矩阵造成尺寸偏差。
                     pixmap = page.get_pixmap(dpi=self.dpi, alpha=False)
-                    output_path = safe_output_dir / f"page-{page_index + 1:04d}.png"
+                    output_path = safe_output_dir / f"page-{page_number:04d}.png"
                     pixmap.save(output_path)
                     rendered_paths.append(output_path)
         except DocumentParsingError:

@@ -7,6 +7,7 @@ from document_qa.schemas.common import (
     ElementType,
     HorizontalAlignment,
     RegionRelationships,
+    TEXT_TYPES,
     TextStyle,
 )
 from document_qa.schemas.document import Document
@@ -42,5 +43,6 @@ __all__ = [
     "RegionMatch",
     "ReportSummary",
     "StructuredDiff",
+    "TEXT_TYPES",
     "TextStyle",
 ]

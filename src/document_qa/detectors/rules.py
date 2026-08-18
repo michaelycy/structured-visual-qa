@@ -17,20 +17,14 @@ from document_qa.schemas import (
     PageMatchResult,
     Region,
     Severity,
+    TEXT_TYPES,
 )
 
 
 class RuleDetector:
     """把匹配结果和目标页面转换为统一 Issue 列表。"""
 
-    _TEXT_TYPES = {
-        ElementType.TEXT,
-        ElementType.PARAGRAPH,
-        ElementType.HEADING,
-        ElementType.LIST,
-        ElementType.HEADER,
-        ElementType.FOOTER,
-    }
+    _TEXT_TYPES = TEXT_TYPES
 
     def __init__(self, profile: RuleProfile | None = None) -> None:
         """初始化带版本的检测器开关和阈值。"""
@@ -210,6 +204,8 @@ class RuleDetector:
 
         issues: list[Issue] = []
         thresholds = self.profile.detectors.thresholds
+        # 每个 Region 的源版面类比只需计算一次；两两组合会重复请求同一 Region。
+        analog_cache: dict[str, Region | None] = {}
         for first, second in combinations(target.regions, 2):
             ratio = intersection_ratio(first.bbox, second.bbox)
             if ratio <= thresholds.overlap_ratio:
@@ -223,8 +219,12 @@ class RuleDetector:
                 continue
 
             source_ratio = 0.0
-            source_first = self._find_layout_analog(first, source, target)
-            source_second = self._find_layout_analog(second, source, target)
+            source_first = self._find_layout_analog(
+                first, source, target, analog_cache
+            )
+            source_second = self._find_layout_analog(
+                second, source, target, analog_cache
+            )
             if source_first is not None and source_second is not None:
                 source_ratio = intersection_ratio(
                     source_first.bbox,
@@ -286,9 +286,17 @@ class RuleDetector:
         return issues
 
     def _find_layout_analog(
-        self, target_region: Region, source: Page, target: Page
+        self,
+        target_region: Region,
+        source: Page,
+        target: Page,
+        cache: dict[str, Region | None] | None = None,
     ) -> Region | None:
         """独立查找同类型且版面最接近的源区域，用于比较拓扑关系。"""
+
+        cache_key = target_region.id
+        if cache is not None and cache_key in cache:
+            return cache[cache_key]
 
         candidates = [
             region
@@ -301,21 +309,26 @@ class RuleDetector:
                 )
             )
         ]
-        if not candidates:
-            return None
+        analog: Region | None = None
+        if candidates:
 
-        def layout_score(candidate: Region) -> float:
-            """拓扑对照更重视位置，尺寸只用于区分同位置的多个对象。"""
+            def layout_score(candidate: Region) -> float:
+                """拓扑对照更重视位置，尺寸只用于区分同位置的多个对象。"""
 
-            return 0.7 * position_similarity(
-                candidate.bbox,
-                target_region.bbox,
-                max(source.width, target.width),
-                max(source.height, target.height),
-            ) + 0.3 * size_similarity(candidate.bbox, target_region.bbox)
+                return 0.7 * position_similarity(
+                    candidate.bbox,
+                    target_region.bbox,
+                    max(source.width, target.width),
+                    max(source.height, target.height),
+                ) + 0.3 * size_similarity(candidate.bbox, target_region.bbox)
 
-        best = max(candidates, key=layout_score)
-        return best if layout_score(best) >= self.profile.matching.minimum_score else None
+            best = max(candidates, key=layout_score)
+            if layout_score(best) >= self.profile.matching.minimum_score:
+                analog = best
+
+        if cache is not None:
+            cache[cache_key] = analog
+        return analog
 
     @staticmethod
     def _center_inside(inner: BoundingBox, outer: BoundingBox) -> bool:

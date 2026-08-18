@@ -2,10 +2,11 @@
 
 from collections import Counter
 from pathlib import Path
+from typing import Literal
 
 from document_qa.detectors import RuleDetector
 from document_qa.grouping import RegionGrouper
-from document_qa.matching import RegionMatcher
+from document_qa.matching import PageAligner, RegionMatcher
 from document_qa.parsers import PyMuPDFParser
 from document_qa.profiles import RuleProfile, default_rule_profile
 from document_qa.renderers import PyMuPDFRenderer
@@ -22,9 +23,11 @@ from document_qa.schemas import (
 )
 from document_qa.scoring import QAScorer
 
+RenderScope = Literal["all", "issues"]
+
 
 class DocumentQAPipeline:
-    """协调解析、分组、匹配、检测、评分和可选页面渲染。"""
+    """协调解析、分组、页对齐、匹配、检测、评分和可选页面渲染。"""
 
     def __init__(
         self,
@@ -33,6 +36,7 @@ class DocumentQAPipeline:
         parser: PyMuPDFParser | None = None,
         renderer: PyMuPDFRenderer | None = None,
         grouper: RegionGrouper | None = None,
+        page_aligner: PageAligner | None = None,
         matcher: RegionMatcher | None = None,
         detector: RuleDetector | None = None,
         scorer: QAScorer | None = None,
@@ -44,6 +48,7 @@ class DocumentQAPipeline:
         self.renderer = renderer or PyMuPDFRenderer()
         self.grouper = grouper or RegionGrouper()
         # 默认组件必须共享同一个 Profile，确保界面中一次配置修改贯穿全流程。
+        self.page_aligner = page_aligner or PageAligner(self.profile)
         self.matcher = matcher or RegionMatcher(self.profile)
         self.detector = detector or RuleDetector(self.profile)
         self.scorer = scorer or QAScorer(self.profile)
@@ -54,29 +59,73 @@ class DocumentQAPipeline:
         target_path: Path,
         *,
         render_dir: Path | None = None,
+        render_scope: RenderScope = "all",
     ) -> QAReport:
         """比较两个 PDF，并返回经过 Schema 校验的完整 QA 报告。"""
 
         source = self._group_document(self.parser.parse(source_path))
         target = self._group_document(self.parser.parse(target_path))
 
-        if render_dir is not None:
-            # 使用固定子目录隔离源文档与目标文档页面，避免同名文件互相覆盖。
-            self.renderer.render(source_path, render_dir / "source")
-            self.renderer.render(target_path, render_dir / "target")
-
         source_pages = {page.page: page for page in source.pages}
         target_pages = {page.page: page for page in target.pages}
-        page_numbers = sorted(source_pages.keys() | target_pages.keys())
-        page_results = [
-            self._compare_page(
-                page_number,
-                source_pages.get(page_number),
-                target_pages.get(page_number),
+        alignment = self.page_aligner.align(source, target)
+
+        # (报告页码, 源页面, 目标页面)；跨页对齐时源/目标页码可以不同。
+        entries: list[tuple[int, Page | None, Page | None]] = []
+        for source_number, target_number in alignment.pairs:
+            entries.append(
+                (source_number, source_pages[source_number], target_pages[target_number])
             )
-            for page_number in page_numbers
+        for number in alignment.missing_source_pages:
+            entries.append((number, source_pages[number], None))
+        for number in alignment.extra_target_pages:
+            entries.append((number, None, target_pages[number]))
+        entries.sort(key=lambda entry: entry[0])
+
+        page_results = [
+            self._compare_page(number, source_page, target_page)
+            for number, source_page, target_page in entries
         ]
-        return self._build_report(source, target, page_results)
+        report = self._build_report(source, target, page_results)
+
+        if render_dir is not None:
+            self._render_pages(
+                render_dir,
+                render_scope,
+                source_path,
+                target_path,
+                entries,
+                page_results,
+            )
+        return report
+
+    def _render_pages(
+        self,
+        render_dir: Path,
+        render_scope: RenderScope,
+        source_path: Path,
+        target_path: Path,
+        entries: list[tuple[int, Page | None, Page | None]],
+        page_results: list[PageQAResult],
+    ) -> None:
+        """使用固定子目录隔离源/目标页面，按范围渲染。
+
+        render_scope 为 "issues" 时只渲染状态非 PASS 的页面，两侧文档
+        的对应页码会分别加入渲染集合，避免大文档全量渲染。
+        """
+
+        source_render_pages: set[int] = set()
+        target_render_pages: set[int] = set()
+        for (_, source_page, target_page), result in zip(entries, page_results, strict=True):
+            include = render_scope == "all" or result.status != QAStatus.PASS
+            if include and source_page is not None:
+                source_render_pages.add(source_page.page)
+            if include and target_page is not None:
+                target_render_pages.add(target_page.page)
+        if source_render_pages:
+            self.renderer.render(source_path, render_dir / "source", source_render_pages)
+        if target_render_pages:
+            self.renderer.render(target_path, render_dir / "target", target_render_pages)
 
     def _group_document(self, document: Document) -> Document:
         """为文档中的每一页建立 Region，保留原始 Block 供追溯。"""

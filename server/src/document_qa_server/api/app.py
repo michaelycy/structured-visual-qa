@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from document_qa.services import (
+from document_qa_server.services import (
     CompareService,
     FileService,
     ProfileService,
@@ -19,11 +19,13 @@ from document_qa.services import (
 def create_app(*, artifacts_dir: Path | None = None) -> FastAPI:
     """构建应用实例；artifacts_dir 缺省落在项目根 webapp-artifacts/。"""
 
-    # api/app.py 位于 <root>/src/document_qa/api/，上退四级到项目根，
-    # 产物目录 webapp-artifacts/ 保持不入源码树。
-    project_root = artifacts_dir.resolve().parent if artifacts_dir else Path(
-        __file__
-    ).resolve().parents[3]
+    # api/app.py 位于 <root>/server/src/document_qa_server/api/，上退五级
+    # 到项目根；产物目录 webapp-artifacts/ 保持不入源码树。
+    project_root = (
+        artifacts_dir.resolve().parent.parent
+        if artifacts_dir
+        else Path(__file__).resolve().parents[4]
+    )
     root = artifacts_dir or project_root / "webapp-artifacts"
     root.mkdir(parents=True, exist_ok=True)
 
@@ -50,10 +52,10 @@ def create_app(*, artifacts_dir: Path | None = None) -> FastAPI:
     app.state.profiles = profile_service
     app.state.files = file_service
 
-    from document_qa.api.routes_compare import router as compare_router
-    from document_qa.api.routes_files import router as files_router
-    from document_qa.api.routes_profile import router as profile_router
-    from document_qa.api.routes_verify import router as verify_router
+    from document_qa_server.api.routes_compare import router as compare_router
+    from document_qa_server.api.routes_files import router as files_router
+    from document_qa_server.api.routes_profile import router as profile_router
+    from document_qa_server.api.routes_verify import router as verify_router
 
     app.include_router(compare_router)
     app.include_router(verify_router)

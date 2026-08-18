@@ -6,9 +6,9 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
 
-from document_qa.api.dto import VerifyRequest
-from document_qa.api.routes_compare import _resolve_pdf
-from document_qa.services import VerifyService
+from document_qa_server.api.dto import VerifyRequest
+from document_qa_server.api.routes_compare import _resolve_pdf
+from document_qa_server.services import VerifyService
 from document_qa.verify import Stage
 
 router = APIRouter(prefix="/api", tags=["verify"])

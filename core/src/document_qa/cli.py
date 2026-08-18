@@ -53,15 +53,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="分阶段验证模式的中间产物输出目录",
     )
     parser.add_argument(
-        "--serve",
-        nargs="?",
-        type=int,
-        const=8765,
-        default=None,
-        metavar="PORT",
-        help="启动界面化 API 服务（默认端口 8765），配合 webapp/ 前端使用",
-    )
-    parser.add_argument(
         "--profile",
         type=Path,
         default=None,
@@ -88,14 +79,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     """执行比较任务；预期输入错误返回 2，避免向终端输出内部堆栈。"""
 
     args = build_parser().parse_args(argv)
-    if args.serve is not None:
-        # 界面化入口独立于比较任务，只在本机回环地址监听。
-        import uvicorn
-
-        from document_qa.server import app
-
-        uvicorn.run(app, host="127.0.0.1", port=args.serve, log_level="info")
-        return 0
     try:
         if args.export_default_profile is not None:
             output_path = RuleProfileStore.save(

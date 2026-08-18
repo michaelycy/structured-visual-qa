@@ -5,10 +5,10 @@
 也不知道服务层的存在。分层方向：api → services → 核心引擎。
 """
 
-from document_qa.services.compare_service import CompareService
-from document_qa.services.file_service import FileService
-from document_qa.services.profile_service import ProfileService
-from document_qa.services.verify_service import VerifyService, VerifyStageResult
+from document_qa_server.services.compare_service import CompareService
+from document_qa_server.services.file_service import FileService
+from document_qa_server.services.profile_service import ProfileService
+from document_qa_server.services.verify_service import VerifyService, VerifyStageResult
 
 __all__ = [
     "CompareService",

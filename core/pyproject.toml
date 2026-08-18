@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "document-qa"
 version = "0.1.0"
-description = "Structured visual QA models for translated documents"
+description = "Structured visual QA core engine for translated documents (CLI included)"
 requires-python = ">=3.11"
 dependencies = [
   "numpy>=2,<3",

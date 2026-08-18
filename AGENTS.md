@@ -11,25 +11,34 @@
 5. **编码约定**：公共类/函数中文 Docstring，主要逻辑处中文注释解释设计目的；标识符和公开 JSON 字段用英文；禁止无关重构和全局格式化。
 6. **验收标准**：编码完成后按契约 §11 自查——`python -m compileall -q src tests` 通过 + 分阶段验证各阶段摘要符合预期 + 修改点的行为不变式逐条推演说明。
 
+## 仓库结构（双包拆分）
+
+- `core/`：**document-qa** 核心引擎发行包（解析/分组/对齐/匹配/检测/评分/报告 + `document-qa` CLI），零 HTTP 依赖，可独立安装给其他系统复用
+- `server/`：**document-qa-server** 服务发行包（api 协议层 + services 应用层），依赖 core；入口 `document-qa-server`
+- `webapp/`：React+Vite+TS 前端
+- 依赖方向恒为 `webapp → server(api → services) → core`；core 禁止 import fastapi/uvicorn 或 server 包
+
 ## 常用命令
 
 ```bash
-# 分阶段验证（开发后的标准验证方式，逐阶段交互确认）
-PYTHONPATH=src .venv/bin/python -m document_qa examples/un-china-2024-en.pdf examples/un-china-2024-zh.pdf \
-  --verify-stage report --verify-dir tmp/verify-stages
+# 安装双包（core 先装）
+.venv/bin/python -m pip install -e core -e server
 
-# 界面化：API 服务（127.0.0.1:8765）
-PYTHONPATH=src .venv/bin/python -m uvicorn document_qa.server:app --port 8765
-# 界面化：前端开发服务器（127.0.0.1:5180，/api 已代理）
+# core CLI：比较与分阶段验证（无需 PYTHONPATH）
+.venv/bin/document-qa examples/un-china-2024-en.pdf examples/un-china-2024-zh.pdf --output tmp/qa-report.json
+.venv/bin/document-qa examples/un-china-2024-en.pdf examples/un-china-2024-zh.pdf --verify-stage report --verify-dir tmp/verify-stages
+
+# 界面化：API 服务（127.0.0.1:8765）与前端（127.0.0.1:5180，/api 已代理）
+.venv/bin/document-qa-server --port 8765
 cd webapp && bun run dev
-# 前端类型检查与构建
 cd webapp && bun run build
 
-PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -v
-.venv/bin/python -m compileall -q src tests
-PYTHONPATH=src .venv/bin/python -m document_qa examples/un-china-2024-en.pdf examples/un-china-2024-zh.pdf --output tmp/qa-report.json
+PYTHONPATH=core/src .venv/bin/python -m unittest discover -s tests -v
+.venv/bin/python -m compileall -q core/src server/src tests
 ```
 
-## 后端分层（界面化增补）
+## 分层纪律
 
-依赖方向恒为 `api/ → services/ → 核心引擎`：api 层只做协议转换（DTO、状态码、静态挂载）；services 层做用例编排（互斥锁、产物目录）；核心引擎不感知 HTTP，禁止 import fastapi/api/services。详见 docs/project-contract.md §7。
+- `server/api/` 只做协议转换（DTO、状态码、静态挂载）；`server/services/` 做用例编排（互斥锁、产物目录）
+- core 不感知 HTTP；新增核心能力先进 core，服务层只做包装
+- 详见 docs/project-contract.md §7

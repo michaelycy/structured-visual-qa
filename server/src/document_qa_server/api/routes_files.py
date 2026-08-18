@@ -6,7 +6,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request, UploadFile
 
-from document_qa.services import FileService
+from document_qa_server.services import FileService
 
 router = APIRouter(prefix="/api/files", tags=["files"])
 

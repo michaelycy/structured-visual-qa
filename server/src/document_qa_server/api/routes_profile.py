@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Request
 
-from document_qa.api.dto import ProfileSaveRequest
-from document_qa.services import ProfileService
+from document_qa_server.api.dto import ProfileSaveRequest
+from document_qa_server.services import ProfileService
 
 router = APIRouter(prefix="/api/profile", tags=["profile"])
 

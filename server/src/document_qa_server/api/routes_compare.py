@@ -6,9 +6,9 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
 
-from document_qa.api.dto import CompareRequest
+from document_qa_server.api.dto import CompareRequest
 from document_qa.parsers import DocumentParsingError
-from document_qa.services import CompareService, ProfileService
+from document_qa_server.services import CompareService, ProfileService
 
 router = APIRouter(prefix="/api", tags=["compare"])
 

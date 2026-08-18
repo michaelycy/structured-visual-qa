@@ -107,21 +107,22 @@ Scorer → Score/Status
 Reporter → QAReport/JSON
 ```
 
-界面化分层（2025-08 增补）：
+界面化分层（2025-08 增补；2025-08 二次拆分为双发行包）：
 
 ```text
 webapp/（React+Vite+TS 前端）
   ↓ HTTP /api
-api/（FastAPI 协议层：DTO、状态码映射、静态挂载）
+server/src/document_qa_server/api/（FastAPI 协议层：DTO、状态码映射、静态挂载）
   ↓
-services/（应用服务：任务互斥、产物目录、用例编排）
+server/src/document_qa_server/services/（应用服务：任务互斥、产物目录、用例编排）
   ↓
-核心引擎（pipeline/matching/detectors/scoring，不感知 HTTP）
+core/src/document_qa（核心引擎：pipeline/matching/detectors/scoring，不感知 HTTP）
 ```
 
+- 仓库按发行包拆分：`core/`（document-qa，含 CLI，零 HTTP 依赖）与 `server/`（document-qa-server，依赖 core）；
+- core 可独立安装，作为库或 CLI 嵌入其他系统，禁止 import fastapi/uvicorn 或 server 包；
 - API 层不 import 核心引擎模块，只调用 services；
 - services 返回核心模型或纯数据，不感知 HTTP；
-- 核心引擎永远不 import fastapi/api/services；
 - API 的请求 DTO 与核心 schemas 分开演化，互不强制联动。
 
 - Parser 不负责问题判定；

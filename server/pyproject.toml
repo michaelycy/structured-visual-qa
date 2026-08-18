@@ -1,0 +1,22 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "document-qa-server"
+version = "0.1.0"
+description = "HTTP API server for the document-qa core engine"
+requires-python = ">=3.11"
+dependencies = [
+  # 同仓库 core 包；开发时先安装 core（pip install -e core）再安装本包。
+  "document-qa",
+  "fastapi>=0.115",
+  "uvicorn>=0.30",
+  "python-multipart>=0.0.9",
+]
+
+[project.scripts]
+document-qa-server = "document_qa_server.__main__:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/document_qa_server"]

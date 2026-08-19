@@ -13,10 +13,10 @@
 
 ## 2. 核心原则
 
-1. **结构优先**：优先解析 PDF、DOCX、PPTX 的原生结构，再结合页面渲染图。
+1. **结构优先**：以 PDF 结构解析为底座；DOCX/PPTX/XLSX 等 Office 格式经 LibreOffice 归一化为 PDF 后复用同一流水线（不做原生解析），再结合页面渲染图。
 2. **统一模型**：不同格式统一转换为 `Page / Block / Region / Issue`。
 3. **确定性检测为底座**：布局、边界框、字体、间距、对象数量和表格结构由算法与规则检测。
-4. **多模态模型负责复核**：视觉模型接收页面图、结构化差异和已有问题，负责发现遗漏、识别误报及补充观察。
+4. **多模态模型负责复核**（规划中，当前 MVP 未启用）：视觉模型接收页面图、结构化差异和已有问题，负责发现遗漏、识别误报及补充观察。
 5. **评分与状态分离**：总体分数用于衡量质量；严重问题可以独立触发 `REVIEW` 或 `FAIL`。
 
 ## 3. 处理流程
@@ -59,7 +59,7 @@ QA Report
 1. **解析（`parsers/pymupdf_parser.py`）**：提取每个文本 Span 的字体、字号、颜色、BBox 以及图片块；以 SHA256 作为稳定文档 ID；限制输入不超过 100MB / 500 页，拒绝受密码保护的 PDF。输出纯数据模型，不携带任何 PyMuPDF 运行时对象。
 2. **分组（`grouping/region_grouper.py`）**：把零散 Span 按原始 PDF Block 聚合成可比较的 Region；字号达到全页文本中位数 1.25 倍以上的 Region 标记为标题，其余为段落；按 `(y, x)` 排序并写入上下邻接关系。
 3. **匹配（`matching/region_matcher.py`）**：对同页源/目标 Region 构建代价矩阵，相似度由四项加权组成——位置（0.40，按页面对角线归一化中心距）、尺寸（0.25，宽高比例均值）、类型（0.20，文本类型间跨语言互通、文本与图片禁止互配）、顺序（0.15，归一化序号差）；通过 SciPy 匈牙利算法（`linear_sum_assignment`）求全局最优一对一分配；低于 `minimum_score`（默认 0.45）的分配会被丢弃，交给缺失检测处理而不是伪装成匹配。页与页之间先经 `PageAligner` 做跨页对齐，容忍翻译导致的整体移页。
-4. **检测（`detectors/rules.py`）**：产出六类问题——缺图片（Critical）、缺文本（High，含多对一合并文本的覆盖判据容错）、新增区域（Low）、区域偏移（MEDIUM/High，按偏移比例）、字号缩小（High）、内容越界（Critical）、文本互叠（High）与文字压图（Critical，用面积比例 + 文字中心拓扑判据排除署名、背景图叠字等有意叠放）。
+4. **检测（`detectors/rules.py`）**：产出布局与对象问题——缺图片（Critical）、缺文本（High，含多对一合并文本的覆盖判据容错）、新增区域（Low）、区域偏移（MEDIUM/High，按偏移比例）、字号缩小（High）、内容越界（Critical）、文本互叠（High）与文字压图（Critical，用面积比例 + 文字中心拓扑判据排除署名、背景图叠字等有意叠放）。内容级检测（`detectors/content.py` / `detectors/glossary.py`）复用同一匹配结果，产出数字不一致（`NUMBER_MISMATCH`）、漏译（`UNTRANSLATED_TEXT`）与术语违规（`GLOSSARY_VIOLATION`，术语库可选注入）。
 5. **评分（`scoring/scorer.py`）**：按严重度扣分（INFO 0 / LOW 1 / MEDIUM 4 / HIGH 10 / CRITICAL 25），每种问题类型设扣分上限，避免同一视觉缺陷因解析粒度不同被重复扣到 0；存在 Critical 强制 FAIL，存在 High 强制 REVIEW，独立于分数。
 6. **报告（`reporting/json_reporter.py`）**：输出经 Pydantic 校验的 JSON 报告，内嵌 `RuleProfile` 版本引用与完整快照，保证旧任务可复现；可选渲染源/目标页面 PNG（支持仅渲染有问题的页面）。
 
@@ -109,6 +109,7 @@ QA Report
 | Typography QA | 字体族、颜色、对齐变化 | `TYPOGRAPHY_CHANGED` | 🔒 规划中（Schema/评分已预留） |
 | Text Flow QA | 换行、行数、溢出、裁切 | `ABNORMAL_WRAP`、`LINE_COUNT_EXPLOSION`、`TEXT_OVERFLOW`、`TEXT_CLIPPED` | 🔒 规划中（Schema/评分已预留） |
 | Text Overlap QA | 文本互叠、文字压图 | `TEXT_OVERLAP`、`TEXT_IMAGE_OVERLAP` | ✅ 已实现 |
+| Content QA | 数字一致性、漏译、术语合规 | `NUMBER_MISMATCH`、`UNTRANSLATED_TEXT`、`GLOSSARY_VIOLATION` | ✅ 已实现 |
 | Object QA | 图片、Logo 等对象的数量与位置 | `MISSING_IMAGE`、`MISSING_ELEMENT`、`ADDED_ELEMENT` | ✅ 已实现 |
 | Table QA | 行列、合并单元格、边框、单元格布局 | `TABLE_STRUCTURE_CHANGED` | 🔒 规划中（Schema/评分已预留） |
 
@@ -158,4 +159,6 @@ PDF 解析
 ```
 
 后续再增加 DOCX、PPTX、表格专项检测、图片 Embedding、多模态复核和可视化报告。
+
+> 现状：DOCX/PPTX/XLSX 已通过 LibreOffice 归一化支持（见 `docs/todo/tech-adoption-plan.md` T9）；表格专项检测、图片 Embedding、多模态复核仍为规划项。
 

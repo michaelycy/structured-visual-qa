@@ -31,7 +31,7 @@
 
 ### 3.2 暂不包含
 
-- DOCX、PPTX 原生解析；
+- DOCX、PPTX、XLSX 等 Office 格式的原生结构解析（多格式经 LibreOffice 归一化支持，原生解析仍排除）；
 - 扫描 PDF 的自动 OCR；
 - 复杂表格结构恢复；
 - Web UI、数据库、对象存储和任务队列；
@@ -47,6 +47,7 @@
 | 语言 | Python 3.11 及以上，部署基线建议 Python 3.12 |
 | 数据模型 | Pydantic v2 |
 | PDF 引擎 | PyMuPDF |
+| Office 归一化 | LibreOffice headless（server 层调用，core 零依赖；MPL 2.0） |
 | 数值计算 | NumPy |
 | 最优匹配 | SciPy `linear_sum_assignment` |
 | 测试 | Python `unittest`，后续可迁移 pytest |
@@ -63,6 +64,8 @@ PyMuPDF 开源版本使用 GNU AGPL v3。项目进入闭源分发、SaaS 或商�
 3. 通过 Parser/Renderer 接口替换 PDF 引擎。
 
 许可证结论必须记录在发布审批中，不能仅保存在口头沟通里。
+
+LibreOffice 使用 MPL 2.0（许可友好，无 AGPL 传染），仅由 server 层作为系统级二进制调用，不随 core 发行包分发。
 
 ## 6. 核心数据契约
 
@@ -146,7 +149,7 @@ Critical 问题优先于平均分。规则阈值必须集中配置，禁止散�
 
 - 默认单文件最大 100 MiB；
 - 默认单文档最大 500 页；
-- 只接受 `.pdf`；
+- core 解析器只接受 `.pdf`；server 层额外接受 `.docx/.doc/.pptx/.ppt/.xlsx/.xls/.odt/.odp`，经 LibreOffice 归一化为 PDF 后进入同一流水线；
 - 解析失败必须转换为明确异常，不得静默跳过；
 - 输入文件永远视为不可信；
 - 生产环境应在隔离 Worker 中解析文档，并设置 CPU、内存和执行时间限制；

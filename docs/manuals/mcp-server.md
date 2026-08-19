@@ -6,8 +6,8 @@
 ## 前置
 
 ```bash
-cd /path/to/structured-visual-QA
-.venv/bin/python -m pip install -e core -e ".[mcp]"
+cd /path/to/structured-visual-qa
+.venv/bin/python -m pip install -e core -e "server[mcp]"
 ```
 
 ## 客户端配置
@@ -20,10 +20,10 @@ cd /path/to/structured-visual-QA
 {
   "mcpServers": {
     "document-qa": {
-      "command": "/path/to/structured-visual-QA/.venv/bin/document-qa-mcp",
-      "cwd": "/path/to/structured-visual-QA",
+      "command": "/path/to/structured-visual-qa/.venv/bin/document-qa-mcp",
+      "cwd": "/path/to/structured-visual-qa",
       "env": {
-        "DQA_SAMPLES_DIR": "/path/to/structured-visual-QA/examples"
+        "DQA_SAMPLES_DIR": "/path/to/structured-visual-qa/examples"
       }
     }
   }
@@ -38,8 +38,8 @@ cd /path/to/structured-visual-QA
 {
   "mcpServers": {
     "document-qa": {
-      "command": "/path/to/structured-visual-QA/.venv/bin/document-qa-mcp",
-      "cwd": "/path/to/structured-visual-QA"
+      "command": "/path/to/structured-visual-qa/.venv/bin/document-qa-mcp",
+      "cwd": "/path/to/structured-visual-qa"
     }
   }
 }

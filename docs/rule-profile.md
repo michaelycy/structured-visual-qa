@@ -9,14 +9,21 @@ Rule Profile 将匹配权重、检测器开关、检测阈值和评分规则封�
 ```text
 RuleProfile
 ├── schema_version
-├── profile_id / name / version / status
+├── profile_id / name / version / status / description
 ├── matching
 │   ├── minimum_score
 │   ├── merged_text_coverage_ratio
+│   ├── text_type_similarity
 │   └── weights
+├── alignment
+│   ├── enabled
+│   └── max_shift / skip_penalty / shift_margin
+├── grouping
+│   └── heading_ratio
 ├── detectors
 │   ├── enabled
-│   └── thresholds
+│   ├── thresholds
+│   └── layout_analog_weights
 └── scoring
     ├── pass_score / fail_score
     ├── critical_forces_fail / high_forces_review
@@ -28,6 +35,7 @@ RuleProfile
 
 - `profile_id` 只允许小写字母、数字和连字符；
 - 匹配权重总和必须等于 `1`；
+- 版面类比（layout analog）权重总和必须等于 `1`；
 - 严重偏移阈值必须大于普通偏移阈值；
 - FAIL 分数线必须低于 PASS 分数线；
 - 所有 Severity 必须具有扣分值；
@@ -70,17 +78,18 @@ rule_profile_snapshot
 
 因此旧报告不依赖当前 Profile 状态，可以准确复现运行规则。
 
-## 6. 后续 API 映射
+## 6. API 映射（已落地）
 
-后续 FastAPI 层可以直接围绕当前模型提供：
+server 层已提供以下 Profile 路由（`server/src/document_qa_server/api/routes_profile.py`）：
 
 ```text
-GET  /api/rule-profiles/schema
-GET  /api/rule-profiles/default
-POST /api/rule-profiles/validate
-POST /api/rule-profiles
-POST /api/rule-profiles/{id}/versions
+GET    /api/profile/default
+GET    /api/profile/schema
+GET    /api/profile/list
+GET    /api/profile/item/{filename}
+POST   /api/profile/save
+DELETE /api/profile/item/{filename}
 ```
 
-持久化层必须使用服务端生成的 ID、版本号和原子写入；不得接受客户端提供任意保存路径。
+保存路径由服务端按 `profile_id` 与 `version` 生成，不接受客户端指定任意路径；写入采用原子替换。
 

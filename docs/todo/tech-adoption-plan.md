@@ -34,7 +34,7 @@
   `GET /api/tasks/{id}` 轮询；`DQA_ASYNC_MODE=false` 完整同步回归路径。
   前端提交后 1s 轮询。验证：异步 8s 完成、报告 86.80 与同步一致 ✅、
   同步开关回归 ✅、39 项测试全绿 ✅。遗留：任务注册表无 TTL 清理
-  （进程内字典，重启即清，当前规模无碍）。
+  （进程内字典，重启即清）——已由下文 L-1 补上终态 1h TTL。
 - **T9（2025-08）**：`server/src/document_qa_server/services/normalization_service.py`
   （LibreOffice headless，隔离 profile 绝对路径 URL，产物摘要缓存，60s 超时）；
   CompareService 归一化接入 + `conversion_noise_ratio` 阈值叠加（Profile 副本上改，

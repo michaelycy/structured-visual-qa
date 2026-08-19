@@ -20,7 +20,7 @@ Rule Profile 用于统一配置：
 以下命令均在项目根目录执行：
 
 ```bash
-cd /Users/muzhaoyang/Projects/structured-visual-QA
+cd /path/to/structured-visual-qa
 ```
 
 ### 2.1 导出默认配置
@@ -94,6 +94,7 @@ cp profiles/translation-balanced.v1.json \
   "matching": {
     "minimum_score": 0.45,
     "merged_text_coverage_ratio": 0.4,
+    "text_type_similarity": 0.8,
     "weights": {
       "position": 0.4,
       "size": 0.25,
@@ -101,13 +102,24 @@ cp profiles/translation-balanced.v1.json \
       "order": 0.15
     }
   },
+  "alignment": {
+    "enabled": true,
+    "max_shift": 3,
+    "skip_penalty": 0.5,
+    "shift_margin": 0.01
+  },
+  "grouping": {
+    "heading_ratio": 1.25
+  },
   "detectors": {
     "enabled": {
       "missing_element": true,
       "region_shifted": true,
       "font_shrink": true,
       "content_out_of_page": true,
-      "overlap": true
+      "overlap": true,
+      "number_mismatch": true,
+      "untranslated_text": true
     },
     "thresholds": {
       "shifted_ratio": 0.05,
@@ -115,7 +127,14 @@ cp profiles/translation-balanced.v1.json \
       "font_shrink_ratio": -0.2,
       "overlap_ratio": 0.05,
       "overlap_increase_ratio": 0.05,
-      "image_caption_area_ratio": 0.005
+      "image_caption_area_ratio": 0.005,
+      "untranslated_ratio": 0.7,
+      "untranslated_min_letters": 8,
+      "conversion_noise_ratio": 0.03
+    },
+    "layout_analog_weights": {
+      "position": 0.7,
+      "size": 0.3
     }
   },
   "scoring": {
@@ -146,6 +165,9 @@ cp profiles/translation-balanced.v1.json \
       "typography_changed": 10.0,
       "table_structure_changed": 25.0,
       "page_missing": 25.0,
+      "number_mismatch": 12.0,
+      "untranslated_text": 12.0,
+      "glossary_violation": 12.0,
       "other": 10.0
     }
   }
@@ -163,6 +185,8 @@ cp profiles/translation-balanced.v1.json \
 | `status` | enum | 见下表 | 生命周期状态 |
 | `description` | string | 无特殊限制 | 使用场景和变更说明 |
 | `matching` | object | 必填 | Region 匹配配置 |
+| `alignment` | object | 必填 | 跨页对齐配置 |
+| `grouping` | object | 必填 | Block→Region 分组配置 |
 | `detectors` | object | 必填 | 检测器开关与阈值 |
 | `scoring` | object | 必填 | 评分和状态规则 |
 
@@ -257,7 +281,9 @@ position + size + type + order = 1.0
   "region_shifted": true,
   "font_shrink": true,
   "content_out_of_page": true,
-  "overlap": true
+  "overlap": true,
+  "number_mismatch": true,
+  "untranslated_text": true
 }
 ```
 
@@ -268,6 +294,8 @@ position + size + type + order = 1.0
 | `font_shrink` | 目标字号明显缩小 |
 | `content_out_of_page` | Region 超出页面边界 |
 | `overlap` | 新增文字重叠、文字图片重叠 |
+| `number_mismatch` | 页面数字集合不一致（数字错漏译） |
+| `untranslated_text` | 目标文本区仍保留源语言文字（漏译） |
 
 关闭检测器意味着对应 Issue 不再产生，也不参与扣分和状态判定。建议只在明确不适用时关闭，不要通过关闭检测器掩盖阈值问题。
 
@@ -342,6 +370,28 @@ shift = max(abs(x_shift_ratio), abs(y_shift_ratio))
 - 降低：更多小文字参与重叠检查，检测更严格；
 - 提高：更多小文字被视为 Caption；
 - 建议不要高于 `0.01`，否则可能忽略小型正文标签。
+
+### 7.5 未翻译文本判定
+
+```json
+"untranslated_ratio": 0.7,
+"untranslated_min_letters": 8
+```
+
+内容级检测器会先判定页面主导语言，再检查目标文本区是否仍大量保留源语言文字：
+
+- `untranslated_ratio`：目标文本中源语言字符占比达到该值即判为漏译（`HIGH UNTRANSLATED_TEXT`）；
+- `untranslated_min_letters`：目标文本字母数少于该值的短文本（版权行、机构缩写等）不参与判定。
+
+源码同文、源语言无法判定或源页面本身中英混排时，该检测整体跳过。
+
+### 7.6 LibreOffice 归一化噪声容差
+
+```json
+"conversion_noise_ratio": 0.03
+```
+
+当输入为 Word/PPT/Excel 等 Office 格式时，系统先经 LibreOffice 归一化为 PDF。归一化会引入约 1–3% 的版面转换噪声，该容差会**自动叠加**到偏移类阈值（`shifted_ratio`/`severely_shifted_ratio`）上，纯 PDF 流水线不受影响。报告 `metadata.normalized_from` 会标记转换来源。
 
 ## 8. Scoring 配置
 
@@ -423,6 +473,9 @@ High 存在或 Score < 90     → REVIEW
 | `typography_changed` | 否 | 10 |
 | `table_structure_changed` | 否 | 25 |
 | `page_missing` | 是 | 25 |
+| `number_mismatch` | 是 | 12 |
+| `untranslated_text` | 是 | 12 |
+| `glossary_violation` | 是 | 12 |
 | `other` | 预留 | 10 |
 
 “尚无检测器”表示当前不会自动产生该 Issue，但配置键仍须保留，以保证未来增加检测器时旧 Profile 的评分行为明确。
@@ -693,8 +746,8 @@ draft → 样本验证 → published → archived
 ## 15. 当前限制
 
 - CLI 尚无单独的 `validate-profile` 子命令，加载 Profile 时会自动校验；
-- 当前没有 Profile 数据库和 Web 配置界面；
-- Profile 版本号由文件维护，尚未由服务端自动分配；
+- 当前没有 Profile 数据库，存储为 JSON 文件；Web 配置界面已落地（`/api/profile/*` 路由 + webapp 的 ProfileEditor / ProfileManager）；
+- Profile 版本号由配置 JSON 的 `version` 字段维护，尚未由服务端自动递增；
 - 修改配置不会创建自动 Changelog；
 - 新增检测指标仍需要先修改代码和 RuleProfile Schema，然后才能在 JSON 中配置。
 

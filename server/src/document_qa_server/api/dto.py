@@ -17,6 +17,7 @@ class CompareRequest(BaseModel):
     source_display: str = ""
     target_display: str = ""
     profile_path: str | None = None
+    glossary_reference: str | None = None
     render: bool = True
     render_scope: Literal["all", "issues"] = "issues"
 

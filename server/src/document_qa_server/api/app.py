@@ -12,6 +12,7 @@ from document_qa_server.services import (
     CompareHistoryService,
     CompareService,
     FileService,
+    GlossaryService,
     NormalizationService,
     ProfileService,
     ReviewService,
@@ -59,11 +60,17 @@ def create_app(
     app.state.normalizer = normalizer
     app.state.reviews = ReviewService(artifacts_dir=root)
     app.state.history = CompareHistoryService(artifacts_dir=root)
+    app.state.glossaries = GlossaryService(artifacts_dir=root)
+    # 导出路由需要产物根目录；异步模式开关来自配置。
+    app.state.artifacts_dir = root
+    app.state.async_mode = config.async_mode
 
     from document_qa_server.api.routes_compare import router as compare_router
     from document_qa_server.api.routes_files import router as files_router
+    from document_qa_server.api.routes_glossary import router as glossary_router
     from document_qa_server.api.routes_history import router as history_router
     from document_qa_server.api.routes_normalize import router as normalize_router
+    from document_qa_server.api.routes_report import router as report_router
     from document_qa_server.api.routes_review import router as review_router
     from document_qa_server.api.routes_profile import router as profile_router
     from document_qa_server.api.routes_verify import router as verify_router
@@ -75,6 +82,8 @@ def create_app(
     app.include_router(normalize_router)
     app.include_router(review_router)
     app.include_router(history_router)
+    app.include_router(glossary_router)
+    app.include_router(report_router)
 
     @app.get("/api/health")
     def health() -> dict:

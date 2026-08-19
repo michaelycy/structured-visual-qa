@@ -29,7 +29,16 @@ class ServerSettings(BaseSettings):
     artifacts_dir: Path = _PROJECT_ROOT / "webapp-artifacts"
     samples_dir: Path = _PROJECT_ROOT / "examples"
     max_upload_bytes: int = 100 * 1024 * 1024
-    cors_origins: list[str] = ["*"]
+    # CORS 收紧为显式来源（对抗审查 H-1：allow_origins=["*"] 配合任意
+    # 本地路径输入，恶意网页可跨源读取本机文档报告）。默认只放行
+    # 本地前端开发服务器；生产经 DQA_CORS_ORIGINS 显式扩展。
+    cors_origins: list[str] = [
+        "http://127.0.0.1:5180",
+        "http://localhost:5180",
+    ]
+    # 比较任务异步模式：True 时 compare 立即返回 task_id 由后台执行；
+    # False 时保持同步阻塞行为（CLI/测试回归路径）。
+    async_mode: bool = True
 
 
 def load_settings() -> ServerSettings:

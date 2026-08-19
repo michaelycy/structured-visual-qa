@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import uuid
 from pathlib import Path
 
 # 支持归一化的源格式（扩展名 → 魔数前缀，魔数可缺省表示仅查扩展名）。
@@ -107,12 +108,23 @@ class NormalizationService:
             return output_pdf, source.suffix.lower()
 
         # soffice 不能指定输出文件名，只能指定输出目录（产物与源同名）。
-        staging = self._normalized_dir / f"staging-{digest}"
+        # staging 名带随机后缀：并发归一化同一文件时互不干扰
+        # （对抗审查 M-6：同名 staging 的 move/rmtree 竞争）。
+        staging = self._normalized_dir / f"staging-{digest}-{uuid.uuid4().hex[:6]}"
         staging.mkdir(parents=True, exist_ok=True)
         try:
+            # 与 check_engine 相同的二进制解析：部分发行版只有
+            # libreoffice 命令（对抗审查 M-3：硬编码 soffice 崩溃）。
+            binary = shutil.which("soffice") or shutil.which("libreoffice")
+            if binary is None:
+                raise NormalizationError(
+                    "LibreOffice 不可用。请安装 LibreOffice（macOS: "
+                    "brew install --cask libreoffice；Linux: apt install "
+                    "libreoffice）并确保 soffice 在 PATH 中。"
+                )
             subprocess.run(
                 [
-                    "soffice",
+                    binary,
                     "--headless",
                     "--norestore",
                     # 隔离用户配置目录：共享默认 profile 在并发/残留锁时
@@ -138,14 +150,21 @@ class NormalizationService:
             raise NormalizationError(
                 f"转换失败: {source.name}: {exc.stderr[:200]}"
             ) from exc
-
-        produced = staging / f"{Path(source.stem).stem}.pdf"
-        if not produced.is_file():
+        except OSError as exc:
             raise NormalizationError(
-                f"转换未产出 PDF: {source.name}（可能是加密或损坏文件）"
-            )
-        shutil.move(str(produced), output_pdf)
-        shutil.rmtree(staging, ignore_errors=True)
+                f"转换引擎启动失败: {source.name}: {exc}"
+            ) from exc
+        # 产物名 = 源完整主名 + .pdf（对抗审查 M-4：双重 stem 会把
+        # report.v2.docx 算成 report.pdf 而 soffice 实际产 report.v2.pdf）。
+        produced = staging / f"{source.name}.pdf"
+        try:
+            if not produced.is_file():
+                raise NormalizationError(
+                    f"转换未产出 PDF: {source.name}（可能是加密或损坏文件）"
+                )
+            shutil.move(str(produced), output_pdf)
+        finally:
+            shutil.rmtree(staging, ignore_errors=True)
         return output_pdf, source.suffix.lower()
 
 

@@ -5,9 +5,11 @@ from pathlib import Path
 from typing import Literal
 
 from document_qa.detectors import ContentDetector, RuleDetector
+from document_qa.detectors.glossary import GlossaryDetector
 from document_qa.grouping import RegionGrouper
 from document_qa.matching import PageAligner, RegionMatcher
 from document_qa.parsers import PyMuPDFParser
+from document_qa.glossary import Glossary
 from document_qa.profiles import RuleProfile, default_rule_profile
 from document_qa.renderers import PyMuPDFRenderer
 from document_qa.schemas import (
@@ -41,6 +43,7 @@ class DocumentQAPipeline:
         detector: RuleDetector | None = None,
         content_detector: ContentDetector | None = None,
         scorer: QAScorer | None = None,
+        glossary: Glossary | None = None,
     ) -> None:
         """支持注入 Profile 与组件，便于界面配置、测试和替换 PDF 引擎。"""
 
@@ -54,6 +57,8 @@ class DocumentQAPipeline:
         self.detector = detector or RuleDetector(self.profile)
         self.content_detector = content_detector or ContentDetector(self.profile)
         self.scorer = scorer or QAScorer(self.profile)
+        # 术语库可选；缺省不启用术语检测（行为与历史版本一致）。
+        self.glossary_detector = GlossaryDetector(glossary) if glossary else None
 
     def compare(
         self,
@@ -177,6 +182,11 @@ class DocumentQAPipeline:
         issues = self.detector.detect(source, target, match_result)
         # 内容级检测（数字/漏译）复用同一匹配结果，位于布局规则之后。
         issues.extend(self.content_detector.detect(source, target, match_result))
+        # 术语合规检测同样复用匹配结果；未配置术语库时为空。
+        if self.glossary_detector is not None:
+            issues.extend(
+                self.glossary_detector.detect(source, target, match_result)
+            )
         score, status = self.scorer.score(issues)
         return PageQAResult(
             page=page_number,

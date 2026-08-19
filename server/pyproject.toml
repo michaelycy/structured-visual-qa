@@ -16,8 +16,12 @@ dependencies = [
   "pydantic-settings>=2.3,<3",
 ]
 
+[project.optional-dependencies]
+mcp = ["mcp>=1.17,<2"]
+
 [project.scripts]
 document-qa-server = "document_qa_server.__main__:main"
+document-qa-mcp = "document_qa_server.mcp_server:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/document_qa_server"]

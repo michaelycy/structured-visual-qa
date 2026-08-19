@@ -12,13 +12,26 @@ from collections import Counter
 from document_qa.profiles import RuleProfile, default_rule_profile
 from document_qa.schemas import Issue, IssueType, Page, PageMatchResult, Region, Severity, TEXT_TYPES
 
-# 数字抽取：整数、小数、千分位、百分号；范围数字（2020-2024）拆两端。
-_NUMBER_PATTERN = re.compile(r"\d+(?:[.,]\d+)?")
+# 数字抽取：整数、千分位、小数的完整组合。千分位必须恰好 3 位且后随
+# 数字边界（1,137.5 抽为单个 1137.5），避免把小数点后的部分切成独立 token。
+_NUMBER_PATTERN = re.compile(r"\d+(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?")
+# 全角数字常见于中文排版，先归一化为半角再抽取。
+_FULLWIDTH_DIGITS = str.maketrans("０１２３４５６７８９．，", "0123456789.,")
 # 判定为"源语言文字"的 Unicode 区块；中英互译场景覆盖 CJK 与拉丁字母。
 _CJK_PATTERN = re.compile(r"[\u4e00-\u9fff\u3400-\u4dbf]")
 _LATIN_PATTERN = re.compile(r"[A-Za-z]")
 # 全大写字母词（机构缩写：UNICEF、WHO、CSAM）通常保留原文不翻译。
 _ACRONYM_PATTERN = re.compile(r"\b[A-Z]{2,}\b")
+
+
+def _normalize_number(token: str) -> str:
+    """归一化数字 token：去千分位逗号 + 去前导零（日期/页码场景）。"""
+
+    token = token.replace(",", "")
+    if "." in token:
+        whole, _, fraction = token.partition(".")
+        return f"{whole.lstrip('0') or '0'}.{fraction}"
+    return token.lstrip("0") or "0"
 
 
 class ContentDetector:
@@ -113,8 +126,14 @@ class ContentDetector:
         target_language = self._dominant_language(
             list(target_regions.values())
         )
-        if source_language == target_language or source_language is None:
-            # 双语同文或源语言无法判定时跳过，避免误报。
+        if (
+            source_language == target_language
+            or source_language is None
+            or source_language == "mixed"
+        ):
+            # 双语同文、源语言无法判定、或源页面本身混排（中英对照的
+            # 目录/封面页）时跳过——混排源无法定义"未翻译"参照，
+            # 强行判定会产生整页假阳性。
             return []
         issues: list[Issue] = []
         threshold = self.profile.detectors.thresholds.untranslated_ratio
@@ -166,15 +185,17 @@ class ContentDetector:
     def _extract_numbers(region: Region) -> Counter:
         """抽取区域文本中的数字（千分位归一化：1,137 与 1137 等价）。
 
-        中文排版常去掉千分位逗号，格式差异不应判为数字错漏。
+        中文排版常去掉千分位逗号，格式差异不应判为数字错漏；
+        全角数字先归一；前导零去除以对齐日期类写法（01-05 与 1-5）。
         """
 
         text = region.content.text if region.content else None
         if not text:
             return Counter()
-        normalized = text.replace("，", ",").replace("。", ".")
-        raw = _NUMBER_PATTERN.findall(normalized)
-        return Counter(number.replace(",", "") for number in raw)
+        normalized = text.translate(_FULLWIDTH_DIGITS)
+        return Counter(
+            _normalize_number(token) for token in _NUMBER_PATTERN.findall(normalized)
+        )
 
     @staticmethod
     def _dominant_language(regions: list[Region]) -> str | None:

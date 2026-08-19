@@ -33,6 +33,7 @@ export interface QAReport {
   status: "pass" | "review" | "fail"
   summary: ReportSummary
   pages: PageResult[]
+  metadata?: Record<string, unknown>
 }
 
 export interface CompareResponse {
@@ -45,6 +46,24 @@ export interface StageItem {
   summary: string
   data: Record<string, unknown>
   artifact: string
+}
+
+export interface Glossary {
+  schema_version: number
+  glossary_id: string
+  name: string
+  version: number
+  description: string
+  entries: { term: string; translations: string[]; note: string; case_sensitive: boolean }[]
+}
+
+export interface GlossarySummary {
+  filename: string
+  glossary_id: string
+  name: string
+  version: number
+  entry_count: number
+  reference: string
 }
 
 export interface RuleProfile {
@@ -79,6 +98,22 @@ export interface HistoryRecord {
   report?: QAReport
 }
 
+export interface CompareSubmitResponse {
+  task_id: string | null
+  status?: string
+  report?: QAReport
+  rendered?: { source: string[]; target: string[] }
+}
+
+export interface TaskPollResponse {
+  task_id: string
+  status: "queued" | "running" | "done" | "error"
+  error: string | null
+  report: QAReport | null
+  rendered: { source: string[]; target: string[] } | null
+  history_record_id: string | null
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     headers: { "Content-Type": "application/json" },
@@ -103,18 +138,51 @@ export const api = {
     target: string,
     sourceDisplay = "",
     targetDisplay = "",
+    glossaryReference: string | null = null,
     render = true,
   ) =>
-    request<CompareResponse>("/api/compare", {
+    request<CompareSubmitResponse>("/api/compare", {
       method: "POST",
       body: JSON.stringify({
         source,
         target,
         source_display: sourceDisplay,
         target_display: targetDisplay,
+        glossary_reference: glossaryReference,
         render,
         render_scope: "issues",
       }),
+    }),
+  glossaryDefault: () => request<Glossary>("/api/glossary/default"),
+  glossaryList: () =>
+    request<{ glossaries: GlossarySummary[] }>("/api/glossary/list").then(
+      (r) => r.glossaries,
+    ),
+  glossaryItem: (filename: string) =>
+    request<Glossary>(`/api/glossary/item/${encodeURIComponent(filename)}`),
+  glossarySave: (glossary: Glossary) =>
+    request<{ path: string; reference: string }>("/api/glossary/save", {
+      method: "POST",
+      body: JSON.stringify({ glossary }),
+    }),
+  glossaryDelete: (filename: string) =>
+    request<{ deleted: string }>(
+      `/api/glossary/item/${encodeURIComponent(filename)}`,
+      { method: "DELETE" },
+    ),
+  task: (taskId: string) =>
+    request<TaskPollResponse>(`/api/tasks/${encodeURIComponent(taskId)}`),
+  exportReport: (recordId: string, format: "xlsx" | "html") =>
+    fetch("/api/report/export", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ record_id: recordId, format }),
+    }).then(async (response) => {
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null)
+        throw new Error(payload?.detail ?? `导出失败 (HTTP ${response.status})`)
+      }
+      return response.blob()
     }),
   verify: (source: string, target: string, stopAfter: string) =>
     request<{ stages: StageItem[] }>("/api/verify", {

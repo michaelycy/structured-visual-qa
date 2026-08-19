@@ -136,6 +136,7 @@ class ScoringSettings(SchemaModel):
             IssueType.PAGE_MISSING: 25.0,
             IssueType.NUMBER_MISMATCH: 12.0,
             IssueType.UNTRANSLATED_TEXT: 12.0,
+            IssueType.GLOSSARY_VIOLATION: 12.0,
             IssueType.OTHER: 10.0,
         }
     )

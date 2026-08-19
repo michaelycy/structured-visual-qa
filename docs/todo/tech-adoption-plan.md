@@ -10,12 +10,13 @@
 | 编号 | 事项 | 状态 | 优先级 | 预估 |
 | --- | --- | --- | --- | --- |
 | T1 | 服务配置集中化（pydantic-settings） | ✅ 已落地 | P1 | 0.5 天 |
-| T2 | 验收报告导出（XLSX + HTML） | ✅ 已落地（core CLI；API 导出路由待补） | P1 | 1–2 天 |
-| T3 | 比较任务异步化 + 降级开关 | ⭕ 待办 | P2 | 1 天 |
+| T2 | 验收报告导出（XLSX + HTML） | ✅ 已落地（CLI + API/前端按钮） | P1 | 1–2 天 |
+| T3 | 比较任务异步化 + 降级开关 | ✅ 已落地 | P2 | 1 天 |
 | T4 | Docker Compose 交付 | ⭕ 待办 | P2 | 0.5 天 |
 | T5 | 技术就绪度全景表 | ✅ 本文档持续维护 | — | 持续维护 |
 | T9 | 多格式支持（LibreOffice 归一化 → PDF 流水线） | ✅ 已落地（docx 验证；pptx/xlsx 待真实样例回归） | P1 | 3–5 天 |
 | T10 | 像素层检测（共享 T9 渲染设施） | ⭕ 待办（前置：复核闭环盲区量化） | P2 | 2–3 天 + 评估期 |
+| T11 | MCP 服务（能力对外输出） | ✅ 已落地 | P1 | 1 天 |
 
 ### 落地记录
 
@@ -24,6 +25,16 @@
 - **T2（2025-08）**：`core/src/document_qa/reporting/xlsx_reporter.py` + `html_reporter.py`
   + `templates/report.html.j2`；CLI `--export-xlsx/--export-html`。验证：真实样例
   119 条 Issue 与 XLSX 行数一致 ✅、HTML 含总览/逐页 ✅。
+- **T2 补全（2025-08）**：`POST /api/report/export`（按对比记录导出，FileResponse
+  下载流）+ 报告总览页「导出 XLSX / 导出 HTML」按钮。验证：真实样例 XLSX 119 行
+  与报告一致 ✅、HTML 28KB 渲染正常 ✅、404 路径 ✅。注意：导出锚点是
+  history_record_id，历史回看前的会话内报告无锚点（按钮禁用）。
+- **T3（2025-08）**：CompareService 任务注册表（queued/running/done/error +
+  history_record_id 回传）；`POST /api/compare` 异步默认返回 task_id，
+  `GET /api/tasks/{id}` 轮询；`DQA_ASYNC_MODE=false` 完整同步回归路径。
+  前端提交后 1s 轮询。验证：异步 8s 完成、报告 86.80 与同步一致 ✅、
+  同步开关回归 ✅、39 项测试全绿 ✅。遗留：任务注册表无 TTL 清理
+  （进程内字典，重启即清，当前规模无碍）。
 - **T9（2025-08）**：`server/src/document_qa_server/services/normalization_service.py`
   （LibreOffice headless，隔离 profile 绝对路径 URL，产物摘要缓存，60s 超时）；
   CompareService 归一化接入 + `conversion_noise_ratio` 阈值叠加（Profile 副本上改，
@@ -32,6 +43,51 @@
   `pass 100.00` ✅、缓存复用 ✅、非法格式拒 ✅、PDF 原路径基线 86.80 不变 ✅、
   39 项测试全绿 ✅。遗留：pptx/xlsx 真实样例回归、soffice 缺失 503 路径的
   集成验证（服务已映射，未跑容器场景）。
+- **T6 术语库（2025-08）**：core `glossary.py`（版本化 Glossary/GlossaryEntry，
+  源术语唯一性校验，内置示例）+ `detectors/glossary.py`（正向检查：源区域
+  出现术语 → 目标区域须命中任一允许译法；大小写可配；Issue 带
+  glossary_reference 可追溯）；`GLOSSARY_VIOLATION` 枚举 + 扣分上限 12。
+  Pipeline 可选注入（缺省不启用，行为不变）。server `GlossaryService`
+  （CRUD + 按引用加载，路径安全）+ `/api/glossary/*` 路由；CompareRequest
+  增 `glossary_reference`。前端：侧边栏「术语库」管理页（条目可编辑表格/
+  保存/删除/复制）+ 比较栏术语库下拉。验证：保存/列表/读取 ✅、带术语库
+  比较 14 条术语违规（84.11）vs 无术语库 86.80 ✅、非法引用 400 ✅、
+  46 项测试全绿（新增 7 项）✅。
+- **T11 MCP 服务（2025-08）**：`server/src/document_qa_server/mcp_server.py`
+  （FastMCP stdio，12 工具：compare/history/report/export/verify/profile×3/
+  glossary×3/engine_status）；直接复用 services 层（不经 HTTP），历史记录与
+  Web 互通；LLM 输出裁剪（摘要 + 按页取数 + 导出只回路径）。入口
+  `document-qa-mcp`（pyproject extra `[mcp]`，mcp>=1.17,<2——2.0 API 重命名
+  且生态未跟上，锁定 1.x）。验证：MCP 客户端 stdio 协议级冒烟——12 工具
+  列举 ✅、真实比较 86.80/119 摘要 top10 ✅、单页报告 ✅、XLSX 导出 ✅。
+  客户端配置示例见 docs/manuals/mcp-server.md（Claude Desktop/Cursor/通用）。
+
+### 对抗性审查与修复（2025-08）
+
+双路对抗审查（人工对抗用例 + 双子代理代码审查）发现并修复以下缺陷，
+回归测试固化在 `tests/test_adversarial_regressions.py`（10 项）：
+
+| 编号 | 严重度 | 缺陷 | 修复 |
+| --- | --- | --- | --- |
+| #1 | 高 | 数字正则把 `1,137.5` 切成两 token；前导零/全角数字不等价 | 组合正则 + 归一化（core/content.py） |
+| #2 | 高 | 混排源页（mixed）被判拉丁 → 整页漏译假阳性（实测 4/4 区域误报） | mixed 源跳过漏译检测 |
+| #3 | 高 | 术语子串无词边界：AI 命中 said/raining（实测全链路误报） | 拉丁术语 `\b` 词边界，CJK 保持子串 |
+| #4 | 高 | history record_id 锁外生成，同毫秒并发碰撞静默丢记录（实测 20 写剩 1） | 锁内生成 + 微秒 + 随机后缀 |
+| H-1 | 高 | CORS `*` + 任意路径输入 = 浏览器跨源读本机文档 | 默认 origin 收紧为本地前端 |
+| H-2 | 高 | 上传整读内存后才校验大小 → OOM | 流式分块 + 累计超限中止 |
+| M-1 | 中 | execute 只捕两类异常，磁盘满等错误任务卡 running | `except Exception` 兜底置 error |
+| M-3 | 中 | soffice 硬编码，仅有 libreoffice 命令的系统崩溃 | 与 check_engine 同源解析二进制 |
+| M-4 | 中 | 双重 stem：report.v2.docx 找 report.pdf 误报失败 | 产物名 = 源完整主名 + .pdf |
+| M-5/M-6 | 中 | 失败路径 staging 残留；同 digest 并发 staging 竞争 | finally 统一清理 + staging 随机后缀 |
+| #5 | 中 | TABLE/CHART 组 max() 空序列崩溃（grouper） | 非 TEXT/IMAGE 组透传类型建 Region |
+| #6 | 低 | 同页同术语多区域 Issue ID 重复 | ID 加目标区域段 |
+
+未修复（记录在案）：M-2 渲染索引在锁外（跨任务页面串染，需渲染目录
+按任务隔离，涉及 pipeline 改动，列入下轮）；M-7 跨进程 history 锁
+（Web+MCP 同时写的部署形态，需文件锁，列入下轮）；L-1/L-2 注册表
+无界增长（低优先）；J 组评分宽松（100 LOW 新增只扣 3 分仍 pass——
+封顶设计本意如此，待产品确认）。验证：56 项测试全绿、Golden 基线
+86.80 不变、并发/边界对抗用例全部转阴。
 
 ---
 
@@ -249,7 +305,7 @@
 | --- | --- | --- |
 | #1 漏译检测 | ✅ 已落地（content 检测器） |
 | #2 数字一致性 | ✅ 已落地 |
-| #3 术语表 | ⭕ 待办（候选 T6） |
+| #3 术语表 | ✅ 已落地（T6） |
 | #4 表格结构检测 | ⭕ 待办（候选 T7） |
 | #5 文本流检测 | ⭕ 待办（候选 T8） |
 | #9 多格式支持 | 本文档 T9（P1） |

@@ -1,4 +1,7 @@
+/** 规则配置编辑器：antd Form，服务端 Pydantic 校验兜底。 */
+
 import { useEffect, useState } from "react"
+import { Alert, Button, Card, Col, Form, Input, InputNumber, Row, Space, message } from "antd"
 import { api, type RuleProfile } from "../api"
 
 export interface ProfileEditorProps {
@@ -8,15 +11,33 @@ export interface ProfileEditorProps {
   onSaved?: (reference: string) => void
 }
 
-/**
- * 规则配置编辑器：编辑关键数字项后交由服务端 Pydantic 严格校验保存。
- * 完整 Schema 项以只读分组展示，避免自制表单与核心校验规则漂移。
- */
+type ProfileForm = {
+  name: string
+  profile_id: string
+  version: number
+  "matching.minimum_score": number
+  "matching.merged_text_coverage_ratio": number
+  "alignment.max_shift": number
+  "alignment.skip_penalty": number
+  "detectors.thresholds.shifted_ratio": number
+  "detectors.thresholds.severely_shifted_ratio": number
+  "detectors.thresholds.font_shrink_ratio": number
+  "detectors.thresholds.overlap_ratio": number
+  "scoring.pass_score": number
+  "scoring.fail_score": number
+}
+
+/** 嵌套路径取值。 */
+function get(obj: unknown, path: string): unknown {
+  return path.split(".").reduce<unknown>((node, key) => (node as Record<string, unknown>)?.[key], obj)
+}
+
 export function ProfileEditor({ initial, onSaved }: ProfileEditorProps) {
+  const [form] = Form.useForm<ProfileForm>()
   const [profile, setProfile] = useState<RuleProfile | null>(initial ?? null)
-  const [message, setMessage] = useState("")
   const [error, setError] = useState("")
   const [busy, setBusy] = useState(false)
+  const [messageApi, contextHolder] = message.useMessage()
 
   useEffect(() => {
     if (initial) {
@@ -26,29 +47,46 @@ export function ProfileEditor({ initial, onSaved }: ProfileEditorProps) {
     api.defaultProfile().then(setProfile).catch(() => setError("无法加载默认配置"))
   }, [initial])
 
-  if (!profile) {
-    return <p className="empty">{error || "加载默认配置…"}</p>
-  }
+  useEffect(() => {
+    if (!profile) return
+    form.setFieldsValue({
+      name: String(profile.name ?? ""),
+      profile_id: String(profile.profile_id ?? ""),
+      version: Number(profile.version ?? 1),
+      "matching.minimum_score": Number(get(profile, "matching.minimum_score") ?? 0),
+      "matching.merged_text_coverage_ratio": Number(get(profile, "matching.merged_text_coverage_ratio") ?? 0),
+      "alignment.max_shift": Number(get(profile, "alignment.max_shift") ?? 3),
+      "alignment.skip_penalty": Number(get(profile, "alignment.skip_penalty") ?? 0.5),
+      "detectors.thresholds.shifted_ratio": Number(get(profile, "detectors.thresholds.shifted_ratio") ?? 0),
+      "detectors.thresholds.severely_shifted_ratio": Number(get(profile, "detectors.thresholds.severely_shifted_ratio") ?? 0),
+      "detectors.thresholds.font_shrink_ratio": Number(get(profile, "detectors.thresholds.font_shrink_ratio") ?? 0),
+      "detectors.thresholds.overlap_ratio": Number(get(profile, "detectors.thresholds.overlap_ratio") ?? 0),
+      "scoring.pass_score": Number(get(profile, "scoring.pass_score") ?? 90),
+      "scoring.fail_score": Number(get(profile, "scoring.fail_score") ?? 75),
+    })
+  }, [profile, form])
 
-  /** 数值字段的受控更新；非法输入保持原值，由服务端校验兜底。 */
-  const setNumber = (path: string[], value: string) => {
-    const next = structuredClone(profile)
-    let node: Record<string, unknown> = next
-    for (const key of path.slice(0, -1)) {
-      node = node[key] as Record<string, unknown>
-    }
-    const num = Number(value)
-    node[path[path.length - 1]] = Number.isFinite(num) ? num : value
-    setProfile(next)
-  }
+  if (!profile) return <span>{error || "加载默认配置…"}</span>
 
-  const save = async () => {
+  const save = async (values: ProfileForm) => {
     setBusy(true)
     setError("")
-    setMessage("")
     try {
-      const saved = await api.saveProfile(profile)
-      setMessage(`已保存 ${saved.reference} → ${saved.path}`)
+      const next = structuredClone(profile)
+      next.name = values.name
+      next.profile_id = values.profile_id
+      next.version = values.version
+      for (const [field, value] of Object.entries(values)) {
+        if (!field.includes(".")) continue
+        const keys = field.split(".")
+        let node = next as unknown as Record<string, unknown>
+        for (const key of keys.slice(0, -1)) {
+          node = node[key] as Record<string, unknown>
+        }
+        node[keys[keys.length - 1]] = value
+      }
+      const saved = await api.saveProfile(next)
+      messageApi.success(`已保存 ${saved.reference}`)
       onSaved?.(saved.reference)
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc))
@@ -57,89 +95,75 @@ export function ProfileEditor({ initial, onSaved }: ProfileEditorProps) {
     }
   }
 
-  const numberField = (label: string, path: string[], value: number, step = 0.05) => (
-    <label key={path.join(".")} className="field">
-      <span>{label}</span>
-      <input
-        type="number"
-        step={step}
-        value={value}
-        onChange={(e) => setNumber(path, e.target.value)}
-      />
-    </label>
+  const numberField = (label: string, name: keyof ProfileForm, step = 0.05, min?: number, max?: number) => (
+    <Col xs={12} md={6}>
+      <Form.Item label={label} name={name} style={{ marginBottom: 8 }}>
+        <InputNumber style={{ width: "100%" }} step={step} min={min} max={max} />
+      </Form.Item>
+    </Col>
   )
 
   return (
-    <section className="profile">
-      <div className="profile-meta">
-        <label className="field">
-          <span>配置名称</span>
-          <input
-            value={String(profile.name ?? "")}
-            onChange={(e) => setProfile({ ...profile, name: e.target.value })}
-          />
-        </label>
-        <label className="field">
-          <span>profile_id</span>
-          <input
-            value={String(profile.profile_id ?? "")}
-            onChange={(e) => setProfile({ ...profile, profile_id: e.target.value })}
-          />
-        </label>
-        <label className="field">
-          <span>版本号</span>
-          <input
-            type="number"
-            step={1}
-            value={Number(profile.version ?? 1)}
-            onChange={(e) => setNumber(["version"], e.target.value)}
-          />
-        </label>
-      </div>
+    <Form form={form} layout="vertical" onFinish={(values) => void save(values)}>
+      {contextHolder}
+      {error && <Alert type="error" showIcon message={error} style={{ marginBottom: 12 }} />}
 
-      <h3>匹配设置</h3>
-      <div className="field-grid">
-        {numberField("最低匹配分", ["matching", "minimum_score"], Number((profile.matching as Record<string, number>).minimum_score))}
-        {numberField("合并文本覆盖率", ["matching", "merged_text_coverage_ratio"], Number((profile.matching as Record<string, number>).merged_text_coverage_ratio))}
-      </div>
+      <Row gutter={12}>
+        <Col xs={24} md={10}>
+          <Form.Item label="配置名称" name="name" rules={[{ required: true }]}>
+            <Input />
+          </Form.Item>
+        </Col>
+        <Col xs={12} md={8}>
+          <Form.Item label="profile_id" name="profile_id" rules={[{ required: true }]}>
+            <Input />
+          </Form.Item>
+        </Col>
+        <Col xs={12} md={6}>
+          <Form.Item label="版本号" name="version">
+            <InputNumber style={{ width: "100%" }} step={1} min={1} />
+          </Form.Item>
+        </Col>
+      </Row>
 
-      <h3>页对齐</h3>
-      <div className="field-grid">
-        {numberField("最大页码偏移", ["alignment", "max_shift"], Number((profile.alignment as Record<string, number>).max_shift), 1)}
-        {numberField("跳页代价", ["alignment", "skip_penalty"], Number((profile.alignment as Record<string, number>).skip_penalty))}
-      </div>
+      <Card size="small" title="匹配设置" style={{ marginBottom: 12 }}>
+        <Row gutter={12}>
+          {numberField("最低匹配分", "matching.minimum_score", 0.05, 0, 1)}
+          {numberField("合并文本覆盖率", "matching.merged_text_coverage_ratio", 0.05, 0, 1)}
+        </Row>
+      </Card>
 
-      <h3>检测阈值</h3>
-      <div className="field-grid">
-        {numberField("偏移阈值", ["detectors", "thresholds", "shifted_ratio"], Number(((profile.detectors as Record<string, never>).thresholds as Record<string, number>).shifted_ratio))}
-        {numberField("严重偏移阈值", ["detectors", "thresholds", "severely_shifted_ratio"], Number(((profile.detectors as Record<string, never>).thresholds as Record<string, number>).severely_shifted_ratio))}
-        {numberField("字号缩小阈值", ["detectors", "thresholds", "font_shrink_ratio"], Number(((profile.detectors as Record<string, never>).thresholds as Record<string, number>).font_shrink_ratio), 0.01)}
-        {numberField("重叠比例阈值", ["detectors", "thresholds", "overlap_ratio"], Number(((profile.detectors as Record<string, never>).thresholds as Record<string, number>).overlap_ratio))}
-      </div>
+      <Card size="small" title="页对齐" style={{ marginBottom: 12 }}>
+        <Row gutter={12}>
+          {numberField("最大页码偏移", "alignment.max_shift", 1, 0, 50)}
+          {numberField("跳页代价", "alignment.skip_penalty", 0.1, 0, 10)}
+        </Row>
+      </Card>
 
-      <h3>评分线</h3>
-      <div className="field-grid">
-        {numberField("PASS 分数线", ["scoring", "pass_score"], Number((profile.scoring as Record<string, number>).pass_score), 1)}
-        {numberField("FAIL 分数线", ["scoring", "fail_score"], Number((profile.scoring as Record<string, number>).fail_score), 1)}
-      </div>
+      <Card size="small" title="检测阈值" style={{ marginBottom: 12 }}>
+        <Row gutter={12}>
+          {numberField("偏移阈值", "detectors.thresholds.shifted_ratio", 0.01, 0, 1)}
+          {numberField("严重偏移阈值", "detectors.thresholds.severely_shifted_ratio", 0.01, 0, 1)}
+          {numberField("字号缩小阈值", "detectors.thresholds.font_shrink_ratio", 0.01, -1, 0)}
+          {numberField("重叠比例阈值", "detectors.thresholds.overlap_ratio", 0.01, 0, 1)}
+        </Row>
+      </Card>
 
-      <div className="stage-controls">
-        <button onClick={() => void save()} disabled={busy}>
-          {busy ? "保存中…" : "校验并保存"}
-        </button>
-        <button
-          className="ghost"
-          onClick={() => {
-            api.defaultProfile().then(setProfile)
-            setMessage("")
-          }}
-        >
+      <Card size="small" title="评分线" style={{ marginBottom: 12 }}>
+        <Row gutter={12}>
+          {numberField("PASS 分数线", "scoring.pass_score", 1, 0, 100)}
+          {numberField("FAIL 分数线", "scoring.fail_score", 1, 0, 100)}
+        </Row>
+      </Card>
+
+      <Space>
+        <Button type="primary" htmlType="submit" loading={busy}>
+          校验并保存
+        </Button>
+        <Button onClick={() => api.defaultProfile().then(setProfile)}>
           重置为默认
-        </button>
-      </div>
-
-      {message && <div className="banner banner-ok">{message}</div>}
-      {error && <div className="banner banner-error">{error}</div>}
-    </section>
+        </Button>
+      </Space>
+    </Form>
   )
 }

@@ -28,7 +28,7 @@ class FileService:
 
         self._uploads_dir = artifacts_dir / "uploads"
         self._samples_dir = samples_dir
-        self._max_upload_bytes = max_upload_bytes
+        self.max_upload_bytes = max_upload_bytes
 
     def save_upload(self, filename: str, content: bytes) -> Path:
         """校验并保存上传文件，返回服务器端路径。
@@ -41,9 +41,9 @@ class FileService:
             raise ValueError(
                 f"只接受 PDF 或可归一化的 Office 格式: {', '.join(ACCEPTED_SUFFIXES)}"
             )
-        if len(content) > self._max_upload_bytes:
+        if len(content) > self.max_upload_bytes:
             raise ValueError(
-                f"文件大小超过 {self._max_upload_bytes // (1024 * 1024)} MiB 限制"
+                f"文件大小超过 {self.max_upload_bytes // (1024 * 1024)} MiB 限制"
             )
         if filename.lower().endswith(".pdf") and not content.startswith(b"%PDF"):
             raise ValueError("不是有效的 PDF 文件")

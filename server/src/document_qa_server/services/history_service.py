@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import threading
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -55,28 +56,36 @@ class CompareHistoryService:
         source_display: str,
         target_display: str,
     ) -> CompareRecord:
-        """保存一条对比记录并返回；文件名含时间戳保证唯一。"""
+        """保存一条对比记录并返回；文件名含时间戳保证唯一。
+
+        record_id 在持锁后生成：锁外生成时并发任务同毫秒启动会
+        碰撞并静默互相覆盖（对抗测试 F1 实锤：20 并发写只剩 1 条）。
+        """
 
         now = datetime.now(timezone.utc)
-        record_id = now.strftime("%Y%m%d-%H%M%S") + f"-{now.microsecond // 1000:03d}"
-        record = CompareRecord(
-            record_id=record_id,
-            created_at=now.isoformat(),
-            source_display=source_display,
-            target_display=target_display,
-            status=report.get("status", ""),
-            document_score=report.get("document_score", 0.0),
-            pages=report.get("summary", {}).get("pages", 0),
-            issue_total=sum(
-                report.get("summary", {}).get("issue_counts", {}).values()
-            ),
-            rule_profile_reference=report.get("rule_profile_reference", ""),
-            normalized_from=(report.get("metadata") or {}).get("normalized_from"),
-            report=report,
-            source_path=source_path,
-            target_path=target_path,
-        )
         with self._lock:
+            record_id = (
+                now.strftime("%Y%m%d-%H%M%S")
+                + f"-{now.microsecond // 1000:03d}"
+                + f"-{uuid.uuid4().hex[:4]}"
+            )
+            record = CompareRecord(
+                record_id=record_id,
+                created_at=now.isoformat(),
+                source_display=source_display,
+                target_display=target_display,
+                status=report.get("status", ""),
+                document_score=report.get("document_score", 0.0),
+                pages=report.get("summary", {}).get("pages", 0),
+                issue_total=sum(
+                    report.get("summary", {}).get("issue_counts", {}).values()
+                ),
+                rule_profile_reference=report.get("rule_profile_reference", ""),
+                normalized_from=(report.get("metadata") or {}).get("normalized_from"),
+                report=report,
+                source_path=source_path,
+                target_path=target_path,
+            )
             path = self._history_dir / f"{record_id}.json"
             # 原子写：临时文件替换，避免中断留半份记录。
             temporary = path.with_suffix(".json.tmp")

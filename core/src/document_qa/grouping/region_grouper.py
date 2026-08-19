@@ -59,6 +59,12 @@ class RegionGrouper:
             region_type = ElementType.IMAGE
             content = first_block.content
             style = None
+        elif not text_blocks:
+            # 非 TEXT 非 IMAGE 的 Block（TABLE/CHART/SHAPE）单独成组时
+            # 没有可比文本；按首块类型建 Region，内容与样式透传。
+            region_type = first_block.type
+            content = first_block.content
+            style = first_block.style
         else:
             representative = max(
                 text_blocks,

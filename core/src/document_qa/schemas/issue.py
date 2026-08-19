@@ -38,6 +38,7 @@ class IssueType(StrEnum):
     PAGE_MISSING = "page_missing"
     NUMBER_MISMATCH = "number_mismatch"
     UNTRANSLATED_TEXT = "untranslated_text"
+    GLOSSARY_VIOLATION = "glossary_violation"
     OTHER = "other"
 
 

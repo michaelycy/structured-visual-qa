@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from document_qa.profiles import RuleProfile, RuleProfileStore, default_rule_profile
+from document_qa_server.services.filelock import file_lock
 
 
 @dataclass(frozen=True)
@@ -58,7 +59,8 @@ class ProfileService:
 
         validated = RuleProfile.model_validate(profile_data)
         filename = f"{validated.profile_id}-v{validated.version}.json"
-        path = RuleProfileStore.save(validated, self._profiles_dir / filename)
+        with file_lock(self._profiles_dir / ".lock"):
+            path = RuleProfileStore.save(validated, self._profiles_dir / filename)
         return path, validated.reference
 
     def list(self) -> list[ProfileSummary]:
@@ -98,9 +100,10 @@ class ProfileService:
         """删除已保存 Profile；内置默认配置不在磁盘上，无法误删。"""
 
         path = self._safe_path(filename)
-        if not path.is_file():
-            raise ValueError(f"Profile 不存在: {filename}")
-        path.unlink()
+        with file_lock(self._profiles_dir / ".lock"):
+            if not path.is_file():
+                raise ValueError(f"Profile 不存在: {filename}")
+            path.unlink()
 
     def _safe_path(self, filename: str) -> Path:
         """约束文件名只含安全字符，防止路径穿越（契约 §9）。"""

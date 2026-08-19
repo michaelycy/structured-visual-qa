@@ -217,7 +217,7 @@ class PageAligner:
             source_region.type in TEXT_TYPES
             and target_region.type in TEXT_TYPES
         ):
-            type_score = 0.8
+            type_score = self.profile.matching.text_type_similarity
         else:
             type_score = 0.0
         total = weights.position + weights.size + weights.type

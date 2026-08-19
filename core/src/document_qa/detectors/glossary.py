@@ -23,6 +23,29 @@ from document_qa.schemas import (
 )
 
 
+def _compile_pattern(needle: str, case_sensitive: bool) -> re.Pattern[str] | None:
+    """把术语编译成查找模式；纯 CJK 术语返回 None（用子串判断）。
+
+    拉丁术语用词边界正则避免短术语命中无关单词（AI 命中 said/raining）；
+    中文没有词边界标记，术语可自然嵌入复合词，保持子串匹配。
+    """
+
+    if not any("a" <= ch.lower() <= "z" for ch in needle):
+        return None
+    return re.compile(
+        r"\b" + re.escape(needle) + r"\b",
+        0 if case_sensitive else re.IGNORECASE,
+    )
+
+
+def _pattern_hit(pattern: re.Pattern[str] | None, text: str, needle: str) -> bool:
+    """按预编译模式判断 text 是否命中 needle；None 表示纯 CJK 子串判断。"""
+
+    if pattern is None:
+        return needle in text
+    return bool(pattern.search(text))
+
+
 class GlossaryDetector:
     """检查配对区域之间的术语译法合规性。"""
 
@@ -30,11 +53,19 @@ class GlossaryDetector:
         """注入版本化术语库；引用随报告快照保证可复现。"""
 
         self.glossary = glossary
-        # 预构建查找索引：源术语原文（按大小写敏感性归一）→ 条目。
-        self._index = {
-            self._key(entry.term, entry.case_sensitive): entry
+        # 预编译每条术语与允许译法的查找模式，避免在每对区域上重复
+        # re.compile（大术语库下的热点）。纯 CJK 术语返回 None，沿用子串判断。
+        self._prepared = [
+            (
+                entry,
+                _compile_pattern(entry.term, entry.case_sensitive),
+                [
+                    _compile_pattern(translation, entry.case_sensitive)
+                    for translation in entry.translations
+                ],
+            )
             for entry in glossary.entries
-        }
+        ]
 
     def detect(
         self, source: Page, target: Page, result: PageMatchResult
@@ -68,13 +99,13 @@ class GlossaryDetector:
             target_region.content.text if target_region.content else ""
         ) or ""
         issues: list[Issue] = []
-        for entry in self.glossary.entries:
-            if not self._contains(source_text, entry.term, entry.case_sensitive):
+        for entry, term_pattern, translation_patterns in self._prepared:
+            if not _pattern_hit(term_pattern, source_text, entry.term):
                 continue
             # 命中任一允许译法即合规。
             if any(
-                self._contains(target_text, translation, entry.case_sensitive)
-                for translation in entry.translations
+                _pattern_hit(pattern, target_text, translation)
+                for pattern, translation in zip(translation_patterns, entry.translations)
             ):
                 continue
             issues.append(
@@ -103,24 +134,12 @@ class GlossaryDetector:
         return issues
 
     @staticmethod
-    def _key(term: str, case_sensitive: bool) -> str:
-        """构建查找键；默认折叠大小写。"""
-
-        return term if case_sensitive else term.lower()
-
-    @staticmethod
     def _contains(text: str, needle: str, case_sensitive: bool) -> bool:
-        """大小写可配置的包含判断；拉丁术语按整词匹配。
+        """大小写可配置的包含判断；保留公开签名供测试与调用方使用。
 
         纯子串会让短术语（AI）命中无关单词（said/rain/maintain）；
         含拉丁字母的术语改用词边界正则，纯 CJK 术语保持子串
         （中文没有词边界标记，术语可自然嵌入复合词）。
         """
 
-        if not any("a" <= ch.lower() <= "z" for ch in needle):
-            return needle in text if case_sensitive else needle in text
-        pattern = re.compile(
-            r"\b" + re.escape(needle) + r"\b",
-            0 if case_sensitive else re.IGNORECASE,
-        )
-        return bool(pattern.search(text))
+        return _pattern_hit(_compile_pattern(needle, case_sensitive), text, needle)

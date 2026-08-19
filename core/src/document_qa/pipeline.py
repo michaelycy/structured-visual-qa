@@ -50,7 +50,7 @@ class DocumentQAPipeline:
         self.profile = profile or default_rule_profile()
         self.parser = parser or PyMuPDFParser()
         self.renderer = renderer or PyMuPDFRenderer()
-        self.grouper = grouper or RegionGrouper()
+        self.grouper = grouper or RegionGrouper(self.profile)
         # 默认组件必须共享同一个 Profile，确保界面中一次配置修改贯穿全流程。
         self.page_aligner = page_aligner or PageAligner(self.profile)
         self.matcher = matcher or RegionMatcher(self.profile)

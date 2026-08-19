@@ -146,7 +146,7 @@ class RegionMatcher:
         if source == target:
             return 1.0
         if source in self._TEXT_TYPES and target in self._TEXT_TYPES:
-            return 0.8
+            return self.profile.matching.text_type_similarity
         return 0.0
 
     @staticmethod

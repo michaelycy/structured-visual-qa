@@ -8,13 +8,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from jinja2 import Environment, PackageLoader, select_autoescape
+from jinja2 import Environment, PackageLoader
 
 from document_qa.schemas import QAReport
 
+# 安全说明：模板名为 report.html.j2，select_autoescape 按后缀 ".html" 匹配
+# 不到 ".j2"，会导致 autoescape 实际关闭、issue 描述（含用户可控的术语
+# 文本）未转义直接注入 HTML，构成存储型 XSS。故显式开启全局自动转义。
 _ENV = Environment(
     loader=PackageLoader("document_qa.reporting", "templates/"),
-    autoescape=select_autoescape(["html"]),
+    autoescape=True,
 )
 
 

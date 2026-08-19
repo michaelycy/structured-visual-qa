@@ -3,6 +3,7 @@
 from collections import defaultdict
 from statistics import median
 
+from document_qa.profiles import RuleProfile, default_rule_profile
 from document_qa.schemas import (
     Block,
     BoundingBox,
@@ -16,6 +17,11 @@ from document_qa.schemas import (
 
 class RegionGrouper:
     """按原始 PDF Block 分组，并补充基础类型和邻接关系。"""
+
+    def __init__(self, profile: RuleProfile | None = None) -> None:
+        """允许注入版本化分组配置（标题判定阈值）；缺省使用内置 Profile。"""
+
+        self.profile = profile or default_rule_profile()
 
     def group_page(self, page: Page) -> Page:
         """为页面生成 Region，并返回新的不可变语义快照。"""
@@ -79,7 +85,7 @@ class RegionGrouper:
             is_heading = bool(
                 median_font_size
                 and largest_size
-                and largest_size >= median_font_size * 1.25
+                and largest_size >= median_font_size * self.profile.grouping.heading_ratio
             )
             region_type = ElementType.HEADING if is_heading else ElementType.PARAGRAPH
             content = Content(

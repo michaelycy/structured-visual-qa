@@ -59,8 +59,8 @@ python -m document_qa source.pdf target.pdf --output qa-report.json
 返回的状态包括：
 
 - `pass`：没有 High/Critical 且得分不低于 90；
-- `review`：存在 High，或分数低于 90；
-- `fail`：存在 Critical，或分数低于 75。
+- `review`：存在 High，或得分处于 75 至 90；
+- `fail`：存在 Critical，或得分低于 75。
 
 ## 开发验证
 

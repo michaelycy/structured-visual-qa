@@ -29,6 +29,19 @@ SUPPORTED_FORMATS: dict[str, bytes | None] = {
 DEFAULT_TIMEOUT_SECONDS = 60
 
 
+def matches_magic(extension: str, head: bytes) -> bool:
+    """校验文件头部字节与扩展名声明的格式魔数是否一致。
+
+    SUPPORTED_FORMATS 中魔数为 None 的格式只按扩展名放行；有魔数定义
+    的格式必须头部匹配，防止任意文件改名后喂给 LibreOffice。
+    """
+
+    magic = SUPPORTED_FORMATS.get(extension.lower())
+    if magic is None:
+        return True
+    return head.startswith(magic)
+
+
 class NormalizationError(Exception):
     """归一化失败（引擎缺失、格式非法或转换超时）。"""
 
@@ -55,12 +68,13 @@ class NormalizationService:
 
     @staticmethod
     def is_supported(filename: str) -> bool:
-        """扩展名 + 魔数双重校验，防止把任意文件喂给 LibreOffice。"""
+        """扩展名校验：是否属于可归一化的 Office 格式。
 
-        extension = Path(filename).suffix.lower()
-        if extension not in SUPPORTED_FORMATS:
-            return False
-        return True
+        内容魔数校验在 normalize() 读取文件头部时进行（matches_magic），
+        因为此方法只有文件名、没有文件内容。
+        """
+
+        return Path(filename).suffix.lower() in SUPPORTED_FORMATS
 
     @staticmethod
     def check_engine() -> str | None:
@@ -92,6 +106,12 @@ class NormalizationService:
             )
         if not source.is_file():
             raise NormalizationError(f"文件不存在: {source}")
+        # 扩展名 + 魔数双重校验：文件内容必须与声明格式一致。
+        extension = source.suffix.lower()
+        with source.open("rb") as handle:
+            head = handle.read(8)
+        if not matches_magic(extension, head):
+            raise NormalizationError(f"文件内容与扩展名不符: {source.name}")
         engine_version = self.check_engine()
         if engine_version is None:
             raise NormalizationError(

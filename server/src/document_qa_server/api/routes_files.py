@@ -38,27 +38,11 @@ def use_sample(name: str, http: Request) -> dict:
 
 @router.post("/upload")
 async def upload(file: UploadFile, http: Request) -> dict:
-    """接收浏览器上传的文档并保存，返回服务器端路径。
-
-    流式分块落盘（对抗审查 H-2：整读进内存后再校验大小，
-    恶意大文件会在拒绝前耗尽内存）；累计超限即中止并清理。
-    """
+    """接收浏览器上传的文档并流式落盘（边读边写，不在内存累积整文件）。"""
 
     service = _file_service(http)
-    limit = service.max_upload_bytes
-    chunks: list[bytes] = []
-    total = 0
-    while chunk := await file.read(1024 * 1024):
-        total += len(chunk)
-        if total > limit:
-            raise HTTPException(
-                status_code=400,
-                detail=f"文件大小超过 {limit // (1024 * 1024)} MiB 限制",
-            )
-        chunks.append(chunk)
-    content = b"".join(chunks)
     try:
-        path = service.save_upload(file.filename or "upload.pdf", content)
+        path = await service.save_upload_stream(file.filename or "upload.pdf", file)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"path": str(path), "name": file.filename}

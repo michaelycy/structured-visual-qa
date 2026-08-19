@@ -43,7 +43,28 @@ class MatchingSettings(SchemaModel):
 
     minimum_score: float = Field(default=0.45, ge=0, le=1)
     merged_text_coverage_ratio: float = Field(default=0.40, ge=0, le=1)
+    # 文本类 Region 之间的类型相似度（标题/段落/列表可跨语言互配）。
+    text_type_similarity: float = Field(default=0.80, ge=0, le=1)
     weights: MatchingWeights = Field(default_factory=MatchingWeights)
+
+
+class LayoutAnalogWeights(SchemaModel):
+    """重叠检测中查找源版面类比（layout analog）的评分权重。
+
+    拓扑对照更重视位置，尺寸只用于区分同位置的多个对象；两项必须
+    归一化为凸组合，保持得分范围稳定。
+    """
+
+    position: float = Field(default=0.70, ge=0, le=1)
+    size: float = Field(default=0.30, ge=0, le=1)
+
+    @model_validator(mode="after")
+    def validate_total(self) -> "LayoutAnalogWeights":
+        """位置与尺寸权重必须精确归一化。"""
+
+        if abs(self.position + self.size - 1.0) > 1e-6:
+            raise ValueError("版面类比权重总和必须等于 1")
+        return self
 
 
 class PageAlignmentSettings(SchemaModel):
@@ -81,6 +102,8 @@ class DetectorThresholds(SchemaModel):
     image_caption_area_ratio: float = Field(default=0.005, ge=0, le=1)
     # 目标文本区中仍保留源语言文字的字符占比达到该值即判为未翻译。
     untranslated_ratio: float = Field(default=0.7, ge=0, le=1)
+    # 漏译判定要求目标文本的最少字母数，短版权行/机构缩写不参与判定。
+    untranslated_min_letters: int = Field(default=8, ge=1, le=100)
     # LibreOffice 归一化带来的版面转换噪声容差；偏移类检测阈值自动
     # 叠加该值，纯 PDF 流水线（未归一化）不受影响。
     conversion_noise_ratio: float = Field(default=0.03, ge=0, le=0.2)
@@ -95,10 +118,13 @@ class DetectorThresholds(SchemaModel):
 
 
 class DetectorSettings(SchemaModel):
-    """组合检测器开关与阈值。"""
+    """组合检测器开关、阈值与版面类比权重。"""
 
     enabled: DetectorToggles = Field(default_factory=DetectorToggles)
     thresholds: DetectorThresholds = Field(default_factory=DetectorThresholds)
+    layout_analog_weights: LayoutAnalogWeights = Field(
+        default_factory=LayoutAnalogWeights
+    )
 
 
 class ScoringSettings(SchemaModel):
@@ -160,6 +186,13 @@ class ScoringSettings(SchemaModel):
         return self
 
 
+class GroupingSettings(SchemaModel):
+    """控制 Block 分组为 Region 时的规则参数。"""
+
+    # 相对页内正文字号显著放大的文本判定为标题的倍数阈值。
+    heading_ratio: float = Field(default=1.25, ge=1.0, le=5.0)
+
+
 class RuleProfile(SchemaModel):
     """一次 QA 任务可复现、可版本化的完整规则配置。"""
 
@@ -171,6 +204,7 @@ class RuleProfile(SchemaModel):
     description: str = ""
     matching: MatchingSettings = Field(default_factory=MatchingSettings)
     alignment: PageAlignmentSettings = Field(default_factory=PageAlignmentSettings)
+    grouping: GroupingSettings = Field(default_factory=GroupingSettings)
     detectors: DetectorSettings = Field(default_factory=DetectorSettings)
     scoring: ScoringSettings = Field(default_factory=ScoringSettings)
 

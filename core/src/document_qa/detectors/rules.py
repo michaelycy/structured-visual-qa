@@ -1,7 +1,5 @@
 """MVP 使用的布局、缺失和字体规则检测。"""
 
-from itertools import combinations
-
 from document_qa.matching.geometry import (
     intersection_ratio,
     position_similarity,
@@ -206,7 +204,13 @@ class RuleDetector:
         thresholds = self.profile.detectors.thresholds
         # 每个 Region 的源版面类比只需计算一次；两两组合会重复请求同一 Region。
         analog_cache: dict[str, Region | None] = {}
-        for first, second in combinations(target.regions, 2):
+        regions = target.regions
+        # 先按 y 轴扫描筛出 y 方向可能相交的候选对，避免 O(n²) 全量两两组合；
+        # 候选对按原始索引顺序返回，报告输出顺序与全量两两组合一致。
+        candidate_pairs = self._overlap_candidate_pairs(regions)
+        for first_index, second_index in candidate_pairs:
+            first = regions[first_index]
+            second = regions[second_index]
             ratio = intersection_ratio(first.bbox, second.bbox)
             if ratio <= thresholds.overlap_ratio:
                 continue
@@ -285,6 +289,33 @@ class RuleDetector:
             )
         return issues
 
+    @staticmethod
+    def _overlap_candidate_pairs(regions: list[Region]) -> list[tuple[int, int]]:
+        """按 y 轴扫描筛出 y 方向可能相交的索引对，保持原始顺序。
+
+        先按 y 坐标排序快速筛掉 y 方向必然不相交的组合，再把候选对按
+        原始索引顺序（等价于 combinations 的顺序）输出，因此检测结果与
+        输出顺序都和全量两两组合完全一致。x 方向与精确重叠比例仍由
+        intersection_ratio 判定。
+        """
+
+        order = sorted(range(len(regions)), key=lambda index: regions[index].bbox.y)
+        candidate_set: set[tuple[int, int]] = set()
+        for position, index in enumerate(order):
+            bottom = regions[index].bbox.bottom
+            for later in range(position + 1, len(order)):
+                other_index = order[later]
+                if regions[other_index].bbox.y >= bottom:
+                    # 后续 Region 的 y 单调不降，已不可能与本 Region 在 y 方向相交。
+                    break
+                pair = (
+                    (index, other_index)
+                    if index < other_index
+                    else (other_index, index)
+                )
+                candidate_set.add(pair)
+        return sorted(candidate_set)
+
     def _find_layout_analog(
         self,
         target_region: Region,
@@ -315,12 +346,13 @@ class RuleDetector:
             def layout_score(candidate: Region) -> float:
                 """拓扑对照更重视位置，尺寸只用于区分同位置的多个对象。"""
 
-                return 0.7 * position_similarity(
+                weights = self.profile.detectors.layout_analog_weights
+                return weights.position * position_similarity(
                     candidate.bbox,
                     target_region.bbox,
                     max(source.width, target.width),
                     max(source.height, target.height),
-                ) + 0.3 * size_similarity(candidate.bbox, target_region.bbox)
+                ) + weights.size * size_similarity(candidate.bbox, target_region.bbox)
 
             best = max(candidates, key=layout_score)
             if layout_score(best) >= self.profile.matching.minimum_score:

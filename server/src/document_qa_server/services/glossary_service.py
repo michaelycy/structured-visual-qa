@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from document_qa.glossary import Glossary, default_glossary
+from document_qa_server.services.filelock import file_lock
 
 
 @dataclass(frozen=True)
@@ -38,12 +39,13 @@ class GlossaryService:
         """校验并原子保存术语库，返回路径与版本引用。"""
 
         validated = Glossary.model_validate(data)
-        self._glossaries_dir.mkdir(parents=True, exist_ok=True)
         filename = f"{validated.glossary_id}-v{validated.version}.json"
-        path = self._glossaries_dir / filename
-        temporary = path.with_suffix(".json.tmp")
-        temporary.write_text(validated.model_dump_json(indent=2), encoding="utf-8")
-        temporary.replace(path)
+        with file_lock(self._glossaries_dir / ".lock"):
+            self._glossaries_dir.mkdir(parents=True, exist_ok=True)
+            path = self._glossaries_dir / filename
+            temporary = path.with_suffix(".json.tmp")
+            temporary.write_text(validated.model_dump_json(indent=2), encoding="utf-8")
+            temporary.replace(path)
         return path, validated.reference
 
     def list(self) -> list[GlossarySummary]:
@@ -92,9 +94,10 @@ class GlossaryService:
         """删除已保存术语库。"""
 
         path = self._safe_path(filename)
-        if not path.is_file():
-            raise ValueError(f"术语库不存在: {filename}")
-        path.unlink()
+        with file_lock(self._glossaries_dir / ".lock"):
+            if not path.is_file():
+                raise ValueError(f"术语库不存在: {filename}")
+            path.unlink()
 
     def _safe_path(self, filename: str) -> Path:
         """约束文件名只含安全字符，防止路径穿越（契约 §9）。"""

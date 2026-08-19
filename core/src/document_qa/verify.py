@@ -154,29 +154,34 @@ class StagedVerifier:
             summary = f"[match] 共匹配 {total} 对 Region"
             data = {"pages": results}
         elif stage == Stage.DETECT:
-            issues = []
-            for source_number, target_number in self._documents["alignment"].pairs:
-                source_page = next(
-                    p for p in self._documents["source"].pages
-                    if p.page == source_number
+            source_doc = self._documents["source"]
+            target_doc = self._documents["target"]
+            alignment = self._documents["alignment"]
+            source_pages = {page.page: page for page in source_doc.pages}
+            target_pages = {page.page: page for page in target_doc.pages}
+            # 与 DocumentQAPipeline.compare 相同的页面条目构造（配对页 + 源缺失页
+            # + 目标新增页），复用 _compare_page 保证缺页/多页与术语检测等
+            # 全部路径与真实流水线一致，避免两套检测逻辑漂移。
+            entries = [
+                (
+                    source_number,
+                    source_pages[source_number],
+                    target_pages[target_number],
                 )
-                target_page = next(
-                    p for p in self._documents["target"].pages
-                    if p.page == target_number
-                )
-                match_result = self.pipeline.matcher.match_page(
-                    source_page, target_page
-                )
-                # 与 DocumentQAPipeline._compare_page 相同的检测顺序：
-                # 布局规则在前，内容级检测（数字/漏译）在后。
-                issues.extend(
-                    self.pipeline.detector.detect(source_page, target_page, match_result)
-                )
-                issues.extend(
-                    self.pipeline.content_detector.detect(
-                        source_page, target_page, match_result
-                    )
-                )
+                for source_number, target_number in alignment.pairs
+            ]
+            for number in alignment.missing_source_pages:
+                entries.append((number, source_pages[number], None))
+            for number in alignment.extra_target_pages:
+                entries.append((number, None, target_pages[number]))
+            entries.sort(key=lambda entry: entry[0])
+            page_results = [
+                self.pipeline._compare_page(number, source_page, target_page)
+                for number, source_page, target_page in entries
+            ]
+            issues = [
+                issue for page_result in page_results for issue in page_result.issues
+            ]
             self._documents["issues"] = issues
             data = {
                 "total": len(issues),

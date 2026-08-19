@@ -137,6 +137,7 @@ class ContentDetector:
             return []
         issues: list[Issue] = []
         threshold = self.profile.detectors.thresholds.untranslated_ratio
+        min_letters = self.profile.detectors.thresholds.untranslated_min_letters
         for match in result.matches:
             source_region = source_regions.get(match.source_region_id)
             target_region = target_regions.get(match.target_region_id)
@@ -150,14 +151,14 @@ class ContentDetector:
             # 机构名、版权行（© WHO、© UNFPA）本来就保留原文；
             # 字母字符过少或全由大写缩写构成的短文本不参与漏译判定。
             letters = _CJK_PATTERN.findall(text) + _LATIN_PATTERN.findall(text)
-            if len(letters) < 8:
+            if len(letters) < min_letters:
                 continue
             without_acronyms = _ACRONYM_PATTERN.sub("", text)
             remaining = (
                 _CJK_PATTERN.findall(without_acronyms)
                 + _LATIN_PATTERN.findall(without_acronyms)
             )
-            if len(remaining) < 8:
+            if len(remaining) < min_letters:
                 continue
             ratio = self._language_ratio(text, source_language)
             if ratio >= threshold:

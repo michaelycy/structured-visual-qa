@@ -40,10 +40,10 @@ function pageImage(
   page: number,
   rendered: { source: string[]; target: string[] } | undefined,
 ): string | null {
+  // rendered 元素是相对 pages/ 根的完整路径（task-xxx/side/page-0001.png）。
   const name = `page-${String(page).padStart(4, "0")}.png`
-  return rendered && rendered[side].includes(name)
-    ? `/api/pages/${side}/${name}`
-    : null
+  const match = rendered?.[side].find((entry) => entry.endsWith(`/${side}/${name}`))
+  return match ? `/api/pages/${match}` : null
 }
 
 /** 源/目标渲染图并排对比，目标图叠加 Issue 红框（BBox 为 PDF point）。 */

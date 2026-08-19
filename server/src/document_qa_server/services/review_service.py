@@ -47,11 +47,26 @@ class ReviewService:
         self._reviews_dir.mkdir(parents=True, exist_ok=True)
         self._locks: dict[str, threading.Lock] = {}
         self._registry_lock = threading.Lock()
+        self._locks_created = 0
 
     def _task_lock(self, task_id: str) -> threading.Lock:
-        """每个任务一把锁，避免并发写同一文件。"""
+        """每个任务一把锁，避免并发写同一文件。
+
+        锁字典无界增长（对抗审查 L-2）的缓解：累计创建超阈值时，
+        丢弃未被持有的锁（locked() 检查 + registry 锁双保险——
+        locked 为 True 的锁其持有者必然已通过本方法取得引用并
+        acquire，保留即可；清掉的只可能是长期空闲锁）。
+        """
 
         with self._registry_lock:
+            self._locks_created += 1
+            if self._locks_created > 10000:
+                self._locks = {
+                    key: lock
+                    for key, lock in self._locks.items()
+                    if lock.locked()
+                }
+                self._locks_created = 0
             if task_id not in self._locks:
                 self._locks[task_id] = threading.Lock()
             return self._locks[task_id]

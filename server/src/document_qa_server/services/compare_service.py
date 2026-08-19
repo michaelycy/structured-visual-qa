@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import threading
 import uuid
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Literal
@@ -42,6 +43,7 @@ class TaskState:
     rendered: dict[str, list[str]] | None = None
     error: str | None = None
     history_record_id: str | None = field(default=None)
+    created_at: float = field(default_factory=time.monotonic)
 
 
 class CompareService:
@@ -63,9 +65,13 @@ class CompareService:
         self._tasks: dict[str, TaskState] = {}
         self._tasks_lock = threading.Lock()
 
+    # 终态任务保留时长：结果已被前端取走或超时弃取后释放内存。
+    _TERMINAL_TTL_SECONDS = 3600
+
     def submit(self, source: Path, target: Path, *, displays: tuple[str, str]) -> str:
         """登记任务并返回 task_id（queued 状态）。"""
 
+        self._evict_expired_tasks()
         task_id = uuid.uuid4().hex[:12]
         with self._tasks_lock:
             self._tasks[task_id] = TaskState(
@@ -194,13 +200,13 @@ class CompareService:
             rendered = (
                 self._index_rendered(render_dir) if render else {"source": [], "target": []}
             )
+            # rendered 中的路径是相对 pages/ 根的完整段（含任务目录）。
         # 在流水线产物之上补记归一化来源，提示验收人结论含转换因素。
         origins = {"source": source_origin, "target": target_origin}
         if any(origins.values()):
             report = report.model_copy(
                 update={"metadata": {**report.metadata, "normalized_from": origins}}
             )
-        rendered = self._index_rendered() if render else {"source": [], "target": []}
         return report, rendered
 
     def render_root(self) -> Path:
@@ -232,14 +238,40 @@ class CompareService:
         with self._tasks_lock:
             return self._tasks.get(task_id)
 
-    def _index_rendered(self) -> dict[str, list[str]]:
-        """列出两侧已渲染页面的文件名，供前端按需拼接图片 URL。"""
+    def _evict_expired_tasks(self) -> None:
+        """清理超时的终态任务（对抗审查 L-1：注册表无界增长）。
 
+        运行中/排队任务永不清理；done/error 超过 TTL 后移除，
+        结果已持久化在 history，前端仍可从对比记录回查。
+        """
+
+        cutoff = time.monotonic() - self._TERMINAL_TTL_SECONDS
+        with self._tasks_lock:
+            expired = [
+                task_id
+                for task_id, task in self._tasks.items()
+                if task.status in ("done", "error")
+                and task.created_at < cutoff
+            ]
+            for task_id in expired:
+                del self._tasks[task_id]
+
+    @staticmethod
+    def _index_rendered(task_dir: Path) -> dict[str, list[str]]:
+        """列出该任务两侧已渲染页面的文件名，供前端拼接图片 URL。
+
+        任务目录隔离后索引天然是本次比较的快照，无跨任务串染。
+        """
+
+        prefix = task_dir.name
         index: dict[str, list[str]] = {}
         for side in ("source", "target"):
-            side_dir = self._render_dir / side
+            side_dir = task_dir / side
             index[side] = (
-                sorted(path.name for path in side_dir.glob("page-*.png"))
+                sorted(
+                    f"{prefix}/{side}/{path.name}"
+                    for path in side_dir.glob("page-*.png")
+                )
                 if side_dir.is_dir()
                 else []
             )

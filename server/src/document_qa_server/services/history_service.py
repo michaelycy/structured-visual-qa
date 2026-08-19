@@ -3,18 +3,38 @@
 每次 compare 落一条记录（摘要 + 完整报告 + 输入路径），供界面的
 「对比记录」页列出并重新加载查看。存储沿用 JSON 文件策略：记录
 目录按时间倒序扫描，单文件自包含，无需数据库。
+
+跨进程互斥：Web 服务与 MCP 服务可能同时写同一 history/ 目录
+（对抗审查 M-7），线程锁无法跨进程，add/淘汰经目录级文件锁串行。
 """
 
 from __future__ import annotations
 
+import contextlib
 import json
 import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from pydantic import BaseModel, Field
+
+try:  # POSIX 文件锁（macOS/Linux）
+    import fcntl
+
+    def _lock_file(handle) -> None:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+
+    def _unlock_file(handle) -> None:
+        fcntl.flock(handle, fcntl.LOCK_UN)
+
+except ImportError:  # pragma: no cover - Windows 回退为线程锁
+    def _lock_file(handle) -> None:
+        pass
+
+    def _unlock_file(handle) -> None:
+        pass
 
 
 class CompareRecord(BaseModel):
@@ -46,6 +66,21 @@ class CompareHistoryService:
         self._history_dir.mkdir(parents=True, exist_ok=True)
         self._max_records = max_records
         self._lock = threading.Lock()
+        # 目录级文件锁：Web 与 MCP 双进程同目录写时串行化。
+        self._lockfile_path = self._history_dir / ".lock"
+
+    @contextlib.contextmanager
+    def _file_lock(self) -> Iterator[None]:
+        """跨进程排它锁（fcntl）；Windows 回退为仅线程锁。"""
+
+        with self._lock:
+            handle = self._lockfile_path.open("a+")
+            try:
+                _lock_file(handle)
+                yield
+            finally:
+                _unlock_file(handle)
+                handle.close()
 
     def add(
         self,
@@ -60,10 +95,11 @@ class CompareHistoryService:
 
         record_id 在持锁后生成：锁外生成时并发任务同毫秒启动会
         碰撞并静默互相覆盖（对抗测试 F1 实锤：20 并发写只剩 1 条）。
+        文件锁同时串行化跨进程写入与淘汰（对抗审查 M-7）。
         """
 
         now = datetime.now(timezone.utc)
-        with self._lock:
+        with self._file_lock():
             record_id = (
                 now.strftime("%Y%m%d-%H%M%S")
                 + f"-{now.microsecond // 1000:03d}"
@@ -112,14 +148,18 @@ class CompareHistoryService:
         return records
 
     def get(self, record_id: str) -> CompareRecord:
-        """按 ID 读取完整记录（含报告）；不存在时抛 ValueError。"""
+        """按 ID 读取完整记录（含报告）；不存在或刚被淘汰时抛 ValueError。"""
 
         if not all(ch.isalnum() or ch in "-_" for ch in record_id):
             raise ValueError("无效记录 ID")
         path = self._history_dir / f"{record_id}.json"
-        if not path.is_file():
-            raise ValueError(f"记录不存在: {record_id}")
-        return CompareRecord.model_validate_json(path.read_text(encoding="utf-8"))
+        try:
+            return CompareRecord.model_validate_json(
+                path.read_text(encoding="utf-8")
+            )
+        except (OSError, ValueError) as exc:
+            # is_file 检查与读取之间可能被另一进程的淘汰删除（M-7）。
+            raise ValueError(f"记录不存在或已淘汰: {record_id}") from exc
 
     def _evict_expired(self) -> None:
         """超过上限时删除最旧记录（调用方需持锁）。"""

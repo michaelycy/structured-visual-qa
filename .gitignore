@@ -9,6 +9,8 @@ dist/
 build/
 *.egg-info/
 tmp/
+# 服务运行期生成的比对产物与临时文件（契约 §11：不入库的生成产物/文档样本）
+webapp-artifacts/
 .env
 .env.*
 !.env.example

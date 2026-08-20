@@ -62,6 +62,44 @@ python -m document_qa source.pdf target.pdf --output qa-report.json
 - `review`：存在 High，或得分处于 75 至 90；
 - `fail`：存在 Critical，或得分低于 75。
 
+## 启动服务
+
+### 后端服务
+
+启动 FastAPI 服务器（默认端口 8765）：
+
+```bash
+.venv/bin/document-qa-server --port 8765
+```
+
+服务器启动后可访问：
+- API 文档：http://127.0.0.1:8765/docs
+- OpenAPI 规范：http://127.0.0.1:8765/openapi.json
+
+### 前端服务
+
+启动 React+Vite 开发服务器：
+
+```bash
+cd webapp && bun run dev
+```
+
+前端服务默认运行在 http://localhost:5180/，会自动代理 `/api` 请求到后端服务。
+
+### 完整启动流程
+
+在两个终端分别启动服务：
+
+```bash
+# 终端 1：启动后端
+.venv/bin/document-qa-server --port 8765
+
+# 终端 2：启动前端
+cd webapp && bun run dev
+```
+
+启动完成后访问 http://localhost:5180/ 即可使用 Web 界面。
+
 ## 开发验证
 
 ```bash

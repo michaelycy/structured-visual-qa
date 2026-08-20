@@ -35,6 +35,9 @@ class CompareRecord(BaseModel):
     issue_total: int
     rule_profile_reference: str
     normalized_from: dict[str, Any] | None = None
+    # 渲染页索引（相对 pages/ 根），历史回看时复现红框对比图；
+    # 旧记录无此字段时前端回退为无图模式。
+    rendered: dict[str, Any] | None = None
     # 完整报告与输入路径，重新查看时使用；列表查询时不加载。
     report: dict[str, Any] | None = None
     source_path: str | None = None
@@ -68,6 +71,7 @@ class CompareHistoryService:
         target_path: str,
         source_display: str,
         target_display: str,
+        rendered: dict[str, Any] | None = None,
     ) -> CompareRecord:
         """保存一条对比记录并返回；文件名含时间戳保证唯一。
 
@@ -96,6 +100,7 @@ class CompareHistoryService:
                 ),
                 rule_profile_reference=report.get("rule_profile_reference", ""),
                 normalized_from=(report.get("metadata") or {}).get("normalized_from"),
+                rendered=rendered,
                 report=report,
                 source_path=source_path,
                 target_path=target_path,

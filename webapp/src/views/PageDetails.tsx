@@ -1,6 +1,6 @@
-/** 逐页详情：页面选择 + 源/目标渲染图对比 + Issue 列表（含人工判定）。 */
+/** 逐页详情：页面选择 + 源/目标渲染图对比 + Issue 列表（含人工判定与筛选）。 */
 
-import { useState } from "react"
+import { useMemo, useState } from "react"
 import {
   Button,
   Col,
@@ -8,32 +8,14 @@ import {
   Empty,
   Progress,
   Row,
+  Segmented,
   Select,
   Space,
   Tag,
   Typography,
 } from "antd"
 import type { Issue, QAReport, ReviewDecision } from "../api"
-
-const SEVERITY_COLOR: Record<string, string> = {
-  critical: "red",
-  high: "volcano",
-  medium: "orange",
-  low: "green",
-  info: "default",
-}
-
-const DECISION_LABEL: Record<ReviewDecision, string> = {
-  confirmed: "确认问题",
-  false_positive: "误报",
-  ignored: "忽略",
-}
-
-const DECISION_COLOR: Record<ReviewDecision, string> = {
-  confirmed: "red",
-  false_positive: "green",
-  ignored: "default",
-}
+import { DECISION_META, ISSUE_TYPE_META, SEVERITY_META, STATUS_META } from "../uiTokens"
 
 function pageImage(
   side: "source" | "target",
@@ -67,7 +49,7 @@ function PageCompare({
   if (!sourceUrl && !targetUrl) {
     return (
       <Empty
-        description="本页状态为 PASS，未生成渲染图（默认只渲染需复核页面）。"
+        description="本页无渲染图：默认只渲染需复核页面，历史记录回看也不含渲染图（可在工作台重新比较生成）。"
         image={Empty.PRESENTED_IMAGE_SIMPLE}
       />
     )
@@ -136,6 +118,70 @@ function PageCompare({
   )
 }
 
+/** 复核状态筛选选项。 */
+type ReviewFilter = "all" | "pending" | "done"
+
+/** Issue 展开详情：定位状态 + 阈值/差异明细，让"哪里出的问题"可读。 */
+function IssueDetails({
+  issue,
+  decisions,
+  onDecide,
+  onHighlight,
+}: {
+  issue: Issue
+  decisions: Record<string, ReviewDecision>
+  onDecide: (issueId: string, decision: ReviewDecision) => void
+  onHighlight: (issueId: string) => void
+}) {
+  // 数字不一致的差集明细按"缺失/多余"分组展示，比原始 metrics 更直观。
+  const metrics = issue.metrics ?? {}
+  const numberDetail = (
+    ["missing_numbers", "extra_numbers"] as const
+  ).filter((key) => Array.isArray(metrics[key]) && metrics[key].length)
+  return (
+    <Space direction="vertical" size={6} onClick={(e) => e.stopPropagation()}>
+      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+        {issue.bbox
+          ? `位置：目标文档第 ${issue.page} 页红框处（点击列表项可在图中高亮）`
+          : "位置：无法定位到具体区域（差异为页面级，请对照左右两页人工检查）"}
+      </Typography.Text>
+      {numberDetail.length > 0 && (
+        <Space wrap size={8}>
+          {numberDetail.map((key) => (
+            <Tag key={key} color={key === "missing_numbers" ? "red" : "orange"}>
+              {key === "missing_numbers" ? "源有目标无" : "目标多出"}：
+              {(metrics[key] as (string | number)[]).join("、")}
+            </Tag>
+          ))}
+        </Space>
+      )}
+      {/* 其余 metrics（阈值、比例、样本文本）逐项罗列，便于复核追溯。 */}
+      {Object.entries(metrics)
+        .filter(([key]) => !numberDetail.includes(key as never))
+        .map(([key, value]) => (
+          <Typography.Text key={key} type="secondary" style={{ fontSize: 12 }}>
+            {key}：{Array.isArray(value) ? value.join("、") : String(value)}
+          </Typography.Text>
+        ))}
+      <Space>
+        {(Object.keys(DECISION_META) as ReviewDecision[]).map((key) => (
+          <Button
+            key={key}
+            size="small"
+            type={decisions[issue.id] === key ? "primary" : "default"}
+            onClick={() => {
+              onHighlight(issue.id)
+              onDecide(issue.id, key)
+            }}
+          >
+            {DECISION_META[key].label}
+          </Button>
+        ))}
+      </Space>
+    </Space>
+  )
+}
+
 export function PageDetails({
   report,
   rendered,
@@ -154,9 +200,26 @@ export function PageDetails({
     problems[0]?.page ?? report.pages[0]?.page ?? null,
   )
   const [activeIssueId, setActiveIssueId] = useState<string | null>(null)
+  // 复核工作流筛选：只看某种严重度 / 只看未复核，处理上百条 Issue 时定位更快。
+  const [severityFilter, setSeverityFilter] = useState<string[]>([])
+  const [reviewFilter, setReviewFilter] = useState<ReviewFilter>("all")
   const page = report.pages.find((item) => item.page === selected)
   const totalIssues = report.pages.reduce((sum, p) => sum + p.issues.length, 0)
   const reviewed = Object.keys(decisions).length
+
+  // 当前页按筛选条件过滤后的 Issue；红框同步使用过滤结果。
+  const visibleIssues = useMemo(() => {
+    let list = page?.issues ?? []
+    if (severityFilter.length) {
+      list = list.filter((issue) => severityFilter.includes(issue.severity))
+    }
+    if (reviewFilter === "pending") {
+      list = list.filter((issue) => !decisions[issue.id])
+    } else if (reviewFilter === "done") {
+      list = list.filter((issue) => decisions[issue.id])
+    }
+    return list
+  }, [page, severityFilter, reviewFilter, decisions])
 
   return (
     <Space direction="vertical" size={12} style={{ width: "100%" }}>
@@ -170,7 +233,9 @@ export function PageDetails({
           }}
           options={report.pages.map((item) => ({
             value: item.page,
-            label: `第 ${item.page} 页 · ${item.score.toFixed(0)} 分 · ${item.status}`,
+            label: `第 ${item.page} 页 · ${item.score.toFixed(0)} 分 · ${
+              STATUS_META[item.status]?.label ?? item.status
+            }${item.issues.length ? ` · ${item.issues.length} 个问题` : ""}`,
           }))}
           showSearch
           optionFilterProp="label"
@@ -187,13 +252,60 @@ export function PageDetails({
 
       {page ? (
         <>
+          {/* key 按页重挂载：换页时清掉上一页的尺寸状态，避免红框按旧尺寸错位闪现。 */}
           <PageCompare
+            key={page.page}
             page={page.page}
-            issues={page.issues}
+            issues={visibleIssues}
             rendered={rendered}
             activeIssueId={activeIssueId}
           />
-          {page.issues.length ? (
+          {page.issues.length > 0 && (
+            <Space wrap>
+              <Select
+                mode="multiple"
+                allowClear
+                placeholder="按严重度筛选"
+                style={{ minWidth: 200 }}
+                value={severityFilter}
+                onChange={setSeverityFilter}
+                options={Object.entries(SEVERITY_META).map(([key, meta]) => ({
+                  value: key,
+                  label: meta.label,
+                }))}
+              />
+              <Segmented
+                value={reviewFilter}
+                onChange={(value) => setReviewFilter(value as ReviewFilter)}
+                options={[
+                  { value: "all", label: `全部 ${page.issues.length}` },
+                  {
+                    value: "pending",
+                    label: `未复核 ${
+                      page.issues.filter((issue) => !decisions[issue.id]).length
+                    }`,
+                  },
+                  {
+                    value: "done",
+                    label: `已复核 ${
+                      page.issues.filter((issue) => decisions[issue.id]).length
+                    }`,
+                  },
+                ]}
+              />
+            </Space>
+          )}
+          {page.issues.length === 0 ? (
+            <Empty
+              image={Empty.PRESENTED_IMAGE_SIMPLE}
+              description="本页没有发现问题。"
+            />
+          ) : visibleIssues.length === 0 ? (
+            <Empty
+              image={Empty.PRESENTED_IMAGE_SIMPLE}
+              description="当前筛选条件下没有匹配的问题，可调整筛选。"
+            />
+          ) : (
             <Collapse
               size="small"
               activeKey={activeIssueId ?? undefined}
@@ -202,56 +314,39 @@ export function PageDetails({
                   Array.isArray(keys) ? keys[0] ?? null : keys ?? null,
                 )
               }
-              items={page.issues.map((issue) => ({
+              items={visibleIssues.map((issue) => ({
                 key: issue.id,
                 label: (
                   <Space wrap size={8}>
-                    <Tag color={SEVERITY_COLOR[issue.severity]}>
-                      {issue.severity}
+                    <Tag color={SEVERITY_META[issue.severity]?.color}>
+                      {SEVERITY_META[issue.severity]?.label ?? issue.severity}
                     </Tag>
-                    <Typography.Text code style={{ fontSize: 12 }}>
-                      {issue.type}
-                    </Typography.Text>
+                    <Tag bordered={false} style={{ color: "rgba(0,0,0,0.58)" }}>
+                      {ISSUE_TYPE_META[issue.type] ?? issue.type}
+                    </Tag>
                     <span>{issue.description}</span>
+                    {/* 无 bbox 的 Issue 在图上没有红框，显式标记避免用户在图里找不到。 */}
+                    {!issue.bbox && (
+                      <Tag bordered={false} color="warning">
+                        图上无定位
+                      </Tag>
+                    )}
                     {decisions[issue.id] && (
-                      <Tag color={DECISION_COLOR[decisions[issue.id]]}>
-                        {DECISION_LABEL[decisions[issue.id]]}
+                      <Tag color={DECISION_META[decisions[issue.id]].color}>
+                        {DECISION_META[decisions[issue.id]].label}
                       </Tag>
                     )}
                   </Space>
                 ),
                 children: (
-                  <Space direction="vertical" size={8} style={{ width: "100%" }}>
-                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                      指标 {JSON.stringify(issue.metrics)}
-                    </Typography.Text>
-                    <Space onClick={(e) => e.stopPropagation()}>
-                      {(Object.keys(DECISION_LABEL) as ReviewDecision[]).map(
-                        (key) => (
-                          <Button
-                            key={key}
-                            size="small"
-                            type={
-                              decisions[issue.id] === key ? "primary" : "default"
-                            }
-                            onClick={() => {
-                              setActiveIssueId(issue.id)
-                              onDecide(issue.id, key)
-                            }}
-                          >
-                            {DECISION_LABEL[key]}
-                          </Button>
-                        ),
-                      )}
-                    </Space>
-                  </Space>
+                  <IssueDetails
+                    issue={issue}
+                    decisions={decisions}
+                    onDecide={onDecide}
+                    onHighlight={setActiveIssueId}
+                  />
                 ),
               }))}
-            />
-          ) : (
-            <Empty
-              image={Empty.PRESENTED_IMAGE_SIMPLE}
-              description="本页没有发现问题。"
             />
           )}
         </>

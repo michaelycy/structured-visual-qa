@@ -95,6 +95,7 @@ export interface HistoryRecord {
   issue_total: number
   rule_profile_reference: string
   normalized_from?: Record<string, string | null> | null
+  rendered?: { source: string[]; target: string[] } | null
   report?: QAReport
 }
 
@@ -140,6 +141,7 @@ export const api = {
     targetDisplay = "",
     glossaryReference: string | null = null,
     render = true,
+    profilePath: string | null = null,
   ) =>
     request<CompareSubmitResponse>("/api/compare", {
       method: "POST",
@@ -151,6 +153,7 @@ export const api = {
         glossary_reference: glossaryReference,
         render,
         render_scope: "issues",
+        profile_path: profilePath,
       }),
     }),
   glossaryDefault: () => request<Glossary>("/api/glossary/default"),

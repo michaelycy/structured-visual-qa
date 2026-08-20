@@ -4,14 +4,7 @@ import { useState } from "react"
 import { Button, Card, Col, message, Row, Space, Statistic, Tag } from "antd"
 import { FileExcelOutlined, FileTextOutlined } from "@ant-design/icons"
 import { api, type QAReport } from "../api"
-
-const SEVERITY_COLOR: Record<string, string> = {
-  critical: "red",
-  high: "volcano",
-  medium: "orange",
-  low: "green",
-  info: "default",
-}
+import { SEVERITY_META, SEVERITY_ORDER, STATUS_META, scoreColor } from "../uiTokens"
 
 /** 触发浏览器下载导出产物。 */
 function download(blob: Blob, filename: string) {
@@ -59,14 +52,9 @@ export function ReportOverview({
           <Card size="small">
             <Statistic
               title="文档状态"
-              value={report.status}
+              value={STATUS_META[report.status]?.label ?? report.status}
               valueStyle={{
-                color:
-                  report.status === "pass"
-                    ? "#389e0d"
-                    : report.status === "review"
-                      ? "#d46b08"
-                      : "#cf1322",
+                color: STATUS_META[report.status]?.color,
               }}
             />
           </Card>
@@ -77,7 +65,7 @@ export function ReportOverview({
               title="文档分数"
               value={report.document_score}
               precision={2}
-              valueStyle={{ fontWeight: 600 }}
+              valueStyle={{ fontWeight: 600, color: scoreColor(report.document_score) }}
             />
           </Card>
         </Col>
@@ -133,13 +121,14 @@ export function ReportOverview({
       >
         {Object.entries(summary.issue_counts)
           .filter(([, count]) => count > 0)
+          .sort((a, b) => (SEVERITY_ORDER[a[0]] ?? 99) - (SEVERITY_ORDER[b[0]] ?? 99))
           .map(([severity, count]) => (
             <Tag
               key={severity}
-              color={SEVERITY_COLOR[severity]}
+              color={SEVERITY_META[severity]?.color}
               style={{ fontSize: 13, padding: "2px 10px" }}
             >
-              {severity} × {count}
+              {SEVERITY_META[severity]?.label ?? severity} × {count}
             </Tag>
           ))}
         {Object.values(summary.issue_counts).every((c) => c === 0) && (

@@ -1,1 +1,34 @@
-body { margin: 0; }
+/* 全局视觉底座：字体栈与页面底色统一，避免各视图内联样式分叉。 */
+
+body {
+  margin: 0;
+  /* 中文优先的系统字体栈：macOS 苹方 / Windows 微软雅黑，数字用表格场景友好的栈。 */
+  font-family:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  background: #f5f6f8;
+  color: rgba(0, 0, 0, 0.88);
+}
+
+/* 等宽引用（profile_id / record_id 等）统一取色，弱化视觉噪音。 */
+code,
+pre,
+.ant-typography code {
+  color: rgba(0, 0, 0, 0.65);
+}
+
+/* 报告里的原始 JSON 预览：统一浅底与内边距。 */
+pre {
+  background: #fafafa;
+  border: 1px solid #f0f0f0;
+  border-radius: 6px;
+  padding: 8px 12px;
+}
+
+/* 页面内容区内边距随窗口收窄（平板可用性）。 */
+@media (max-width: 768px) {
+  .ant-layout-content {
+    padding: 12px !important;
+  }
+}

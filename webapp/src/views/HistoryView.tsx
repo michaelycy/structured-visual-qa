@@ -1,14 +1,18 @@
-/** 对比记录页：antd Table，可回看完整报告。 */
+/** 对比记录页：antd Table + 详情抽屉，行内即看摘要，抽屉看完整详情。 */
 
 import { useEffect, useState } from "react"
-import { message, Table, Tag, Typography } from "antd"
+import { Badge, message, Table, Tag, Tooltip, Typography } from "antd"
 import type { ColumnsType } from "antd/es/table"
 import { api, type HistoryRecord } from "../api"
+import { HistoryDetail } from "./HistoryDetail"
+import { STATUS_META, scoreColor } from "../uiTokens"
 
-const STATUS_COLOR: Record<string, string> = {
-  pass: "green",
-  review: "orange",
-  fail: "red",
+/** 本地时间格式化：created_at 为 UTC ISO 串，直接截串会差时区。 */
+function formatTime(iso: string): string {
+  const date = new Date(iso)
+  return Number.isNaN(date.getTime())
+    ? iso
+    : date.toLocaleString("zh-CN", { hour12: false })
 }
 
 export function HistoryView({
@@ -18,6 +22,9 @@ export function HistoryView({
 }) {
   const [records, setRecords] = useState<Omit<HistoryRecord, "report">[]>([])
   const [loading, setLoading] = useState(true)
+  const [detailRecord, setDetailRecord] = useState<
+    Omit<HistoryRecord, "report"> | null
+  >(null)
   const [messageApi, contextHolder] = message.useMessage()
 
   useEffect(() => {
@@ -44,11 +51,13 @@ export function HistoryView({
     {
       title: "时间",
       dataIndex: "created_at",
-      width: 170,
+      width: 165,
       render: (value: string) => (
-        <Typography.Text code style={{ fontSize: 12 }}>
-          {value.slice(0, 19).replace("T", " ")}
-        </Typography.Text>
+        <Tooltip title={value}>
+          <Typography.Text style={{ fontSize: 12 }}>
+            {formatTime(value)}
+          </Typography.Text>
+        </Tooltip>
       ),
     },
     { title: "源文档", dataIndex: "source_display", ellipsis: true },
@@ -56,34 +65,59 @@ export function HistoryView({
     {
       title: "状态",
       dataIndex: "status",
-      width: 90,
-      render: (value: string) => (
-        <Tag color={STATUS_COLOR[value] ?? "default"}>{value}</Tag>
-      ),
+      width: 95,
+      render: (value: string) => {
+        const meta = STATUS_META[value]
+        return meta ? (
+          <Badge status={meta.badge} text={meta.label} />
+        ) : (
+          <Tag>{value}</Tag>
+        )
+      },
     },
     {
       title: "分数",
       dataIndex: "document_score",
       width: 80,
-      render: (value: number) => value.toFixed(1),
-    },
-    { title: "页面", dataIndex: "pages", width: 70 },
-    { title: "问题", dataIndex: "issue_total", width: 70 },
-    {
-      title: "配置",
-      dataIndex: "rule_profile_reference",
-      width: 170,
-      render: (value: string) => (
-        <Typography.Text code style={{ fontSize: 12 }}>
-          {value}
+      sorter: (a, b) => a.document_score - b.document_score,
+      render: (value: number) => (
+        <Typography.Text strong style={{ color: scoreColor(value) }}>
+          {value.toFixed(1)}
         </Typography.Text>
       ),
     },
     {
+      title: "页面",
+      dataIndex: "pages",
+      width: 70,
+      align: "right",
+    },
+    {
+      title: "问题",
+      dataIndex: "issue_total",
+      width: 70,
+      align: "right",
+      // 无问题弱化展示，有问题红字突出，扫一眼即可定位差记录。
+      render: (value: number) =>
+        value > 0 ? (
+          <Typography.Text strong style={{ color: "#cf1322" }}>
+            {value}
+          </Typography.Text>
+        ) : (
+          <Typography.Text type="secondary">0</Typography.Text>
+        ),
+    },
+    {
       title: "操作",
-      width: 90,
+      width: 130,
       render: (_, record) => (
-        <a onClick={() => void reopen(record.record_id)}>查看</a>
+        <>
+          <a onClick={() => setDetailRecord(record)}>详情</a>
+          <Typography.Text type="secondary" style={{ margin: "0 8px" }}>
+            |
+          </Typography.Text>
+          <a onClick={() => void reopen(record.record_id)}>工作台打开</a>
+        </>
       ),
     },
   ]
@@ -101,6 +135,11 @@ export function HistoryView({
         locale={{
           emptyText: "还没有比较记录。执行一次比较后会自动保存到这里。",
         }}
+      />
+      <HistoryDetail
+        record={detailRecord}
+        open={detailRecord !== null}
+        onClose={() => setDetailRecord(null)}
       />
     </div>
   )

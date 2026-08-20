@@ -76,36 +76,80 @@ class ContentDetector:
         extra = target_numbers - source_numbers
         if not missing and not extra:
             return []
-        # 用包含缺失数字的源区域做定位；找不到时退到页面级 Issue。
-        anchor = self._find_number_anchor(source, missing)
+        # 定位必须在目标侧：契约要求 Issue 的 bbox 为 Target BBox，
+        # 前端红框画在目标页渲染图上，拿源区域坐标会指到错误位置。
+        # 优先找包含多余数字的目标区域（错译的数字就在那里）；
+        # 只有缺失时，把含缺失数字的源区域经匹配结果映射到对应目标区域。
+        extra_anchor = self._find_number_anchor(target, extra)
+        source_anchor = self._find_number_anchor(source, missing)
+        target_region = extra_anchor or self._map_to_target(
+            source_anchor, target, result
+        )
+        # 差异明细直接写进描述，界面列表不展开也能看到具体数字。
+        detail_parts = []
+        if missing:
+            detail_parts.append(
+                "缺失数字：" + "、".join(sorted(missing.elements()))
+            )
+        if extra:
+            detail_parts.append(
+                "多余数字：" + "、".join(sorted(extra.elements()))
+            )
         return [
             Issue(
                 id=f"p{target.page}-numbers",
                 page=target.page,
                 type=IssueType.NUMBER_MISMATCH,
                 severity=Severity.HIGH,
-                source_region=anchor.id if anchor else None,
-                bbox=anchor.bbox if anchor else None,
+                source_region=source_anchor.id if source_anchor else None,
+                target_region=target_region.id if target_region else None,
+                bbox=target_region.bbox if target_region else None,
                 metrics={
                     "source_numbers": sorted(source_numbers.elements()),
                     "target_numbers": sorted(target_numbers.elements()),
                     "missing_numbers": sorted(missing.elements()),
                     "extra_numbers": sorted(extra.elements()),
                 },
-                description="目标页面数字与源页面不一致，可能存在错漏译。",
+                description=(
+                    "目标页面数字与源页面不一致，可能存在错漏译。"
+                    + "（" + "；".join(detail_parts) + "）"
+                ),
                 detector="content-numbers",
             )
         ]
 
     @staticmethod
     def _find_number_anchor(
-        source: Page, missing: Counter
+        page: Page, numbers: Counter
     ) -> Region | None:
-        """找到包含缺失数字的源区域，用于问题定位。"""
+        """找到包含指定数字集合的区域，用于问题定位。"""
 
-        for region in source.regions:
-            numbers = ContentDetector._extract_numbers(region)
-            if numbers & missing:
+        for region in page.regions:
+            if ContentDetector._extract_numbers(region) & numbers:
+                return region
+        return None
+
+    @staticmethod
+    def _map_to_target(
+        source_region: Region | None,
+        target: Page,
+        result: PageMatchResult,
+    ) -> Region | None:
+        """把源锚点区域经匹配结果映射为目标区域（缺失数字只存在于源侧）。
+
+        返回 None 表示该源区域未匹配（如目标侧整块缺失），
+        此时 Issue 不带 bbox，退化为页面级提示。
+        """
+
+        if source_region is None:
+            return None
+        target_ids = {
+            match.target_region_id
+            for match in result.matches
+            if match.source_region_id == source_region.id
+        }
+        for region in target.regions:
+            if region.id in target_ids:
                 return region
         return None
 

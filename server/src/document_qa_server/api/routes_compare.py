@@ -44,27 +44,39 @@ def _load_glossary(request: CompareRequest, http: Request):
 
 
 def _load_profile(request: CompareRequest, http: Request):
-    """加载可选 Profile；路径存在但校验失败时返回 400。"""
+    """加载可选 Profile；配置非法或不存在时返回 400。
+
+    界面传的是列表接口返回的文件名（无路径分隔符），映射到
+    profiles/ 子目录；带路径的值仍按服务器本地文件处理。
+    """
 
     if not request.profile_path:
         return default_rule_profile()
     profile_service: ProfileService = http.app.state.profiles
     try:
+        if "/" not in request.profile_path and "\\" not in request.profile_path:
+            return profile_service.get(request.profile_path)
         return profile_service.load(Path(request.profile_path))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _history_writer(http: Request):
-    """构造历史记录回调：返回 record_id 供任务状态回查。"""
+    """构造历史记录回调：返回 record_id 供任务状态回查。
 
-    def write(report_dict, source, target, s_display, t_display) -> str:
+    rendered（渲染页索引）一并落历史，回看时可复现红框对比图。
+    """
+
+    def write(
+        report_dict, source, target, s_display, t_display, rendered=None
+    ) -> str:
         record = http.app.state.history.add(
             report=report_dict,
             source_path=str(source),
             target_path=str(target),
             source_display=s_display,
             target_display=t_display,
+            rendered=rendered,
         )
         return record.record_id
 
@@ -106,6 +118,7 @@ def compare(request: CompareRequest, http: Request, background: BackgroundTasks)
             target_path=str(target),
             source_display=request.source_display or source.name,
             target_display=request.target_display or target.name,
+            rendered=rendered,
         )
         return {
             "task_id": None,

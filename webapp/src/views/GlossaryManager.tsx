@@ -62,6 +62,7 @@ function GlossaryEditor({
   const [rows, setRows] = useState<EntryRow[]>(glossaryToRows(initial))
   const [error, setError] = useState("")
   const [busy, setBusy] = useState(false)
+  const [messageApi, contextHolder] = message.useMessage()
 
   useEffect(() => {
     setGlossary(initial)
@@ -73,7 +74,7 @@ function GlossaryEditor({
     setError("")
     try {
       const saved = await api.glossarySave(rowsToGlossary(glossary, rows))
-      message.success(`已保存 ${saved.reference}`)
+      messageApi.success(`已保存 ${saved.reference}`)
       onSaved(saved.reference)
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc))
@@ -90,6 +91,7 @@ function GlossaryEditor({
 
   return (
     <Card size="small" title="编辑术语库" style={{ marginTop: 16 }}>
+      {contextHolder}
       {error && (
         <Typography.Paragraph type="danger" style={{ fontSize: 13 }}>
           {error}
@@ -212,6 +214,7 @@ export function GlossaryManager() {
   const [glossaries, setGlossaries] = useState<GlossarySummary[]>([])
   const [editing, setEditing] = useState<Glossary | null>(null)
   const [loading, setLoading] = useState(true)
+  const [messageApi, contextHolder] = message.useMessage()
 
   const refresh = useCallback(() => {
     setLoading(true)
@@ -227,10 +230,10 @@ export function GlossaryManager() {
   const remove = async (filename: string, reference: string) => {
     try {
       await api.glossaryDelete(filename)
-      message.success(`已删除 ${reference}`)
+      messageApi.success(`已删除 ${reference}`)
       refresh()
     } catch (exc) {
-      message.error(exc instanceof Error ? exc.message : String(exc))
+      messageApi.error(exc instanceof Error ? exc.message : String(exc))
     }
   }
 
@@ -282,6 +285,8 @@ export function GlossaryManager() {
   ]
 
   return (
+    <>
+    {contextHolder}
     <Card
       title="术语库管理"
       extra={
@@ -344,5 +349,6 @@ export function GlossaryManager() {
         />
       )}
     </Card>
+    </>
   )
 }

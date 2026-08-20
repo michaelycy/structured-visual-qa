@@ -1,7 +1,7 @@
 /** 规则配置编辑器：antd Form，服务端 Pydantic 校验兜底。 */
 
 import { useEffect, useState } from "react"
-import { Alert, Button, Card, Col, Form, Input, InputNumber, Row, Space, message } from "antd"
+import { Alert, Button, Card, Col, Collapse, Form, Input, InputNumber, Row, Space, message } from "antd"
 import { api, type RuleProfile } from "../api"
 
 export interface ProfileEditorProps {
@@ -95,9 +95,16 @@ export function ProfileEditor({ initial, onSaved }: ProfileEditorProps) {
     }
   }
 
-  const numberField = (label: string, name: keyof ProfileForm, step = 0.05, min?: number, max?: number) => (
+  const numberField = (
+    label: string,
+    name: keyof ProfileForm,
+    tooltip?: string,
+    step = 0.05,
+    min?: number,
+    max?: number,
+  ) => (
     <Col xs={12} md={6}>
-      <Form.Item label={label} name={name} style={{ marginBottom: 8 }}>
+      <Form.Item label={label} name={name} tooltip={tooltip} style={{ marginBottom: 8 }}>
         <InputNumber style={{ width: "100%" }} step={step} min={min} max={max} />
       </Form.Item>
     </Col>
@@ -109,50 +116,72 @@ export function ProfileEditor({ initial, onSaved }: ProfileEditorProps) {
       {error && <Alert type="error" showIcon message={error} style={{ marginBottom: 12 }} />}
 
       <Row gutter={12}>
-        <Col xs={24} md={10}>
+        <Col xs={24} md={12}>
           <Form.Item label="配置名称" name="name" rules={[{ required: true }]}>
             <Input />
           </Form.Item>
         </Col>
-        <Col xs={12} md={8}>
-          <Form.Item label="profile_id" name="profile_id" rules={[{ required: true }]}>
-            <Input />
-          </Form.Item>
-        </Col>
-        <Col xs={12} md={6}>
-          <Form.Item label="版本号" name="version">
-            <InputNumber style={{ width: "100%" }} step={1} min={1} />
-          </Form.Item>
-        </Col>
       </Row>
+      {/* 标识与版本是系统内部概念（保存文件名由它们组成），默认收起。 */}
+      <Collapse
+        size="small"
+        style={{ marginBottom: 12 }}
+        items={[
+          {
+            key: "identity",
+            label: (
+              <span style={{ fontSize: 13 }}>高级（标识与版本）</span>
+            ),
+            children: (
+              <Row gutter={12}>
+                <Col xs={12} md={12}>
+                  <Form.Item
+                    label="标识（英文，用于引用）"
+                    name="profile_id"
+                    rules={[{ required: true }]}
+                    style={{ marginBottom: 8 }}
+                  >
+                    <Input />
+                  </Form.Item>
+                </Col>
+                <Col xs={12} md={8}>
+                  <Form.Item label="版本号" name="version" style={{ marginBottom: 8 }}>
+                    <InputNumber style={{ width: "100%" }} step={1} min={1} />
+                  </Form.Item>
+                </Col>
+              </Row>
+            ),
+          },
+        ]}
+      />
 
       <Card size="small" title="匹配设置" style={{ marginBottom: 12 }}>
         <Row gutter={12}>
-          {numberField("最低匹配分", "matching.minimum_score", 0.05, 0, 1)}
-          {numberField("合并文本覆盖率", "matching.merged_text_coverage_ratio", 0.05, 0, 1)}
+          {numberField("最低匹配分", "matching.minimum_score", "相似度低于该值的区域对不会配对；调高更严格", 0.05, 0, 1)}
+          {numberField("合并文本覆盖率", "matching.merged_text_coverage_ratio", "两段文本需重叠的比例，用于判定属于同一区域", 0.05, 0, 1)}
         </Row>
       </Card>
 
       <Card size="small" title="页对齐" style={{ marginBottom: 12 }}>
         <Row gutter={12}>
-          {numberField("最大页码偏移", "alignment.max_shift", 1, 0, 50)}
-          {numberField("跳页代价", "alignment.skip_penalty", 0.1, 0, 10)}
+          {numberField("最大页码偏移", "alignment.max_shift", "允许原文与译文相差几页（应对目录、版权页等增删）", 1, 0, 50)}
+          {numberField("跳页代价", "alignment.skip_penalty", "越大越倾向于不跳过任何一页", 0.1, 0, 10)}
         </Row>
       </Card>
 
       <Card size="small" title="检测阈值" style={{ marginBottom: 12 }}>
         <Row gutter={12}>
-          {numberField("偏移阈值", "detectors.thresholds.shifted_ratio", 0.01, 0, 1)}
-          {numberField("严重偏移阈值", "detectors.thresholds.severely_shifted_ratio", 0.01, 0, 1)}
-          {numberField("字号缩小阈值", "detectors.thresholds.font_shrink_ratio", 0.01, -1, 0)}
-          {numberField("重叠比例阈值", "detectors.thresholds.overlap_ratio", 0.01, 0, 1)}
+          {numberField("偏移阈值", "detectors.thresholds.shifted_ratio", "位置偏移超过该比例判为「位置偏移」", 0.01, 0, 1)}
+          {numberField("严重偏移阈值", "detectors.thresholds.severely_shifted_ratio", "超过该比例判为严重偏移（严重度更高）", 0.01, 0, 1)}
+          {numberField("字号缩小阈值", "detectors.thresholds.font_shrink_ratio", "负数：如 -0.15 表示字号缩小超过 15% 判为问题", 0.01, -1, 0)}
+          {numberField("重叠比例阈值", "detectors.thresholds.overlap_ratio", "文字互相压盖超过该比例判为「文字重叠」", 0.01, 0, 1)}
         </Row>
       </Card>
 
       <Card size="small" title="评分线" style={{ marginBottom: 12 }}>
         <Row gutter={12}>
-          {numberField("PASS 分数线", "scoring.pass_score", 1, 0, 100)}
-          {numberField("FAIL 分数线", "scoring.fail_score", 1, 0, 100)}
+          {numberField("通过分数线", "scoring.pass_score", "文档得分不低于此值且无高严重度问题才算「通过」", 1, 0, 100)}
+          {numberField("未通过分数线", "scoring.fail_score", "低于此值判为「未通过」；两者之间为「需复核」", 1, 0, 100)}
         </Row>
       </Card>
 

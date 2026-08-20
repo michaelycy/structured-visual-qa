@@ -15,10 +15,10 @@ interface ProfileListItem {
   reference: string
 }
 
-const STATUS_COLOR: Record<string, string> = {
-  published: "green",
-  draft: "orange",
-  archived: "default",
+const STATUS_COLOR: Record<string, { color: string; label: string }> = {
+  published: { color: "green", label: "已发布" },
+  draft: { color: "orange", label: "草稿" },
+  archived: { color: "default", label: "已归档" },
 }
 
 /** 新建/编辑共用的加载器封装。 */
@@ -96,9 +96,12 @@ export function ProfileManager() {
       title: "状态",
       dataIndex: "status",
       width: 100,
-      render: (value: string) => (
-        <Tag color={STATUS_COLOR[value] ?? "default"}>{value}</Tag>
-      ),
+      render: (value: string) => {
+        const meta = STATUS_COLOR[value]
+        return (
+          <Tag color={meta?.color ?? "default"}>{meta?.label ?? value}</Tag>
+        )
+      },
     },
     {
       title: "引用",

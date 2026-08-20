@@ -93,11 +93,13 @@ class CompareService:
         render: bool = True,
         render_scope: RenderScope = "issues",
         glossary: Glossary | None = None,
-        history_callback: Callable[[dict, Path, Path, str, str], str] | None = None,
+        history_callback: (
+            Callable[[dict, Path, Path, str, str, dict[str, list[str]]], str] | None
+        ) = None,
     ) -> None:
         """在当前线程执行已登记的任务（供 BackgroundTasks 调用）。
 
-        history_callback(report_dict, source, target, s_display, t_display)
+        history_callback(report_dict, source, target, s_display, t_display, rendered)
         返回对比记录 ID，在比较成功后调用。
         """
 
@@ -126,6 +128,7 @@ class CompareService:
                 target,
                 state.source_display or source.name,
                 state.target_display or target.name,
+                rendered,
             )
         self._update(
             task_id,

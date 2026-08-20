@@ -184,11 +184,39 @@ cp profiles/translation-balanced.v1.json \
 | `version` | integer | `>= 1` | 当前 Profile 业务版本 |
 | `status` | enum | 见下表 | 生命周期状态 |
 | `description` | string | 无特殊限制 | 使用场景和变更说明 |
+| `language` | string | `auto` 或脚本对标识 | 翻译场景标识，见下方"语言场景"说明 |
+| `language_overrides` | object | 可选 | 按语言场景覆盖 `detectors` 配置，见下方说明 |
 | `matching` | object | 必填 | Region 匹配配置 |
 | `alignment` | object | 必填 | 跨页对齐配置 |
 | `grouping` | object | 必填 | Block→Region 分组配置 |
 | `detectors` | object | 必填 | 检测器开关与阈值 |
 | `scoring` | object | 必填 | 评分和状态规则 |
+
+### 4.1 语言场景（`language` 与 `language_overrides`）
+
+不同目标语言的排版与数字书写习惯不同（如阿拉伯语使用阿拉伯-印度数字 ٠-٩、
+从右向左书写），引擎内置的脚本自适应会自动归一这些差异；当某语言场景确实
+需要不同阈值或检测开关时，通过 `language_overrides` 覆盖，无需另建完整 Profile：
+
+- `language` 默认为 `auto`：由引擎按文档内容推断"源脚本-目标脚本"标识
+  （如英文→中文为 `latin-cjk`，英文→阿拉伯语为 `latin-arabic`）；
+  也可显式声明固定值；
+- `language_overrides` 的键为场景标识，值为一份完整的 `detectors` 配置；
+  未命中的场景沿用全局 `detectors`；
+- 支持的脚本名：`latin`、`cjk`、`arabic`、`hebrew`、`cyrillic`、`greek`、
+  `devanagari`、`bengali`、`thai`、`hangul`、`kana`。
+
+```json
+{
+  "language": "auto",
+  "language_overrides": {
+    "latin-arabic": {
+      "enabled": { "number_mismatch": false },
+      "thresholds": { "untranslated_ratio": 0.8 }
+    }
+  }
+}
+```
 
 `status` 允许：
 
@@ -296,6 +324,10 @@ position + size + type + order = 1.0
 | `overlap` | 新增文字重叠、文字图片重叠 |
 | `number_mismatch` | 页面数字集合不一致（数字错漏译） |
 | `untranslated_text` | 目标文本区仍保留源语言文字（漏译） |
+| `region_resized` | 匹配 Region 宽/高剧变（段落被合并或拆散） |
+| `text_fragmented` | 目标文字被竖排/拆散成字母碎片（窄列排版破坏） |
+| `font_grow` | 目标字号明显放大（换行爆炸前兆） |
+| `invisible_text` | 目标文字颜色与页面背景同色（视觉不可见） |
 
 关闭检测器意味着对应 Issue 不再产生，也不参与扣分和状态判定。建议只在明确不适用时关闭，不要通过关闭检测器掩盖阈值问题。
 
@@ -358,6 +390,40 @@ shift = max(abs(x_shift_ratio), abs(y_shift_ratio))
 `overlap_increase_ratio` 比较 Target 与 Source 的重叠关系。只有 Target 重叠相对 Source 明显增加时才报告，避免把封面背景图叠字等原设计判为异常。
 
 两者取值范围均为 `0～1`。
+
+### 7.6 严重度分档（bands）
+
+数字不一致、字号缩小与漏译三类检测支持按幅度分档严重度：轻微幅度 `MEDIUM`、
+严重幅度 `HIGH`，替代以往所有命中一律 HIGH 的扁平判定。
+
+```json
+"number_mismatch_bands": [
+  { "gte": 5, "severity": "high" },
+  { "gte": 1, "severity": "medium" }
+],
+"font_shrink_bands": [
+  { "gte": 0.4, "severity": "high" },
+  { "gte": 0.2, "severity": "medium" }
+],
+"untranslated_bands": [
+  { "gte": 0.9, "severity": "high" },
+  { "gte": 0.7, "severity": "medium" }
+]
+```
+
+各分档的指标定义：
+
+| 字段 | 指标 | 缺省分档 |
+| --- | --- | --- |
+| `number_mismatch_bands` | 页面差异数字总数（缺失 + 多余） | ≥5 → HIGH；1～4 → MEDIUM |
+| `font_shrink_bands` | 字号缩小幅度（正数，0.4 = 40%） | ≥0.4 → HIGH；0.2～0.4 → MEDIUM |
+| `untranslated_bands` | 目标区域中源脚本字母占比 | ≥0.9 → HIGH；阈值～0.9 → MEDIUM |
+
+规则：
+
+- `gte` 为命中下界（指标 ≥ gte 命中该档），多档命中时取 `gte` 最大的一档；
+- 基础阈值（如 `font_shrink_ratio`）仍先行把关是否算问题，分档只决定严重度；
+- 分档列表为空时退回该检测器缺省严重度（HIGH），等价于旧行为。
 
 ### 7.4 图片 Caption 面积
 

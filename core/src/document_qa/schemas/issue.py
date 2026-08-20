@@ -22,6 +22,8 @@ class IssueType(StrEnum):
     """规则检测器和视觉复核器共用的问题类型。"""
 
     REGION_SHIFTED = "region_shifted"
+    REGION_RESIZED = "region_resized"
+    TEXT_FRAGMENTED = "text_fragmented"
     TEXT_OVERFLOW = "text_overflow"
     TEXT_CLIPPED = "text_clipped"
     ABNORMAL_WRAP = "abnormal_wrap"
@@ -39,6 +41,7 @@ class IssueType(StrEnum):
     NUMBER_MISMATCH = "number_mismatch"
     UNTRANSLATED_TEXT = "untranslated_text"
     GLOSSARY_VIOLATION = "glossary_violation"
+    INVISIBLE_TEXT = "invisible_text"
     OTHER = "other"
 
 

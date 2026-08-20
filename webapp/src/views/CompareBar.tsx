@@ -1,7 +1,7 @@
 /** 比较任务栏：源/目标文档选择 + 规则配置/术语库 + 提交按钮。 */
 
 import { useState } from "react"
-import { Button, Collapse, Select, Space, Upload, message } from "antd"
+import { Button, Collapse, Input, Select, Space, Upload, message } from "antd"
 import { InboxOutlined, SettingOutlined } from "@ant-design/icons"
 type UploadRequestOption = Parameters<NonNullable<import("antd/es/upload").UploadProps["customRequest"]>>[0]
 import { api } from "../api"
@@ -18,8 +18,12 @@ export interface CompareBarProps {
   busy: boolean
   glossaryReference: string | null
   profileFilename: string | null
+  sourcePassword: string
+  targetPassword: string
   onGlossary: (reference: string | null) => void
   onProfile: (filename: string | null) => void
+  onSourcePassword: (value: string) => void
+  onTargetPassword: (value: string) => void
   onSource: (doc: DocumentRef) => void
   onTarget: (doc: DocumentRef) => void
   onSubmit: () => void
@@ -49,6 +53,30 @@ const PICKER_LABEL_STYLE: React.CSSProperties = {
 
 /** 与服务端 FileService 的上限保持一致（100 MiB）。 */
 const MAX_UPLOAD_MB = 100
+
+/** 密码输入：仅在文档受打开密码保护时填写，不持久化。 */
+function PasswordField({
+  label,
+  value,
+  onChange,
+}: {
+  label: string
+  value: string
+  onChange: (value: string) => void
+}) {
+  return (
+    <Space direction="vertical" size={4}>
+      <span style={PICKER_LABEL_STYLE}>{label}</span>
+      <Input.Password
+        placeholder="无加密文档留空"
+        style={{ minWidth: 160 }}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        autoComplete="new-password"
+      />
+    </Space>
+  )
+}
 
 /** 单个文档选择：上传按钮 + 服务器样例下拉。 */
 function DocumentPicker({
@@ -138,8 +166,12 @@ export function CompareBar({
   busy,
   glossaryReference,
   profileFilename,
+  sourcePassword,
+  targetPassword,
   onGlossary,
   onProfile,
+  onSourcePassword,
+  onTargetPassword,
   onSource,
   onTarget,
   onSubmit,
@@ -217,6 +249,17 @@ export function CompareBar({
                     }))}
                   />
                 </Space>
+                {/* 打开密码只在受保护文档时填写；权限密码文档无需密码。 */}
+                <PasswordField
+                  label="源文档打开密码"
+                  value={sourcePassword}
+                  onChange={onSourcePassword}
+                />
+                <PasswordField
+                  label="目标文档打开密码"
+                  value={targetPassword}
+                  onChange={onTargetPassword}
+                />
               </Space>
             ),
           },

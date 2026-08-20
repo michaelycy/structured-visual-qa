@@ -89,6 +89,64 @@ class DetectorToggles(SchemaModel):
     overlap: bool = True
     number_mismatch: bool = True
     untranslated_text: bool = True
+    # 匹配 Region 的宽/高剧变（翻译后段落被合并或拆散）。
+    region_resized: bool = True
+    # 目标文字被竖排/拆散成单字母碎片（窄列翻译溢出的典型破坏）。
+    text_fragmented: bool = True
+    # 目标字号明显放大（换行爆炸的前兆；缩小由 font_shrink 负责）。
+    font_grow: bool = True
+    # 目标文字颜色与页面背景同色（视觉不可见，如白字白底）。
+    invisible_text: bool = True
+
+
+class SeverityBand(SchemaModel):
+    """严重度分档：指标值达到 gte 时命中该档。
+
+    分档是"幅度 → 严重度"的映射：轻微幅度 MEDIUM、严重幅度 HIGH，
+    替代以往所有命中一律 HIGH 的扁平判定；阈值判断的数值本身仍由
+    各检测器的基础阈值（如 untranslated_ratio）先行把关。
+    """
+
+    gte: float = Field(ge=0, description="指标值达到该值（≥）时命中本档")
+    severity: Severity
+
+
+# 各检测器的缺省分档：轻微幅度 MEDIUM、严重幅度 HIGH。
+# 数值经过真实中英文 PDF 校准（见 docs/manuals/custom-rule-profile.md §7.6）。
+def _default_number_bands() -> list[SeverityBand]:
+    """数字不一致：差异数 ≥5 为 HIGH，1～4 为 MEDIUM。"""
+
+    return [
+        SeverityBand(gte=5, severity=Severity.HIGH),
+        SeverityBand(gte=1, severity=Severity.MEDIUM),
+    ]
+
+
+def _default_font_shrink_bands() -> list[SeverityBand]:
+    """字号缩小：缩小 ≥40% 为 HIGH，20%～40% 为 MEDIUM（幅度取正数）。"""
+
+    return [
+        SeverityBand(gte=0.4, severity=Severity.HIGH),
+        SeverityBand(gte=0.2, severity=Severity.MEDIUM),
+    ]
+
+
+def _default_untranslated_bands() -> list[SeverityBand]:
+    """漏译：源语言占比 ≥0.9 为 HIGH，阈值～0.9 为 MEDIUM。"""
+
+    return [
+        SeverityBand(gte=0.9, severity=Severity.HIGH),
+        SeverityBand(gte=0.7, severity=Severity.MEDIUM),
+    ]
+
+
+def _default_resize_bands() -> list[SeverityBand]:
+    """尺寸剧变：宽/高变化 ≥80% 为 HIGH，50%～80% 为 MEDIUM。"""
+
+    return [
+        SeverityBand(gte=0.8, severity=Severity.HIGH),
+        SeverityBand(gte=0.5, severity=Severity.MEDIUM),
+    ]
 
 
 class DetectorThresholds(SchemaModel):
@@ -107,6 +165,50 @@ class DetectorThresholds(SchemaModel):
     # LibreOffice 归一化带来的版面转换噪声容差；偏移类检测阈值自动
     # 叠加该值，纯 PDF 流水线（未归一化）不受影响。
     conversion_noise_ratio: float = Field(default=0.03, ge=0, le=0.2)
+    # 严重度分档（幅度 → 严重度）：空列表退回检测器缺省严重度（HIGH）。
+    # 指标定义：数字不一致 = 页面差异数字总数；字号缩小 = 缩小幅度（正数）；
+    # 漏译 = 目标区域中源脚本字母占比。
+    number_mismatch_bands: list[SeverityBand] = Field(
+        default_factory=_default_number_bands
+    )
+    font_shrink_bands: list[SeverityBand] = Field(
+        default_factory=_default_font_shrink_bands
+    )
+    untranslated_bands: list[SeverityBand] = Field(
+        default_factory=_default_untranslated_bands
+    )
+    region_resize_bands: list[SeverityBand] = Field(
+        default_factory=_default_resize_bands
+    )
+    # 尺寸剧变判定的最小幅度（宽/高变化比例的绝对值）；低于该值不判。
+    # 归一化转换的常规抖动在 10%～20%，0.5 起步只捕获真实的合并/拆散。
+    region_resize_ratio: float = Field(default=0.5, ge=0, le=1)
+    # 字号放大判定阈值：放大超过该比例报 TYPOGRAPHY_CHANGED（MEDIUM）。
+    font_grow_ratio: float = Field(default=0.25, ge=0, le=2)
+    # 文字碎片化判定：Region 宽度（pt）与字母数同时低于上限视为
+    # 竖排/拆散碎片（P\nK、SA+E 一类窄列溢出破坏）。
+    fragment_max_width: float = Field(default=18.0, gt=0)
+    fragment_max_letters: int = Field(default=3, ge=1, le=10)
+    # 隐形文字判定：文字颜色与背景色的 RGB 最低通道都达到该值（接近
+    # 白色）即视为同色不可见。235/255 ≈ 92% 白，可捕获 #FFFFFF 等
+    # 纯白/近白字，同时放过浅灰绿正文（#A7C4B3 最低通道 167）。
+    invisible_color_threshold: int = Field(default=235, ge=200, le=255)
+
+    def band_severity(
+        self, bands: list[SeverityBand], value: float, default: Severity
+    ) -> Severity:
+        """按分档解析严重度：取 gte 不超过指标值的最高档。
+
+        多档命中时取 gte 最大者（幅度越严重档位越高）；全部未命中或
+        分档为空时返回 default，保证旧配置（无分档）行为不变。
+        """
+
+        hit = max(
+            (band for band in bands if value >= band.gte),
+            key=lambda band: band.gte,
+            default=None,
+        )
+        return hit.severity if hit else default
 
     @model_validator(mode="after")
     def validate_threshold_order(self) -> "DetectorThresholds":
@@ -146,6 +248,8 @@ class ScoringSettings(SchemaModel):
     issue_type_deduction_caps: dict[IssueType, float] = Field(
         default_factory=lambda: {
             IssueType.REGION_SHIFTED: 12.0,
+            IssueType.REGION_RESIZED: 10.0,
+            IssueType.TEXT_FRAGMENTED: 10.0,
             IssueType.TEXT_OVERFLOW: 25.0,
             IssueType.TEXT_CLIPPED: 25.0,
             IssueType.ABNORMAL_WRAP: 10.0,
@@ -163,6 +267,7 @@ class ScoringSettings(SchemaModel):
             IssueType.NUMBER_MISMATCH: 12.0,
             IssueType.UNTRANSLATED_TEXT: 12.0,
             IssueType.GLOSSARY_VIOLATION: 12.0,
+            IssueType.INVISIBLE_TEXT: 25.0,
             IssueType.OTHER: 10.0,
         }
     )
@@ -202,11 +307,25 @@ class RuleProfile(SchemaModel):
     version: int = Field(default=1, ge=1)
     status: ProfileStatus = ProfileStatus.DRAFT
     description: str = ""
+    # 翻译场景的脚本对标识（如 "latin-arabic" 表示拉丁源 → 阿拉伯语目标）。
+    # "auto" 表示由引擎按文档内容自动推断；不同脚本的排版与数字习惯不同，
+    # 可通过 language_overrides 按场景覆盖检测开关与阈值。
+    language: str = Field(default="auto", pattern=r"^(auto|[a-z]+(-[a-z]+)?)$")
+    language_overrides: dict[str, DetectorSettings] = Field(default_factory=dict)
     matching: MatchingSettings = Field(default_factory=MatchingSettings)
     alignment: PageAlignmentSettings = Field(default_factory=PageAlignmentSettings)
     grouping: GroupingSettings = Field(default_factory=GroupingSettings)
     detectors: DetectorSettings = Field(default_factory=DetectorSettings)
     scoring: ScoringSettings = Field(default_factory=ScoringSettings)
+
+    def detector_settings_for(self, language: str) -> DetectorSettings:
+        """返回指定语言场景下生效的检测配置。
+
+        命中 language_overrides 时返回覆盖配置，否则返回全局 detectors；
+        阈值判断始终只经由本方法取值，保证阈值来源集中在 RuleProfile。
+        """
+
+        return self.language_overrides.get(language, self.detectors)
 
     @property
     def reference(self) -> str:

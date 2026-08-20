@@ -135,6 +135,10 @@ function IssueDetails({
 }) {
   // 数字不一致的差集明细按"缺失/多余"分组展示，比原始 metrics 更直观。
   const metrics = issue.metrics ?? {}
+  // 原文/译文对照：先取局部变量再收窄类型，避免 Record<string, unknown>
+  // 索引访问的 typeof 收窄不生效。
+  const sourceText = typeof metrics.source_text === "string" ? metrics.source_text : null
+  const targetText = typeof metrics.target_text === "string" ? metrics.target_text : null
   const numberDetail = (
     ["missing_numbers", "extra_numbers"] as const
   ).filter((key) => Array.isArray(metrics[key]) && metrics[key].length)
@@ -155,9 +159,33 @@ function IssueDetails({
           ))}
         </Space>
       )}
-      {/* 其余 metrics（阈值、比例、样本文本）逐项罗列，便于复核追溯。 */}
+      {/* 原文 → 译文对照：文本类问题（漏译/碎片化/隐形）必须能看到
+          两侧内容，否则无法判断是翻译错还是渲染错。 */}
+      {(sourceText || targetText) && !numberDetail.length && (
+        <Space direction="vertical" size={2} style={{ fontSize: 12 }}>
+          {sourceText && (
+            <div>
+              <Typography.Text type="secondary">原文：</Typography.Text>
+              <Typography.Text>{sourceText}</Typography.Text>
+            </div>
+          )}
+          {targetText && (
+            <div>
+              <Typography.Text type="secondary">译文：</Typography.Text>
+              <Typography.Text type="danger">{targetText}</Typography.Text>
+            </div>
+          )}
+        </Space>
+      )}
+      {/* 其余 metrics（阈值、比例、样本文本）逐项罗列，便于复核追溯。
+          原文/译文已在上方对照展示，此处排除避免重复。 */}
       {Object.entries(metrics)
-        .filter(([key]) => !numberDetail.includes(key as never))
+        .filter(
+          ([key]) =>
+            !numberDetail.includes(key as never) &&
+            key !== "source_text" &&
+            key !== "target_text",
+        )
         .map(([key, value]) => (
           <Typography.Text key={key} type="secondary" style={{ fontSize: 12 }}>
             {key}：{Array.isArray(value) ? value.join("、") : String(value)}

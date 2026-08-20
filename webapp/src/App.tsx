@@ -47,6 +47,9 @@ export function App() {
   // 比较参数：术语库与规则配置（null = 内置默认）。
   const [glossaryReference, setGlossaryReference] = useState<string | null>(null)
   const [profileFilename, setProfileFilename] = useState<string | null>(null)
+  // 打开密码（仅受保护 PDF）：只在本次请求内使用，不落历史记录。
+  const [sourcePassword, setSourcePassword] = useState("")
+  const [targetPassword, setTargetPassword] = useState("")
   const [messageApi, contextHolder] = message.useMessage()
   // 用户主动取消等待的标记与轮询定时器引用：取消时停止轮询。
   const cancelRef = useRef(false)
@@ -92,6 +95,13 @@ export function App() {
       target: string
       sourceDisplay?: string
       targetDisplay?: string
+      /** 覆盖规则配置；undefined 沿用当前 state，null 强制用内置默认。 */
+      profile?: string | null
+      /** 覆盖术语库引用；undefined 沿用当前 state，null 强制不启用。 */
+      glossary?: string | null
+      /** 覆盖源/目标打开密码；undefined 沿用工作台输入，"" 视为无密码。 */
+      sourcePassword?: string
+      targetPassword?: string
     },
   ) => {
     // 引导按钮载入示例后立即试跑：路径与展示名以覆盖参数传入，
@@ -100,6 +110,11 @@ export function App() {
     const tgt = override?.target ?? target.path
     const srcDisplay = override?.sourceDisplay ?? source.display
     const tgtDisplay = override?.targetDisplay ?? target.display
+    const profile = override?.profile !== undefined ? override.profile : profileFilename
+    const glossary = override?.glossary !== undefined ? override.glossary : glossaryReference
+    // 密码覆盖语义：undefined 沿用工作台输入，"" 视为无密码。
+    const srcPassword = override?.sourcePassword !== undefined ? override.sourcePassword : sourcePassword
+    const tgtPassword = override?.targetPassword !== undefined ? override.targetPassword : targetPassword
     setBusy(true)
     setProgressText("已提交，等待任务启动")
     cancelRef.current = false
@@ -109,9 +124,11 @@ export function App() {
         tgt,
         srcDisplay,
         tgtDisplay,
-        glossaryReference,
+        glossary,
         true,
-        profileFilename,
+        profile,
+        srcPassword || null,
+        tgtPassword || null,
       )
       // 同步模式直接带报告返回；异步模式轮询任务状态。
       if (submitted.report) {
@@ -225,6 +242,35 @@ export function App() {
     messageApi.info(`已载入 ${record.source_display} 的历史报告`)
   }
 
+  /** 从对比记录重新执行比较：填回源/目标文档并立即运行。
+   *
+   * profile 为 null 时沿用工作台当前配置（用户可在弹窗选择不覆盖）；
+   * 选了具体配置则同步更新工作台的下拉状态，保持界面与实际执行一致。
+   * 密码不落历史：重比加密文档时由用户在弹窗重新输入，经覆盖参数传入。
+   */
+  const rerunHistory = (
+    record: HistoryRecord,
+    profile: string | null,
+    passwords: { source: string; target: string },
+  ) => {
+    if (!record.source_path || !record.target_path) {
+      messageApi.error("该记录缺少输入文档路径，无法重新比较")
+      return
+    }
+    setSource({ path: record.source_path, display: record.source_display })
+    setTarget({ path: record.target_path, display: record.target_display })
+    if (profile !== null) setProfileFilename(profile)
+    void runCompare({
+      source: record.source_path,
+      target: record.target_path,
+      sourceDisplay: record.source_display,
+      targetDisplay: record.target_display,
+      profile: profile !== null ? profile : undefined,
+      sourcePassword: passwords.source,
+      targetPassword: passwords.target,
+    })
+  }
+
   return (
     <Layout style={{ minHeight: "100dvh" }}>
       {contextHolder}
@@ -261,8 +307,12 @@ export function App() {
                   busy={busy}
                   glossaryReference={glossaryReference}
                   profileFilename={profileFilename}
+                  sourcePassword={sourcePassword}
+                  targetPassword={targetPassword}
                   onGlossary={setGlossaryReference}
                   onProfile={setProfileFilename}
+                  onSourcePassword={setSourcePassword}
+                  onTargetPassword={setTargetPassword}
                   onSource={setSource}
                   onTarget={setTarget}
                   onSubmit={() => void runCompare()}
@@ -317,7 +367,9 @@ export function App() {
                   {
                     key: "history",
                     label: "对比记录",
-                    children: <HistoryView onReopen={reopenHistory} />,
+                    children: (
+                      <HistoryView onReopen={reopenHistory} onRerun={rerunHistory} />
+                    ),
                   },
                 ]}
               />

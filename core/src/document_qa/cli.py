@@ -86,6 +86,18 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="PATH",
         help="比较完成后额外导出 HTML 验收报告",
     )
+    parser.add_argument(
+        "--source-password",
+        default=None,
+        metavar="PW",
+        help="源 PDF 的打开密码（仅 user password 文档需要；权限密码文档无需提供）",
+    )
+    parser.add_argument(
+        "--target-password",
+        default=None,
+        metavar="PW",
+        help="目标 PDF 的打开密码（仅 user password 文档需要）",
+    )
     return parser
 
 
@@ -131,6 +143,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.target,
             render_dir=args.render_dir,
             render_scope=args.render_scope,
+            source_password=args.source_password,
+            target_password=args.target_password,
         )
         output_path = JSONReporter().write(report, args.output)
         # 可选的验收交付物导出；失败按输入错误处理并保留 JSON 报告。

@@ -97,6 +97,9 @@ export interface HistoryRecord {
   normalized_from?: Record<string, string | null> | null
   rendered?: { source: string[]; target: string[] } | null
   report?: QAReport
+  /** 完整记录（historyItem）携带的服务器端路径，用于重新执行比较。 */
+  source_path?: string | null
+  target_path?: string | null
 }
 
 export interface CompareSubmitResponse {
@@ -142,6 +145,8 @@ export const api = {
     glossaryReference: string | null = null,
     render = true,
     profilePath: string | null = null,
+    sourcePassword: string | null = null,
+    targetPassword: string | null = null,
   ) =>
     request<CompareSubmitResponse>("/api/compare", {
       method: "POST",
@@ -154,6 +159,8 @@ export const api = {
         render,
         render_scope: "issues",
         profile_path: profilePath,
+        source_password: sourcePassword,
+        target_password: targetPassword,
       }),
     }),
   glossaryDefault: () => request<Glossary>("/api/glossary/default"),

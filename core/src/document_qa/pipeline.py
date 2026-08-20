@@ -67,11 +67,21 @@ class DocumentQAPipeline:
         *,
         render_dir: Path | None = None,
         render_scope: RenderScope = "all",
+        source_password: str | None = None,
+        target_password: str | None = None,
     ) -> QAReport:
-        """比较两个 PDF，并返回经过 Schema 校验的完整 QA 报告。"""
+        """比较两个 PDF，并返回经过 Schema 校验的完整 QA 报告。
 
-        source = self._group_document(self.parser.parse(source_path))
-        target = self._group_document(self.parser.parse(target_path))
+        source_password / target_password 用于带打开密码的 PDF，
+        只在内存中传递给解析与渲染，绝不写入报告或历史产物。
+        """
+
+        source = self._group_document(
+            self.parser.parse(source_path, password=source_password)
+        )
+        target = self._group_document(
+            self.parser.parse(target_path, password=target_password)
+        )
 
         source_pages = {page.page: page for page in source.pages}
         target_pages = {page.page: page for page in target.pages}
@@ -103,6 +113,8 @@ class DocumentQAPipeline:
                 target_path,
                 entries,
                 page_results,
+                source_password=source_password,
+                target_password=target_password,
             )
         return report
 
@@ -114,6 +126,9 @@ class DocumentQAPipeline:
         target_path: Path,
         entries: list[tuple[int, Page | None, Page | None]],
         page_results: list[PageQAResult],
+        *,
+        source_password: str | None = None,
+        target_password: str | None = None,
     ) -> None:
         """使用固定子目录隔离源/目标页面，按范围渲染。
 
@@ -124,15 +139,32 @@ class DocumentQAPipeline:
         source_render_pages: set[int] = set()
         target_render_pages: set[int] = set()
         for (_, source_page, target_page), result in zip(entries, page_results, strict=True):
-            include = render_scope == "all" or result.status != QAStatus.PASS
+            # "issues" 范围渲染两类页面：判定非 PASS 的，以及带 Issue 但
+            # 总分仍达标的（如归一化噪声只产生少量 MEDIUM 偏移、页面 96
+            # 分 PASS 的 PPT）——后者同样需要对比图供人工复核。
+            include = (
+                render_scope == "all"
+                or result.status != QAStatus.PASS
+                or bool(result.issues)
+            )
             if include and source_page is not None:
                 source_render_pages.add(source_page.page)
             if include and target_page is not None:
                 target_render_pages.add(target_page.page)
         if source_render_pages:
-            self.renderer.render(source_path, render_dir / "source", source_render_pages)
+            self.renderer.render(
+                source_path,
+                render_dir / "source",
+                source_render_pages,
+                password=source_password,
+            )
         if target_render_pages:
-            self.renderer.render(target_path, render_dir / "target", target_render_pages)
+            self.renderer.render(
+                target_path,
+                render_dir / "target",
+                target_render_pages,
+                password=target_password,
+            )
 
     def _group_document(self, document: Document) -> Document:
         """为文档中的每一页建立 Region，保留原始 Block 供追溯。"""

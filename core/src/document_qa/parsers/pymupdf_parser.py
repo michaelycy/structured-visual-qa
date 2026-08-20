@@ -34,8 +34,18 @@ class PyMuPDFParser:
         self.max_file_size = max_file_size
         self.max_pages = max_pages
 
-    def parse(self, path: Path, document_id: str | None = None) -> Document:
-        """解析 PDF，并确保对外结果不包含任何 PyMuPDF 运行时对象。"""
+    def parse(
+        self,
+        path: Path,
+        document_id: str | None = None,
+        password: str | None = None,
+    ) -> Document:
+        """解析 PDF，并确保对外结果不包含任何 PyMuPDF 运行时对象。
+
+        password 用于带打开密码（user password）的 PDF；仅权限密码
+        （owner password）的 PDF 由 MuPDF 用空用户密码自动解密，
+        无需传密码。密码只参与本次解密，不写入任何输出。
+        """
 
         safe_path = self._validate_path(path)
         resolved_document_id = document_id or self._hash_file(safe_path)
@@ -43,7 +53,14 @@ class PyMuPDFParser:
         try:
             with pymupdf.open(safe_path) as pdf:
                 if pdf.needs_pass:
-                    raise DocumentParsingError("不支持未解密的受密码保护 PDF")
+                    # 区分"未提供密码"与"密码错误"：前者引导补输入，
+                    # 后者明确是密码不对而不是文档损坏。
+                    if password is None:
+                        raise DocumentParsingError(
+                            "PDF 受打开密码保护，需要提供密码后才能比较"
+                        )
+                    if not pdf.authenticate(password):
+                        raise DocumentParsingError("PDF 打开密码错误")
                 if pdf.page_count > self.max_pages:
                     raise DocumentParsingError(
                         f"PDF 页数 {pdf.page_count} 超过限制 {self.max_pages}"
@@ -109,14 +126,87 @@ class PyMuPDFParser:
                 if image_block is not None:
                     blocks.append(image_block)
 
+        background_color, dark_boxes = self._page_background(pdf_page)
         return Page(
             document_id=document_id,
             page=page_number,
             width=float(pdf_page.rect.width),
             height=float(pdf_page.rect.height),
             blocks=blocks,
-            metadata={"rotation": int(pdf_page.rotation)},
+            metadata={
+                "rotation": int(pdf_page.rotation),
+                # 页面背景色（#RRGGBB 或 None）：供"隐形文字"检测判断
+                # 文字颜色是否与页面整体背景同色。
+                "background_color": background_color,
+                # 深色填充块与图片的 bbox 列表：白字落在其上时是正常
+                # 设计（黑底白字、图上白字），隐形检测需按区域排除。
+                "dark_boxes": dark_boxes,
+            },
         )
+
+    @staticmethod
+    def _page_background(
+        pdf_page: pymupdf.Page,
+    ) -> tuple[str | None, list[dict[str, float]]]:
+        """提取页面背景色与深色背景块。
+
+        返回 (背景色, 深色块列表)。背景色取覆盖面积最大的整页填充矩形
+        颜色；找不到大面积填充时为 None。深色块包括非浅色填充矩形与
+        全部图片：隐形文字检测用它们按区域判断白字是否真实不可见。
+        """
+
+        page_area = pdf_page.rect.width * pdf_page.rect.height
+        dark_boxes: list[dict[str, float]] = []
+        largest: tuple[float, tuple[float, float, float] | None] | None = None
+        try:
+            for drawing in pdf_page.get_drawings():
+                rect = drawing.get("rect")
+                fill = drawing.get("fill")
+                if rect is None or fill is None:
+                    continue
+                area = rect.width * rect.height
+                if area < page_area * 0.1:
+                    # 过小的装饰块不影响文字可见性判断。
+                    continue
+                is_dark = min(fill) < 0.92  # 任一路低于 92% 白视为深色
+                if is_dark:
+                    dark_boxes.append(
+                        {
+                            "x": rect.x0,
+                            "y": rect.y0,
+                            "width": rect.width,
+                            "height": rect.height,
+                        }
+                    )
+                if area >= page_area * 0.5 and not is_dark:
+                    # 浅色整页填充才是页面背景色；深色整页填充进 dark_boxes。
+                    if largest is None or area > largest[0]:
+                        largest = (area, fill)
+        except Exception:
+            # 个别异常 PDF 的 get_drawings 可能抛错；按无背景处理。
+            pass
+        # 图片视为非浅色背景块：白字在图片上正常可见（图片可能是
+        # 深色照片，也可能是浅色插画——统一跳过避免误判）。
+        try:
+            for info in pdf_page.get_image_info():
+                bbox = info.get("bbox")
+                if bbox is None:
+                    continue
+                dark_boxes.append(
+                    {
+                        "x": bbox[0],
+                        "y": bbox[1],
+                        "width": bbox[2] - bbox[0],
+                        "height": bbox[3] - bbox[1],
+                    }
+                )
+        except Exception:
+            pass
+        if largest is None:
+            return None, dark_boxes
+        red, green, blue = (max(0.0, min(1.0, channel)) for channel in largest[1])
+        color = f"#{int(round(red * 255)):02X}{int(round(green * 255)):02X}{int(round(blue * 255)):02X}"
+        return color, dark_boxes
 
     def _parse_text_block(
         self,

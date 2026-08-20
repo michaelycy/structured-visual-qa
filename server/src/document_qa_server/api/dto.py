@@ -10,7 +10,11 @@ from pydantic import BaseModel, Field
 
 
 class CompareRequest(BaseModel):
-    """一次比较任务的输入：本地路径 + 可选 Profile。"""
+    """一次比较任务的输入：本地路径 + 可选 Profile。
+
+    密码字段仅用于打开密码（user password）PDF，只在请求内传递，
+    不落历史记录与任何产物。
+    """
 
     source: str = Field(min_length=1)
     target: str = Field(min_length=1)
@@ -20,6 +24,8 @@ class CompareRequest(BaseModel):
     glossary_reference: str | None = None
     render: bool = True
     render_scope: Literal["all", "issues"] = "issues"
+    source_password: str | None = Field(default=None, max_length=256)
+    target_password: str | None = Field(default=None, max_length=256)
 
 
 class VerifyRequest(BaseModel):

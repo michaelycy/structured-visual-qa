@@ -93,6 +93,8 @@ class CompareService:
         render: bool = True,
         render_scope: RenderScope = "issues",
         glossary: Glossary | None = None,
+        source_password: str | None = None,
+        target_password: str | None = None,
         history_callback: (
             Callable[[dict, Path, Path, str, str, dict[str, list[str]]], str] | None
         ) = None,
@@ -100,7 +102,8 @@ class CompareService:
         """在当前线程执行已登记的任务（供 BackgroundTasks 调用）。
 
         history_callback(report_dict, source, target, s_display, t_display, rendered)
-        返回对比记录 ID，在比较成功后调用。
+        返回对比记录 ID，在比较成功后调用。密码只透传给流水线，
+        不写入任务状态（TaskState）与历史记录。
         """
 
         self._update(task_id, status="running")
@@ -112,6 +115,8 @@ class CompareService:
                 render=render,
                 render_scope=render_scope,
                 glossary=glossary,
+                source_password=source_password,
+                target_password=target_password,
             )
         except Exception as exc:
             # 兜底捕获一切异常（对抗审查 M-1：只捕解析/归一化两类时，
@@ -153,11 +158,14 @@ class CompareService:
         render: bool = True,
         render_scope: RenderScope = "issues",
         glossary: Glossary | None = None,
+        source_password: str | None = None,
+        target_password: str | None = None,
     ) -> tuple[QAReport, dict[str, list[str]]]:
         """同步执行比较并返回报告与渲染页文件名索引。
 
         非 PDF 输入先经 LibreOffice 归一化；报告 metadata 记录
         normalized_from。可能抛出 DocumentParsingError / NormalizationError。
+        密码仅用于打开密码 PDF 的解析与渲染，不落入任何产物。
         """
 
         source_pdf, source_origin = self._ensure_pdf(source)
@@ -199,6 +207,8 @@ class CompareService:
                 target_pdf,
                 render_dir=render_dir,
                 render_scope=render_scope,
+                source_password=source_password,
+                target_password=target_password,
             )
             rendered = (
                 self._index_rendered(render_dir) if render else {"source": [], "target": []}

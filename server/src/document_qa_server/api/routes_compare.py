@@ -107,6 +107,8 @@ def compare(request: CompareRequest, http: Request, background: BackgroundTasks)
                 glossary=glossary,
                 render=request.render,
                 render_scope=request.render_scope,
+                source_password=request.source_password,
+                target_password=request.target_password,
             )
         except DocumentParsingError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -143,6 +145,8 @@ def compare(request: CompareRequest, http: Request, background: BackgroundTasks)
         glossary=glossary,
         render=request.render,
         render_scope=request.render_scope,
+        source_password=request.source_password,
+        target_password=request.target_password,
         history_callback=_history_writer(http),
     )
     return {"task_id": task_id, "status": "queued"}

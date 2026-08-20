@@ -62,6 +62,8 @@ export const SEVERITY_ORDER: Record<string, number> = {
  */
 export const ISSUE_TYPE_META: Record<string, string> = {
   region_shifted: "位置偏移",
+  region_resized: "尺寸剧变",
+  text_fragmented: "文字碎片化",
   text_overflow: "文本溢出",
   text_clipped: "文本被裁切",
   abnormal_wrap: "换行异常",
@@ -78,4 +80,5 @@ export const ISSUE_TYPE_META: Record<string, string> = {
   page_missing: "页面缺失",
   number_mismatch: "数字不一致",
   untranslated_text: "疑似漏译",
+  invisible_text: "隐形文字",
 }

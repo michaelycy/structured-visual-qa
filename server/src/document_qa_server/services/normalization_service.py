@@ -174,15 +174,17 @@ class NormalizationService:
             raise NormalizationError(
                 f"转换引擎启动失败: {source.name}: {exc}"
             ) from exc
-        # 产物名 = 源完整主名 + .pdf（对抗审查 M-4：双重 stem 会把
-        # report.v2.docx 算成 report.pdf 而 soffice 实际产 report.v2.pdf）。
-        produced = staging / f"{source.name}.pdf"
+        # LibreOffice 的产物名规则是"主名 + .pdf"（替换原扩展名），不是
+        # 追加 .pdf；硬拼文件名还会踩非 ASCII 主名的 Unicode 归一差异
+        # （macOS 上中文文件名实测 soffice 输出 NFC/NFD 不定）。
+        # staging 目录为本调用独有且初始为空，直接取其中唯一的 PDF。
+        produced_pdfs = sorted(staging.glob("*.pdf"))
         try:
-            if not produced.is_file():
+            if not produced_pdfs:
                 raise NormalizationError(
                     f"转换未产出 PDF: {source.name}（可能是加密或损坏文件）"
                 )
-            shutil.move(str(produced), output_pdf)
+            shutil.move(str(produced_pdfs[0]), output_pdf)
         finally:
             shutil.rmtree(staging, ignore_errors=True)
         return output_pdf, source.suffix.lower()

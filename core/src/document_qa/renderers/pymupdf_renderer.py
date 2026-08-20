@@ -19,9 +19,17 @@ class PyMuPDFRenderer:
         self.max_pages = max_pages
 
     def render(
-        self, pdf_path: Path, output_dir: Path, pages: set[int] | None = None
+        self,
+        pdf_path: Path,
+        output_dir: Path,
+        pages: set[int] | None = None,
+        password: str | None = None,
     ) -> list[Path]:
-        """渲染页面；pages 为 None 时渲染全部，否则只渲染指定页码集合。"""
+        """渲染页面；pages 为 None 时渲染全部，否则只渲染指定页码集合。
+
+        password 与解析侧一致：仅打开密码（user password）文档需要，
+        权限密码文档 MuPDF 自动解密。渲染红框对比图需要同样的解密能力。
+        """
 
         source_path = pdf_path.expanduser().resolve()
         if not source_path.is_file() or source_path.suffix.lower() != ".pdf":
@@ -33,6 +41,13 @@ class PyMuPDFRenderer:
 
         try:
             with pymupdf.open(source_path) as pdf:
+                if pdf.needs_pass:
+                    if password is None:
+                        raise DocumentParsingError(
+                            "PDF 受打开密码保护，渲染页面需要提供密码"
+                        )
+                    if not pdf.authenticate(password):
+                        raise DocumentParsingError("PDF 打开密码错误")
                 if pdf.page_count > self.max_pages:
                     raise DocumentParsingError(
                         f"PDF 页数 {pdf.page_count} 超过限制 {self.max_pages}"

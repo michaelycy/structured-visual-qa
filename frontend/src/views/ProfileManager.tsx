@@ -3,8 +3,10 @@
 import { useCallback, useEffect, useState } from "react"
 import { Button, Card, message, Popconfirm, Space, Table, Tag } from "antd"
 import type { ColumnsType } from "antd/es/table"
-import { api, type RuleProfile } from "../api"
+import type { RuleProfile } from "../api"
+import { api } from "../services/queryClient"
 import { ProfileEditor } from "./ProfileEditor"
+import { PALETTE } from "../uiTokens"
 
 interface ProfileListItem {
   filename: string
@@ -15,10 +17,10 @@ interface ProfileListItem {
   reference: string
 }
 
-const STATUS_COLOR: Record<string, { color: string; label: string }> = {
-  published: { color: "green", label: "已发布" },
-  draft: { color: "orange", label: "草稿" },
-  archived: { color: "default", label: "已归档" },
+const STATUS_COLOR: Record<string, { color: string; background: string; label: string }> = {
+  published: { color: PALETTE.success, background: PALETTE.successSoft, label: "已发布" },
+  draft: { color: PALETTE.warning, background: PALETTE.warningSoft, label: "草稿" },
+  archived: { color: PALETTE.textSecondary, background: PALETTE.canvas, label: "已归档" },
 }
 
 /** 新建/编辑共用的加载器封装。 */
@@ -99,7 +101,15 @@ export function ProfileManager() {
       render: (value: string) => {
         const meta = STATUS_COLOR[value]
         return (
-          <Tag color={meta?.color ?? "default"}>{meta?.label ?? value}</Tag>
+          <Tag
+            style={{
+              color: meta?.color ?? PALETTE.textSecondary,
+              background: meta?.background ?? PALETTE.canvas,
+              borderColor: meta?.background ?? PALETTE.border,
+            }}
+          >
+            {meta?.label ?? value}
+          </Tag>
         )
       },
     },

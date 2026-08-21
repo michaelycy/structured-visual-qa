@@ -6,8 +6,9 @@
  */
 
 import { useCallback, useEffect, useState } from "react"
-import { message, Tabs } from "antd"
-import { api, type QAReport, type ReviewDecision } from "../api"
+import { message } from "antd"
+import type { QAReport, ReviewDecision } from "../api"
+import { api } from "../services/queryClient"
 import { ReportOverview } from "./ReportOverview"
 import { PageDetails } from "./PageDetails"
 
@@ -57,30 +58,20 @@ export function ReportDetail({
   return (
     <>
       {contextHolder}
-      <Tabs
-        items={[
-          {
-            key: "overview",
-            label: "报告总览",
-            children: (
-              <ReportOverview report={report} historyRecordId={historyRecordId} />
-            ),
-          },
-          {
-            key: "pages",
-            label: "逐页详情",
-            children: (
-              <PageDetails
-                report={report}
-                rendered={rendered}
-                taskId={taskId}
-                decisions={decisions}
-                onDecide={decide}
-              />
-            ),
-          },
-        ]}
-      />
+      <div className="report-dashboard">
+        <ReportOverview
+          report={report}
+          historyRecordId={historyRecordId}
+          reviewedCount={Object.keys(decisions).length}
+        />
+        <PageDetails
+          report={report}
+          rendered={rendered}
+          taskId={taskId}
+          decisions={decisions}
+          onDecide={decide}
+        />
+      </div>
     </>
   )
 }

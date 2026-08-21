@@ -7,43 +7,103 @@
 
 import type { ReviewDecision } from "./api"
 
+/** 产品色板：基础界面色与业务语义色的唯一来源。 */
+export const PALETTE = {
+  canvas: "#F9F9FB",
+  sidebar: "#14181E",
+  critical: "#FF5252",
+  criticalSoft: "#FFEAEA",
+  warning: "#FFA94D",
+  warningSoft: "#FFF1E1",
+  success: "#00A878",
+  successSoft: "#E5F7F0",
+  info: "#1F6FEB",
+  infoSoft: "#E5EEFE",
+  text: "#18191C",
+  textMuted: "#8A94A3",
+  textSecondary: "#5F6B7A",
+  criticalText: "#B42318",
+  warningText: "#8A4500",
+  successText: "#006B4D",
+  infoText: "#174EA6",
+  border: "#E8EBEF",
+  surface: "#FFFFFF",
+} as const
+
+interface SemanticMeta {
+  label: string
+  color: string
+  background: string
+  accent?: string
+}
+
 /** 文档/页面状态 → 中文文案与配色（阈值语义见 core profiles）。 */
 export const STATUS_META: Record<
   string,
-  { label: string; color: string; badge: "success" | "warning" | "error" }
+  SemanticMeta & { badge: "success" | "warning" | "error" }
 > = {
-  pass: { label: "通过", color: "#389e0d", badge: "success" },
-  review: { label: "需复核", color: "#d46b08", badge: "warning" },
-  fail: { label: "未通过", color: "#cf1322", badge: "error" },
+  pass: {
+    label: "通过",
+    color: PALETTE.successText,
+    background: PALETTE.successSoft,
+    accent: PALETTE.success,
+    badge: "success",
+  },
+  review: {
+    label: "需复核",
+    color: PALETTE.warningText,
+    background: PALETTE.warningSoft,
+    accent: PALETTE.warning,
+    badge: "warning",
+  },
+  fail: {
+    label: "未通过",
+    color: PALETTE.criticalText,
+    background: PALETTE.criticalSoft,
+    accent: PALETTE.critical,
+    badge: "error",
+  },
 }
 
 /** 严重度 → 中文文案与 Tag 颜色。 */
 export const SEVERITY_META: Record<
   string,
-  { label: string; color: string }
+  SemanticMeta
 > = {
-  critical: { label: "严重", color: "red" },
-  high: { label: "高", color: "volcano" },
-  medium: { label: "中", color: "orange" },
-  low: { label: "低", color: "green" },
-  info: { label: "提示", color: "default" },
+  critical: { label: "严重", color: PALETTE.criticalText, background: PALETTE.criticalSoft },
+  high: { label: "高", color: PALETTE.criticalText, background: PALETTE.criticalSoft },
+  medium: { label: "中", color: PALETTE.warningText, background: PALETTE.warningSoft },
+  low: { label: "低", color: PALETTE.successText, background: PALETTE.successSoft },
+  info: { label: "提示", color: PALETTE.infoText, background: PALETTE.infoSoft },
 }
 
 /** 人工复核判定 → 中文文案与 Tag 颜色。 */
 export const DECISION_META: Record<
   ReviewDecision,
-  { label: string; color: string }
+  SemanticMeta
 > = {
-  confirmed: { label: "确认问题", color: "red" },
-  false_positive: { label: "误报", color: "green" },
-  ignored: { label: "忽略", color: "default" },
+  confirmed: {
+    label: "确认问题",
+    color: PALETTE.criticalText,
+    background: PALETTE.criticalSoft,
+  },
+  false_positive: {
+    label: "误报",
+    color: PALETTE.successText,
+    background: PALETTE.successSoft,
+  },
+  ignored: {
+    label: "忽略",
+    color: PALETTE.textSecondary,
+    background: PALETTE.canvas,
+  },
 }
 
 /** 分数配色：与状态阈值一致（≥90 绿 / 75–90 橙 / <75 红）。 */
 export function scoreColor(score: number): string {
-  if (score >= 90) return "#389e0d"
-  if (score >= 75) return "#d46b08"
-  return "#cf1322"
+  if (score >= 90) return PALETTE.successText
+  if (score >= 75) return PALETTE.warningText
+  return PALETTE.criticalText
 }
 
 /** 严重度排序权重：筛选下拉按严重 → 轻微排列。 */

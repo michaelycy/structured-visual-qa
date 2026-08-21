@@ -1,34 +1,250 @@
-/* 全局视觉底座：字体栈与页面底色统一，避免各视图内联样式分叉。 */
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme.css" layer(theme) prefix(tw);
+@import "tailwindcss/utilities.css" layer(utilities) prefix(tw);
+
+/* Tailwind 只暴露 UI 契约 Token；省略 Preflight，避免重置 Ant Design。 */
+@theme inline {
+  --color-*: initial;
+  --color-qa-canvas: var(--qa-canvas);
+  --color-qa-sidebar: var(--qa-sidebar);
+  --color-qa-critical: var(--qa-critical);
+  --color-qa-critical-soft: var(--qa-critical-soft);
+  --color-qa-warning: var(--qa-warning);
+  --color-qa-warning-soft: var(--qa-warning-soft);
+  --color-qa-success: var(--qa-success);
+  --color-qa-success-soft: var(--qa-success-soft);
+  --color-qa-info: var(--qa-info);
+  --color-qa-info-soft: var(--qa-info-soft);
+  --color-qa-text: var(--qa-text);
+  --color-qa-text-muted: var(--qa-text-muted);
+  --color-qa-text-secondary: var(--qa-text-secondary);
+  --color-qa-border: var(--qa-border);
+  --color-qa-surface: var(--qa-surface);
+
+  --spacing-*: initial;
+  --spacing-qa-0-5: var(--qa-space-0-5);
+  --spacing-qa-1: var(--qa-space-1);
+  --spacing-qa-2: var(--qa-space-2);
+  --spacing-qa-3: var(--qa-space-3);
+  --spacing-qa-4: var(--qa-space-4);
+  --spacing-qa-5: var(--qa-space-5);
+  --spacing-qa-6: var(--qa-space-6);
+  --spacing-qa-8: var(--qa-space-8);
+  --spacing-qa-10: var(--qa-space-10);
+
+  --radius-*: initial;
+  --radius-qa-xs: var(--qa-radius-xs);
+  --radius-qa-sm: var(--qa-radius-sm);
+  --radius-qa-md: var(--qa-radius-md);
+  --radius-qa-lg: var(--qa-radius-lg);
+  --radius-qa-full: var(--qa-radius-full);
+
+  --text-*: initial;
+  --text-qa-caption: 12px;
+  --text-qa-caption--line-height: 18px;
+  --text-qa-body: 14px;
+  --text-qa-body--line-height: 22px;
+  --text-qa-title: 16px;
+  --text-qa-title--line-height: 24px;
+
+  --font-*: initial;
+  --font-qa-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Microsoft YaHei", sans-serif;
+
+  --breakpoint-*: initial;
+  --breakpoint-md: 48rem;
+  --breakpoint-lg: 64rem;
+  --breakpoint-xl: 80rem;
+
+  --shadow-*: initial;
+  --shadow-qa-card: var(--qa-shadow-card);
+}
+
+/* 全局视觉底座：色板与字体栈统一，避免各视图内联样式分叉。 */
+
+:root {
+  --qa-canvas: #f9f9fb;
+  --qa-sidebar: #14181e;
+  --qa-critical: #ff5252;
+  --qa-critical-soft: #ffeaea;
+  --qa-warning: #ffa94d;
+  --qa-warning-soft: #fff1e1;
+  --qa-success: #00a878;
+  --qa-success-soft: #e5f7f0;
+  --qa-info: #1f6feb;
+  --qa-info-soft: #e5eefe;
+  --qa-text: #18191c;
+  --qa-text-muted: #8a94a3;
+  --qa-text-secondary: #5f6b7a;
+  --qa-critical-text: #b42318;
+  --qa-warning-text: #8a4500;
+  --qa-success-text: #006b4d;
+  --qa-info-text: #174ea6;
+  --qa-border: #e8ebef;
+  --qa-surface: #ffffff;
+
+  /* 统一布局节奏：页面不得另起一套随意间距和圆角。 */
+  --qa-space-0-5: 2px;
+  --qa-space-1: 4px;
+  --qa-space-2: 8px;
+  --qa-space-3: 12px;
+  --qa-space-4: 16px;
+  --qa-space-5: 20px;
+  --qa-space-6: 24px;
+  --qa-space-8: 32px;
+  --qa-space-10: 40px;
+  --qa-radius-xs: 4px;
+  --qa-radius-sm: 6px;
+  --qa-radius-md: 8px;
+  --qa-radius-lg: 12px;
+  --qa-radius-full: 999px;
+  --qa-shadow-card: 0 1px 2px rgb(20 24 30 / 4%);
+}
 
 body {
   margin: 0;
+  font-size: 14px;
+  line-height: 22px;
   /* 中文优先的系统字体栈：macOS 苹方 / Windows 微软雅黑，数字用表格场景友好的栈。 */
   font-family:
     -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
     "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
-  background: #f5f6f8;
-  color: rgba(0, 0, 0, 0.88);
+  background: var(--qa-canvas);
+  color: var(--qa-text);
+}
+
+.app-shell {
+  min-height: 100dvh;
+}
+
+.app-shell__sider {
+  position: sticky !important;
+  top: 0;
+  height: 100dvh;
+}
+
+.app-shell__brand {
+  display: flex;
+  height: 72px;
+  box-sizing: border-box;
+  justify-content: center;
+  flex-direction: column;
+  overflow: hidden;
+  padding-inline: var(--qa-space-4);
+  border-bottom: 1px solid rgb(255 255 255 / 10%);
+}
+
+.app-shell__brand h5.ant-typography {
+  margin: 0;
+  color: var(--qa-surface);
+  font-size: 18px;
+  line-height: 26px;
+  white-space: nowrap;
+}
+
+.app-shell__brand span.ant-typography {
+  color: var(--qa-text-muted);
+  font-size: 12px;
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+.app-shell__sider .ant-menu {
+  padding: var(--qa-space-2) var(--qa-space-4);
+}
+
+.app-shell__sider .ant-menu-item {
+  width: auto;
+  height: 40px;
+  margin: var(--qa-space-1) 0;
+  line-height: 40px;
+}
+
+.app-shell__sider.ant-layout-sider-collapsed .app-shell__brand {
+  align-items: center;
+  padding-inline: 0;
+}
+
+.app-shell__sider.ant-layout-sider-collapsed .ant-menu {
+  padding-inline: var(--qa-space-2);
+}
+
+.app-mobile-header {
+  position: sticky;
+  z-index: 20;
+  top: 0;
+  display: grid;
+  grid-template-columns: 44px auto 1fr;
+  align-items: center;
+  min-height: 56px;
+  gap: var(--qa-space-2);
+  padding: 0 var(--qa-space-3) 0 var(--qa-space-2);
+  border-bottom: 1px solid var(--qa-border);
+  background: var(--qa-surface);
+}
+
+.app-mobile-header .ant-btn {
+  width: 44px;
+  height: 44px;
+}
+
+.app-mobile-header strong {
+  color: var(--qa-text);
+  font-size: 16px;
+  line-height: 24px;
+}
+
+.app-mobile-header span {
+  overflow: hidden;
+  color: var(--qa-text-secondary);
+  font-size: 12px;
+  line-height: 18px;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-mobile-nav .ant-drawer-header {
+  min-height: 56px;
+  border-bottom-color: rgb(255 255 255 / 10%);
+  background: var(--qa-sidebar);
+}
+
+.app-mobile-nav .ant-drawer-title,
+.app-mobile-nav .ant-drawer-close {
+  color: var(--qa-surface);
+}
+
+.app-mobile-nav .ant-drawer-body {
+  padding: var(--qa-space-2);
+  background: var(--qa-sidebar);
+}
+
+.app-mobile-nav .ant-menu-item {
+  height: 40px;
+  margin-block: var(--qa-space-1);
+  line-height: 40px;
 }
 
 /* 等宽引用（profile_id / record_id 等）统一取色，弱化视觉噪音。 */
 code,
 pre,
 .ant-typography code {
-  color: rgba(0, 0, 0, 0.65);
+  color: var(--qa-text-secondary);
 }
 
 /* 报告里的原始 JSON 预览：统一浅底与内边距。 */
 pre {
-  background: #fafafa;
-  border: 1px solid #f0f0f0;
+  background: var(--qa-canvas);
+  border: 1px solid var(--qa-border);
   border-radius: 6px;
   padding: 8px 12px;
 }
 
 /* 页面内容区内边距随窗口收窄（平板可用性）。 */
 @media (max-width: 768px) {
-  .ant-layout-content {
+  .ant-layout-content:not(.app-content--history) {
     padding: 12px !important;
   }
 }

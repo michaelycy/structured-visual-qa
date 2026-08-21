@@ -1,10 +1,18 @@
-/** 报告总览：antd Statistic + 严重度 Tag 列表 + 交付物导出。 */
+/** 报告总览：报告上下文、四项核心指标与交付物导出。 */
 
 import { useState } from "react"
-import { Button, Card, Col, message, Row, Space, Statistic, Tag } from "antd"
-import { FileExcelOutlined, FileTextOutlined } from "@ant-design/icons"
-import { api, type QAReport } from "../api"
-import { SEVERITY_META, SEVERITY_ORDER, STATUS_META, scoreColor } from "../uiTokens"
+import { Button, Card, Col, message, Progress, Row, Space, Tag, Typography } from "antd"
+import {
+  CheckCircleFilled,
+  DownloadOutlined,
+  ExclamationCircleFilled,
+  FileExcelOutlined,
+  FileTextOutlined,
+  WarningFilled,
+} from "@ant-design/icons"
+import type { QAReport } from "../api"
+import { api } from "../services/queryClient"
+import { PALETTE, STATUS_META, scoreColor } from "../uiTokens"
 
 /** 触发浏览器下载导出产物。 */
 function download(blob: Blob, filename: string) {
@@ -19,13 +27,20 @@ function download(blob: Blob, filename: string) {
 export function ReportOverview({
   report,
   historyRecordId,
+  reviewedCount,
 }: {
   report: QAReport
   historyRecordId: string | null
+  reviewedCount: number
 }) {
   const { summary } = report
   const [exporting, setExporting] = useState<"xlsx" | "html" | null>(null)
   const [messageApi, contextHolder] = message.useMessage()
+  const issueTotal = Object.values(summary.issue_counts).reduce((sum, count) => sum + count, 0)
+  // 交付风险卡与默认判定一致：High/Critical 归为严重，其余为一般提示。
+  const severeTotal = (summary.issue_counts.critical ?? 0) + (summary.issue_counts.high ?? 0)
+  const generalTotal = Math.max(issueTotal - severeTotal, 0)
+  const reviewedPercent = issueTotal ? Math.round((reviewedCount / issueTotal) * 100) : 100
 
   const doExport = async (format: "xlsx" | "html") => {
     if (!historyRecordId) {
@@ -45,110 +60,123 @@ export function ReportOverview({
   }
 
   return (
-    <div>
+    <section className="report-overview">
       {contextHolder}
-      <Row gutter={[12, 12]}>
-        <Col xs={12} md={6}>
-          <Card size="small">
-            <Statistic
-              title="文档状态"
-              value={STATUS_META[report.status]?.label ?? report.status}
-              valueStyle={{
-                color: STATUS_META[report.status]?.color,
-              }}
+      <div className="report-section-heading">
+        <Space wrap size={10}>
+          <Typography.Title level={5}>报告概览</Typography.Title>
+          <Tag variant="filled" className="report-profile-tag">
+            {report.rule_profile_reference}
+          </Tag>
+          <Typography.Text type="secondary" className="report-page-summary">
+            共 {summary.pages} 页 · {summary.passed_pages} 页通过 · {summary.review_pages} 页复核 · {summary.failed_pages} 页失败
+          </Typography.Text>
+        </Space>
+        <Space wrap size={8}>
+          <span className="report-sync"><i />报告已同步</span>
+          <Button
+            size="small"
+            icon={<FileExcelOutlined />}
+            loading={exporting === "xlsx"}
+            disabled={!historyRecordId}
+            onClick={() => void doExport("xlsx")}
+          >
+            XLSX
+          </Button>
+          <Button
+            size="small"
+            icon={<FileTextOutlined />}
+            loading={exporting === "html"}
+            disabled={!historyRecordId}
+            onClick={() => void doExport("html")}
+          >
+            HTML
+          </Button>
+        </Space>
+      </div>
+
+      <Row gutter={[16, 16]}>
+        <Col xs={24} sm={12} xl={6}>
+          <Card className="metric-card metric-card--score" variant="borderless">
+            <div className="metric-card__label">
+              综合得分
+              <Tag
+                variant="filled"
+                style={{
+                  color: STATUS_META[report.status]?.color,
+                  background: STATUS_META[report.status]?.background,
+                }}
+              >
+                {STATUS_META[report.status]?.label ?? report.status}
+              </Tag>
+            </div>
+            <div className="metric-card__body">
+              <span className="metric-card__value" style={{ color: scoreColor(report.document_score) }}>
+                {report.document_score.toFixed(0)}
+              </span>
+              <span className="metric-card__unit">/100</span>
+            </div>
+            <Progress
+              percent={report.document_score}
+              showInfo={false}
+              strokeColor={scoreColor(report.document_score)}
+              railColor={PALETTE.border}
+              size="small"
             />
           </Card>
         </Col>
-        <Col xs={12} md={6}>
-          <Card size="small">
-            <Statistic
-              title="文档分数"
-              value={report.document_score}
-              precision={2}
-              valueStyle={{ fontWeight: 600, color: scoreColor(report.document_score) }}
-            />
+        <Col xs={24} sm={12} xl={6}>
+          <Card className="metric-card metric-card--critical" variant="borderless">
+            <div className="metric-card__label">
+              <span><ExclamationCircleFilled /> 严重问题</span>
+              <span>Critical / High</span>
+            </div>
+            <div className="metric-card__body">
+              <span className="metric-card__value">{severeTotal}</span>
+              <span className="metric-card__unit">个</span>
+            </div>
+            <span className="metric-card__hint">需优先处理的交付风险</span>
           </Card>
         </Col>
-        <Col xs={12} md={6}>
-          <Card size="small">
-            <Statistic title="页面" value={summary.pages} suffix="页" />
-            <span style={{ fontSize: 12, color: "rgba(0,0,0,0.45)" }}>
-              {summary.passed_pages} 通过 / {summary.review_pages} 复核 /{" "}
-              {summary.failed_pages} 失败
-            </span>
+        <Col xs={24} sm={12} xl={6}>
+          <Card className="metric-card metric-card--warning" variant="borderless">
+            <div className="metric-card__label">
+              <span><WarningFilled /> 一般问题</span>
+              <span>Medium / Low / Info</span>
+            </div>
+            <div className="metric-card__body">
+              <span className="metric-card__value">{generalTotal}</span>
+              <span className="metric-card__unit">个</span>
+            </div>
+            <span className="metric-card__hint">建议结合页面上下文复核</span>
           </Card>
         </Col>
-        <Col xs={12} md={6}>
-          <Card size="small">
-            <Statistic
-              title="问题总数"
-              value={Object.values(summary.issue_counts).reduce(
-                (a, b) => a + b,
-                0,
-              )}
+        <Col xs={24} sm={12} xl={6}>
+          <Card className="metric-card metric-card--review" variant="borderless">
+            <div className="metric-card__label">
+              <span><CheckCircleFilled /> 复核进度</span>
+              <span>{reviewedPercent}%</span>
+            </div>
+            <div className="metric-card__body">
+              <span className="metric-card__value">{reviewedCount}</span>
+              <span className="metric-card__unit">/ {issueTotal}</span>
+            </div>
+            <Progress
+              percent={reviewedPercent}
+              showInfo={false}
+              strokeColor={PALETTE.info}
+              railColor={PALETTE.infoSoft}
+              size="small"
             />
           </Card>
         </Col>
       </Row>
 
-      <Card
-        size="small"
-        title="问题严重度分布"
-        style={{ marginTop: 12 }}
-        extra={
-          <Space>
-            <Tag>{report.rule_profile_reference}</Tag>
-            <Button
-              size="small"
-              icon={<FileExcelOutlined />}
-              loading={exporting === "xlsx"}
-              disabled={!historyRecordId}
-              onClick={() => void doExport("xlsx")}
-            >
-              导出 XLSX
-            </Button>
-            <Button
-              size="small"
-              icon={<FileTextOutlined />}
-              loading={exporting === "html"}
-              disabled={!historyRecordId}
-              onClick={() => void doExport("html")}
-            >
-              导出 HTML
-            </Button>
-          </Space>
-        }
-      >
-        {Object.entries(summary.issue_counts)
-          .filter(([, count]) => count > 0)
-          .sort((a, b) => (SEVERITY_ORDER[a[0]] ?? 99) - (SEVERITY_ORDER[b[0]] ?? 99))
-          .map(([severity, count]) => (
-            <Tag
-              key={severity}
-              color={SEVERITY_META[severity]?.color}
-              style={{ fontSize: 13, padding: "2px 10px" }}
-            >
-              {SEVERITY_META[severity]?.label ?? severity} × {count}
-            </Tag>
-          ))}
-        {Object.values(summary.issue_counts).every((c) => c === 0) && (
-          <span style={{ color: "rgba(0,0,0,0.45)" }}>没有发现任何问题。</span>
-        )}
-      </Card>
-
-      {(report.metadata as Record<string, unknown> | undefined)
-        ?.normalized_from ? (
-        <Card size="small" style={{ marginTop: 12 }}>
-          <Tag color="gold">归一化转换</Tag>
-          <span style={{ fontSize: 13 }}>
-            输入含 Office 文档转换（
-            {JSON.stringify(
-              (report.metadata as Record<string, unknown>).normalized_from,
-            )}
-            ），版面结论已叠加转换容差。
-          </span>
-        </Card>
+      {(report.metadata as Record<string, unknown> | undefined)?.normalized_from ? (
+        <div className="report-normalized-note">
+          <DownloadOutlined /> 输入含 Office 文档归一化转换，版面结论已叠加转换容差。
+        </div>
       ) : null}
-    </div>
+    </section>
   )
 }

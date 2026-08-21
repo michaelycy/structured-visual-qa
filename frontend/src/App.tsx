@@ -1,25 +1,58 @@
 import { useEffect, useRef, useState } from "react"
-import { Button, Card, Empty, Layout, Menu, message, Tabs, Typography } from "antd"
+import { Button, Drawer, Empty, Layout, Menu, message, Tag, Typography } from "antd"
+import { useLocation, useNavigate } from "@tanstack/react-router"
 import {
   BookOutlined,
   ControlOutlined,
   FolderOpenOutlined,
   FileSearchOutlined,
+  HistoryOutlined,
+  MenuOutlined,
 } from "@ant-design/icons"
 import type { CompareResponse, HistoryRecord, SampleRecord, TaskPollResponse } from "./api"
-import { api } from "./api"
+import { api } from "./services/queryClient"
 import { ReportDetail } from "./views/ReportDetail"
 import { ProfileManager } from "./views/ProfileManager"
 import { GlossaryManager } from "./views/GlossaryManager"
 import { CompareBar } from "./views/CompareBar"
 import { HistoryView } from "./views/HistoryView"
 import { SampleManager } from "./views/SampleManager"
+import { STATUS_META } from "./uiTokens"
+import "./workbench.css"
 
 const { Sider, Content } = Layout
 const { Title, Text } = Typography
 
 /** 一级导航：工作台（比较任务全流程）与配置管理。 */
-type Section = "workbench" | "samples" | "manager" | "glossary"
+type Section = "workbench" | "history" | "samples" | "manager" | "glossary"
+
+const NAV_ITEMS = [
+  { key: "workbench", icon: <FileSearchOutlined />, label: "工作台" },
+  { key: "history", icon: <HistoryOutlined />, label: "质检记录" },
+  { key: "samples", icon: <FolderOpenOutlined />, label: "样本管理" },
+  { key: "manager", icon: <ControlOutlined />, label: "规则管理" },
+  { key: "glossary", icon: <BookOutlined />, label: "术语库" },
+]
+
+const SECTION_LABEL: Record<Section, string> = {
+  workbench: "工作台",
+  history: "质检记录",
+  samples: "样本管理",
+  manager: "规则管理",
+  glossary: "术语库",
+}
+
+const SECTION_PATH: Record<Section, "/" | "/history" | "/samples" | "/rules" | "/glossary"> = {
+  workbench: "/",
+  history: "/history",
+  samples: "/samples",
+  manager: "/rules",
+  glossary: "/glossary",
+}
+
+const PATH_SECTION: Record<string, Section> = Object.fromEntries(
+  Object.entries(SECTION_PATH).map(([section, path]) => [path, section]),
+) as Record<string, Section>
 
 /** 任务状态 → 进度文案（后端无阶段粒度，只做诚实的状态+耗时展示）。 */
 const TASK_STATUS_TEXT: Record<string, string> = {
@@ -27,14 +60,17 @@ const TASK_STATUS_TEXT: Record<string, string> = {
   running: "正在分析（解析 → 对齐 → 匹配 → 检测 → 报告）",
 }
 
-/** 应用骨架：antd Layout，左侧一级菜单，工作台内部用 Tabs。 */
+/** 应用骨架：antd Layout，左侧一级菜单承载工作台与各管理页面。 */
 export function App() {
   // 浏览器安全模型不允许读取本地路径，选择器走上传模式：
   // state 保存服务器端路径，display 只用于界面展示。
   const [source, setSource] = useState({ path: "", display: "" })
   const [target, setTarget] = useState({ path: "", display: "" })
-  const [section, setSection] = useState<Section>("workbench")
-  const [activeTab, setActiveTab] = useState("detail")
+  const pathname = useLocation({ select: (location) => location.pathname })
+  const navigate = useNavigate()
+  const section = PATH_SECTION[pathname] ?? "workbench"
+  const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth)
+  const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [result, setResult] = useState<CompareResponse | null>(null)
   // 报告身份计数：ReportDetail 需按报告重挂载，否则逐页详情的
   // 页码选择与筛选条件会残留在下一份报告上（页数变少时显示空态）。
@@ -59,7 +95,22 @@ export function App() {
   const cancelRef = useRef(false)
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  /** 用户主动停止等待：任务仍在服务端执行，完成后照常落入对比记录。 */
+  useEffect(() => {
+    const updateViewport = () => setViewportWidth(window.innerWidth)
+    window.addEventListener("resize", updateViewport)
+    return () => window.removeEventListener("resize", updateViewport)
+  }, [])
+
+  const isMobile = viewportWidth < 768
+  const isCompactSidebar = viewportWidth < 1280
+
+  /** 一级导航在移动端选中后立即收起抽屉，避免遮挡目标页面。 */
+  const selectSection = (next: Section) => {
+    void navigate({ to: SECTION_PATH[next] })
+    setMobileNavOpen(false)
+  }
+
+  /** 用户主动停止等待：任务仍在服务端执行，完成后照常落入质检记录。 */
   const cancelWaiting = () => {
     cancelRef.current = true
     if (pollTimerRef.current) clearInterval(pollTimerRef.current)
@@ -88,8 +139,7 @@ export function App() {
       rendered: response.rendered ?? { source: [], target: [] },
     })
     setReportKey((n) => n + 1)
-    setSection("workbench")
-    setActiveTab("detail")
+    selectSection("workbench")
     setHistoryRecordId(recordId)
   }
 
@@ -193,9 +243,9 @@ export function App() {
     } catch (exc) {
       const text = exc instanceof Error ? exc.message : String(exc)
       if (text === "__cancelled__") {
-        messageApi.info("已停止等待。任务仍在后台执行，完成后可在「对比记录」中查看。")
+        messageApi.info("已停止等待。任务仍在后台执行，完成后可在「质检记录」中查看。")
       } else if (text === "__timeout__") {
-        messageApi.warning("等待超过 5 分钟仍未完成，已停止等待；任务完成后可在「对比记录」中查看。")
+        messageApi.warning("等待超过 5 分钟仍未完成，已停止等待；任务完成后可在「质检记录」中查看。")
       } else {
         messageApi.error(text)
       }
@@ -215,14 +265,7 @@ export function App() {
       const en = pick("en") ?? samples[0]
       const zh = pick("zh") ?? samples[1]
       if (!en || !zh) throw new Error("服务器上没有可用的示例文档")
-      const load = (name: string) =>
-        fetch(`/api/files/sample?name=${encodeURIComponent(name)}`, {
-          method: "POST",
-        }).then((r) => {
-          if (!r.ok) throw new Error(`载入示例 ${name} 失败`)
-          return r.json() as Promise<{ path: string; name: string }>
-        })
-      const [s, t] = await Promise.all([load(en), load(zh)])
+      const [s, t] = await Promise.all([api.samplePath(en), api.samplePath(zh)])
       setSource({ path: s.path, display: s.name })
       setTarget({ path: t.path, display: t.name })
       void runCompare({
@@ -238,6 +281,9 @@ export function App() {
 
   const reopenHistory = (record: HistoryRecord) => {
     if (!record.report) return
+    // 历史回看也要恢复报告上下文；即使旧记录缺少可重跑路径，仍展示真实文件名。
+    setSource({ path: record.source_path ?? "", display: record.source_display })
+    setTarget({ path: record.target_path ?? "", display: record.target_display })
     applyReport(
       {
         report: record.report,
@@ -248,7 +294,7 @@ export function App() {
     messageApi.info(`已载入 ${record.source_display} 的历史报告`)
   }
 
-  /** 从对比记录重新执行比较：填回源/目标文档并立即运行。
+  /** 从质检记录重新执行比较：填回源/目标文档并立即运行。
    *
    * profile 为 null 时沿用工作台当前配置（用户可在弹窗选择不覆盖）；
    * 选了具体配置则同步更新工作台的下拉状态，保持界面与实际执行一致。
@@ -281,41 +327,96 @@ export function App() {
   const useSample = (sample: SampleRecord) => {
     setSource({ path: sample.source_path, display: sample.source_name })
     setTarget({ path: sample.target_path, display: sample.target_name })
-    setSection("workbench")
-    setActiveTab("detail")
+    selectSection("workbench")
   }
 
   return (
-    <Layout style={{ minHeight: "100dvh" }}>
+    <Layout className="app-shell tw:min-h-dvh tw:bg-qa-canvas">
       {contextHolder}
-      <Sider theme="dark" width={192} breakpoint="lg" collapsedWidth={64}>
-        <div style={{ padding: "20px 16px 12px" }}>
-          <Title level={5} style={{ color: "#fff", margin: 0 }}>
-            Visual QA
-          </Title>
-          <Text style={{ color: "rgba(255,255,255,0.45)", fontSize: 12 }}>
-            翻译文档验收工作台
-          </Text>
-        </div>
-        <Menu
+      {!isMobile ? (
+        <Sider
+          className="app-shell__sider"
           theme="dark"
-          mode="inline"
-          selectedKeys={[section]}
-          onClick={({ key }) => setSection(key as Section)}
-          items={[
-            { key: "workbench", icon: <FileSearchOutlined />, label: "工作台" },
-            { key: "samples", icon: <FolderOpenOutlined />, label: "样本管理" },
-            { key: "manager", icon: <ControlOutlined />, label: "规则管理" },
-            { key: "glossary", icon: <BookOutlined />, label: "术语库" },
-          ]}
-        />
-      </Sider>
+          width={260}
+          collapsed={isCompactSidebar}
+          collapsedWidth={72}
+          trigger={null}
+        >
+          <div className="app-shell__brand">
+            <Title level={5}>Visual QA</Title>
+            {!isCompactSidebar ? <Text>翻译文档验收工作台</Text> : null}
+          </div>
+          <Menu
+            theme="dark"
+            mode="inline"
+            selectedKeys={[section]}
+            onClick={({ key }) => selectSection(key as Section)}
+            items={NAV_ITEMS}
+          />
+        </Sider>
+      ) : null}
 
       <Layout>
-        <Content style={{ padding: 24 }}>
+        {isMobile ? (
+          <header className="app-mobile-header">
+            <Button
+              type="text"
+              icon={<MenuOutlined />}
+              aria-label="打开主导航"
+              onClick={() => setMobileNavOpen(true)}
+            />
+            <strong>Visual QA</strong>
+            <span>{SECTION_LABEL[section]}</span>
+          </header>
+        ) : null}
+        <Drawer
+          className="app-mobile-nav"
+          placement="left"
+          width={288}
+          open={isMobile && mobileNavOpen}
+          title="Visual QA"
+          onClose={() => setMobileNavOpen(false)}
+        >
+          <Menu
+            theme="dark"
+            mode="inline"
+            selectedKeys={[section]}
+            onClick={({ key }) => selectSection(key as Section)}
+            items={NAV_ITEMS}
+          />
+        </Drawer>
+        <Content
+          className={
+            section === "workbench"
+              ? "workbench-content"
+              : section === "history"
+                ? "app-content app-content--history"
+                : "app-content"
+          }
+        >
           {section === "workbench" ? (
-            <>
-              <Card size="small" style={{ marginBottom: 16 }}>
+            <div className="workbench-page">
+              <section className="workbench-taskbar">
+                <div className="workbench-taskbar__identity">
+                  <Text className="workbench-breadcrumb">工作台&nbsp; / &nbsp;报告详情</Text>
+                  <div className="workbench-title-row">
+                    <Title level={4} className="workbench-title">
+                      {source.display && target.display ? "文档视觉对比报告" : "新建文档对比"}
+                    </Title>
+                    {result && (
+                      <Tag
+                        variant="filled"
+                        className="workbench-status"
+                        style={{
+                          color: STATUS_META[result.report.status]?.color,
+                          background: STATUS_META[result.report.status]?.background,
+                        }}
+                      >
+                        {STATUS_META[result.report.status]?.label ?? result.report.status}
+                      </Tag>
+                    )}
+                  </div>
+                </div>
                 <CompareBar
                   source={source}
                   target={target}
@@ -333,7 +434,7 @@ export function App() {
                   onSubmit={() => void runCompare()}
                 />
                 {busy && (
-                  <span style={{ display: "block", marginTop: 8, fontSize: 13 }}>
+                  <span className="workbench-progress">
                     <Typography.Text type="secondary">
                       {progressText} · 已耗时 {elapsed} 秒（大型文档可能需要一两分钟）
                     </Typography.Text>
@@ -342,57 +443,49 @@ export function App() {
                     </Button>
                   </span>
                 )}
-              </Card>
-              <Tabs
-                activeKey={activeTab}
-                onChange={setActiveTab}
-                items={[
-                  {
-                    key: "detail",
-                    label: "报告详情",
-                    children: result ? (
-                      <ReportDetail
-                        key={reportKey}
-                        report={result.report}
-                        rendered={result.rendered}
-                        historyRecordId={historyRecordId}
-                      />
-                    ) : (
-                      <Empty
-                        image={Empty.PRESENTED_IMAGE_SIMPLE}
-                        description={
-                          <span>
-                            还没有报告。
-                            <br />
-                            上传原文与译文后点击「开始比较」，或先用内置示例体验完整流程。
-                          </span>
-                        }
-                        style={{ padding: "32px 0" }}
-                      >
-                        <Button
-                          type="primary"
-                          loading={busy}
-                          onClick={() => void runDemo()}
-                        >
-                          载入示例并试跑
-                        </Button>
-                      </Empty>
-                    ),
-                  },
-                  {
-                    key: "history",
-                    label: "对比记录",
-                    children: (
-                      <HistoryView
-                        refreshToken={historyRefreshToken}
-                        onReopen={reopenHistory}
-                        onRerun={rerunHistory}
-                      />
-                    ),
-                  },
-                ]}
-              />
-            </>
+              </section>
+              <div className="workbench-detail-nav">
+                <span>报告详情</span>
+              </div>
+              <div className="workbench-detail-content">
+                {result ? (
+                  <ReportDetail
+                    key={reportKey}
+                    report={result.report}
+                    rendered={result.rendered}
+                    historyRecordId={historyRecordId}
+                  />
+                ) : (
+                  <Empty
+                    className="workbench-empty"
+                    image={Empty.PRESENTED_IMAGE_SIMPLE}
+                    description={
+                      <span>
+                        还没有报告。
+                        <br />
+                        上传原文与译文后点击「开始比较」，或先用内置示例体验完整流程。
+                      </span>
+                    }
+                    style={{ padding: "32px 0" }}
+                  >
+                    <Button
+                      type="primary"
+                      loading={busy}
+                      onClick={() => void runDemo()}
+                    >
+                      载入示例并试跑
+                    </Button>
+                  </Empty>
+                )}
+              </div>
+            </div>
+          ) : section === "history" ? (
+            <HistoryView
+              refreshToken={historyRefreshToken}
+              onReopen={reopenHistory}
+              onRerun={rerunHistory}
+              onStart={() => selectSection("workbench")}
+            />
           ) : section === "samples" ? (
             <SampleManager onUse={useSample} />
           ) : section === "manager" ? (

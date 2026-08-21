@@ -1,4 +1,4 @@
-/** 对比记录详情抽屉：直接内嵌共用的 ReportDetail（总览 + 逐页复核）。
+/** 质检记录详情抽屉：直接内嵌共用的 ReportDetail（总览 + 逐页复核）。
  *
  * 历史记录不含页面渲染图，逐页详情以 Issue 列表为主；复核判定
  * 按 Issue 粒度持久化，与工作台共享同一份进度。
@@ -6,7 +6,8 @@
 
 import { useEffect, useState } from "react"
 import { Drawer, Empty, message, Spin } from "antd"
-import { api, type HistoryRecord } from "../api"
+import type { HistoryRecord } from "../api"
+import { api } from "../services/queryClient"
 import { ReportDetail } from "./ReportDetail"
 
 export function HistoryDetail({
@@ -40,15 +41,15 @@ export function HistoryDetail({
     <Drawer
       open={open}
       onClose={onClose}
-      width={1000}
+      size={1000}
       rootStyle={{ minWidth: "60vw" }}
       title={
         record ? (
           <span>
-            对比记录详情 · {record.source_display} → {record.target_display}
+            质检记录详情 · {record.source_display} → {record.target_display}
           </span>
         ) : (
-          "对比记录详情"
+          "质检记录详情"
         )
       }
     >

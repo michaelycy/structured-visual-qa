@@ -2,7 +2,8 @@
 
 import { useState } from "react"
 import { Alert, Button, Card, Space, Steps, Typography } from "antd"
-import { api, type StageItem } from "../api"
+import type { StageItem } from "../api"
+import { api } from "../services/queryClient"
 
 const STAGES = ["parse", "group", "alignment", "match", "detect", "report"] as const
 

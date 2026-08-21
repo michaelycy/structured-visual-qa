@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from "react"
 import { Alert, Button, Card, Col, Collapse, Form, Input, InputNumber, Row, Space, message } from "antd"
-import { api, type RuleProfile } from "../api"
+import type { RuleProfile } from "../api"
+import { api } from "../services/queryClient"
 
 export interface ProfileEditorProps {
   /** 外部初始配置（规则管理页加载的已有 Profile）；缺省用内置默认值。 */

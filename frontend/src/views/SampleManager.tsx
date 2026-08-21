@@ -18,8 +18,10 @@ import {
 } from "antd"
 import { PlusOutlined } from "@ant-design/icons"
 import type { ColumnsType } from "antd/es/table"
+import { PALETTE } from "../uiTokens"
 import type { UploadFile } from "antd/es/upload/interface"
-import { api, type SampleRecord } from "../api"
+import type { SampleRecord } from "../api"
+import { api } from "../services/queryClient"
 
 const ACCEPT = ".pdf,.docx,.doc,.pptx,.ppt,.xlsx,.xls,.odt,.odp"
 const LANGUAGE_OPTIONS = [
@@ -126,7 +128,7 @@ export function SampleManager({
     }
   }
 
-  const useSample = async (record: SampleRecord) => {
+  const loadSampleIntoWorkbench = async (record: SampleRecord) => {
     try {
       const full = await api.sampleUse(record.sample_id)
       onUse(full)
@@ -181,7 +183,19 @@ export function SampleManager({
       dataIndex: "origin",
       width: 90,
       render: (value: SampleRecord["origin"]) =>
-        value === "builtin" ? <Tag color="blue">内置</Tag> : <Tag>用户</Tag>,
+        value === "builtin" ? (
+          <Tag
+            style={{
+              color: PALETTE.info,
+              background: PALETTE.infoSoft,
+              borderColor: PALETTE.infoSoft,
+            }}
+          >
+            内置
+          </Tag>
+        ) : (
+          <Tag>用户</Tag>
+        ),
     },
     {
       title: "更新时间",
@@ -195,7 +209,7 @@ export function SampleManager({
       width: 190,
       render: (_, record) => (
         <Space>
-          <a onClick={() => void useSample(record)}>载入工作台</a>
+          <a onClick={() => void loadSampleIntoWorkbench(record)}>载入工作台</a>
           {record.origin === "user" && (
             <>
               <a
@@ -211,7 +225,7 @@ export function SampleManager({
               </a>
               <Popconfirm
                 title="归档该样本？"
-                description="不会删除文档文件和已有对比记录。"
+                description="不会删除文档文件和已有质检记录。"
                 onConfirm={() =>
                   api
                     .sampleArchive(record.sample_id)

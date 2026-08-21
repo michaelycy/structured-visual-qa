@@ -1,4 +1,6 @@
-/** 与后端 api/dto.py 对齐的请求类型与轻量 fetch 封装。 */
+/** 与后端 api/dto.py 对齐的 DTO 与无状态业务服务。 */
+
+import { httpClient } from "./services/httpClient"
 
 export interface ReportSummary {
   pages: number
@@ -137,25 +139,7 @@ export interface TaskPollResponse {
   history_record_id: string | null
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, {
-    headers: { "Content-Type": "application/json" },
-    ...init,
-  })
-  if (!response.ok) {
-    let detail = `HTTP ${response.status}`
-    try {
-      const body = await response.json()
-      if (body?.detail) detail = String(body.detail)
-    } catch {
-      /* 保留状态码信息 */
-    }
-    throw new Error(detail)
-  }
-  return response.json() as Promise<T>
-}
-
-export const api = {
+export const documentQaService = {
   compare: (
     source: string,
     target: string,
@@ -167,7 +151,7 @@ export const api = {
     sourcePassword: string | null = null,
     targetPassword: string | null = null,
   ) =>
-    request<CompareSubmitResponse>("/api/compare", {
+    httpClient.json<CompareSubmitResponse>("/api/compare", {
       method: "POST",
       body: JSON.stringify({
         source,
@@ -182,46 +166,40 @@ export const api = {
         target_password: targetPassword,
       }),
     }),
-  glossaryDefault: () => request<Glossary>("/api/glossary/default"),
+  glossaryDefault: () => httpClient.json<Glossary>("/api/glossary/default"),
   glossaryList: () =>
-    request<{ glossaries: GlossarySummary[] }>("/api/glossary/list").then(
+    httpClient.json<{ glossaries: GlossarySummary[] }>("/api/glossary/list").then(
       (r) => r.glossaries,
     ),
   glossaryItem: (filename: string) =>
-    request<Glossary>(`/api/glossary/item/${encodeURIComponent(filename)}`),
+    httpClient.json<Glossary>(`/api/glossary/item/${encodeURIComponent(filename)}`),
   glossarySave: (glossary: Glossary) =>
-    request<{ path: string; reference: string }>("/api/glossary/save", {
+    httpClient.json<{ path: string; reference: string }>("/api/glossary/save", {
       method: "POST",
       body: JSON.stringify({ glossary }),
     }),
   glossaryDelete: (filename: string) =>
-    request<{ deleted: string }>(
+    httpClient.json<{ deleted: string }>(
       `/api/glossary/item/${encodeURIComponent(filename)}`,
       { method: "DELETE" },
     ),
   task: (taskId: string) =>
-    request<TaskPollResponse>(`/api/tasks/${encodeURIComponent(taskId)}`),
+    httpClient.json<TaskPollResponse>(`/api/tasks/${encodeURIComponent(taskId)}`),
   exportReport: (recordId: string, format: "xlsx" | "html") =>
-    fetch("/api/report/export", {
+    httpClient.blob("/api/report/export", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ record_id: recordId, format }),
-    }).then(async (response) => {
-      if (!response.ok) {
-        const payload = await response.json().catch(() => null)
-        throw new Error(payload?.detail ?? `导出失败 (HTTP ${response.status})`)
-      }
-      return response.blob()
     }),
   verify: (source: string, target: string, stopAfter: string) =>
-    request<{ stages: StageItem[] }>("/api/verify", {
+    httpClient.json<{ stages: StageItem[] }>("/api/verify", {
       method: "POST",
       body: JSON.stringify({ source, target, stop_after: stopAfter }),
     }),
-  defaultProfile: () => request<RuleProfile>("/api/profile/default"),
-  profileSchema: () => request<Record<string, unknown>>("/api/profile/schema"),
+  defaultProfile: () => httpClient.json<RuleProfile>("/api/profile/default"),
+  profileSchema: () => httpClient.json<Record<string, unknown>>("/api/profile/schema"),
   profileList: () =>
-    request<{
+    httpClient.json<{
       profiles: {
         filename: string
         profile_id: string
@@ -232,19 +210,19 @@ export const api = {
       }[]
     }>("/api/profile/list").then((r) => r.profiles),
   profileItem: (filename: string) =>
-    request<RuleProfile>(`/api/profile/item/${encodeURIComponent(filename)}`),
+    httpClient.json<RuleProfile>(`/api/profile/item/${encodeURIComponent(filename)}`),
   profileDelete: (filename: string) =>
-    request<{ deleted: string }>(
+    httpClient.json<{ deleted: string }>(
       `/api/profile/item/${encodeURIComponent(filename)}`,
       { method: "DELETE" },
     ),
   saveProfile: (profile: RuleProfile) =>
-    request<{ path: string; reference: string }>("/api/profile/save", {
+    httpClient.json<{ path: string; reference: string }>("/api/profile/save", {
       method: "POST",
       body: JSON.stringify({ profile }),
     }),
   sampleFiles: () =>
-    request<{ samples: string[] }>("/api/files/samples").then((r) => r.samples),
+    httpClient.json<{ samples: string[] }>("/api/files/samples").then((r) => r.samples),
   reviewDecision: (
     taskId: string,
     report: QAReport,
@@ -252,7 +230,7 @@ export const api = {
     decision: ReviewDecision,
     note = "",
   ) =>
-    request<ReviewRecord>("/api/review/decision", {
+    httpClient.json<ReviewRecord>("/api/review/decision", {
       method: "POST",
       body: JSON.stringify({
         task_id: taskId,
@@ -266,15 +244,15 @@ export const api = {
         note,
       }),
     }),
-  reviewTask: (taskId: string) => request<ReviewRecord>(`/api/review/task/${taskId}`),
+  reviewTask: (taskId: string) => httpClient.json<ReviewRecord>(`/api/review/task/${taskId}`),
   historyList: () =>
-    request<{ records: Omit<HistoryRecord, "report">[] }>("/api/history/list").then(
+    httpClient.json<{ records: Omit<HistoryRecord, "report">[] }>("/api/history/list").then(
       (r) => r.records,
     ),
   historyItem: (recordId: string) =>
-    request<HistoryRecord>(`/api/history/item/${encodeURIComponent(recordId)}`),
+    httpClient.json<HistoryRecord>(`/api/history/item/${encodeURIComponent(recordId)}`),
   sampleList: (includeArchived = false) =>
-    request<{ samples: SampleRecord[] }>(
+    httpClient.json<{ samples: SampleRecord[] }>(
       `/api/samples?include_archived=${includeArchived}`,
     ).then((r) => r.samples),
   sampleCreate: async (
@@ -292,12 +270,7 @@ export const api = {
     body.append("target_language", targetLanguage)
     body.append("source", source)
     body.append("target", target)
-    const response = await fetch("/api/samples", { method: "POST", body })
-    if (!response.ok) {
-      const payload = await response.json().catch(() => null)
-      throw new Error(payload?.detail ?? `创建样本失败 (HTTP ${response.status})`)
-    }
-    return response.json() as Promise<SampleRecord>
+    return httpClient.form<SampleRecord>("/api/samples", body)
   },
   sampleUpdate: (
     sampleId: string,
@@ -306,7 +279,7 @@ export const api = {
     sourceLanguage: string,
     targetLanguage: string,
   ) =>
-    request<SampleRecord>(`/api/samples/${encodeURIComponent(sampleId)}`, {
+    httpClient.json<SampleRecord>(`/api/samples/${encodeURIComponent(sampleId)}`, {
       method: "PATCH",
       body: JSON.stringify({
         name,
@@ -316,13 +289,23 @@ export const api = {
       }),
     }),
   sampleArchive: (sampleId: string) =>
-    request<{ archived: string }>(
+    httpClient.json<{ archived: string }>(
       `/api/samples/${encodeURIComponent(sampleId)}`,
       { method: "DELETE" },
     ),
   sampleUse: (sampleId: string) =>
-    request<SampleRecord>(
+    httpClient.json<SampleRecord>(
       `/api/samples/${encodeURIComponent(sampleId)}/use`,
+      { method: "POST" },
+    ),
+  uploadDocument: (file: File) => {
+    const body = new FormData()
+    body.append("file", file)
+    return httpClient.form<{ path: string; name: string }>("/api/files/upload", body)
+  },
+  samplePath: (name: string) =>
+    httpClient.json<{ path: string; name: string }>(
+      `/api/files/sample?name=${encodeURIComponent(name)}`,
       { method: "POST" },
     ),
 }

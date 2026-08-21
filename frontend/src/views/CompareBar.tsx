@@ -2,10 +2,16 @@
 
 import { useState } from "react"
 import { Button, Collapse, Input, Select, Space, Upload, message } from "antd"
-import { InboxOutlined, SettingOutlined } from "@ant-design/icons"
+import {
+  ArrowRightOutlined,
+  FileTextOutlined,
+  SearchOutlined,
+  SettingOutlined,
+} from "@ant-design/icons"
 type UploadRequestOption = Parameters<NonNullable<import("antd/es/upload").UploadProps["customRequest"]>>[0]
-import { api } from "../api"
+import { api } from "../services/queryClient"
 import type { GlossarySummary } from "../api"
+import { PALETTE } from "../uiTokens"
 
 export interface DocumentRef {
   path: string
@@ -32,15 +38,8 @@ export interface CompareBarProps {
 /** 上传自定义请求：直接调后端 /api/files/upload。 */
 async function customUpload(options: UploadRequestOption) {
   const { file, onSuccess, onError } = options
-  const body = new FormData()
-  body.append("file", file as File)
   try {
-    const response = await fetch("/api/files/upload", { method: "POST", body })
-    if (!response.ok) {
-      const payload = await response.json().catch(() => null)
-      throw new Error(payload?.detail ?? `上传失败 (HTTP ${response.status})`)
-    }
-    onSuccess?.(await response.json())
+    onSuccess?.(await api.uploadDocument(file as File))
   } catch (exc) {
     onError?.(exc as Error)
   }
@@ -48,7 +47,7 @@ async function customUpload(options: UploadRequestOption) {
 
 const PICKER_LABEL_STYLE: React.CSSProperties = {
   fontSize: 12,
-  color: "rgba(0,0,0,0.45)",
+  color: PALETTE.textSecondary,
 }
 
 /** 与服务端 FileService 的上限保持一致（100 MiB）。 */
@@ -65,7 +64,7 @@ function PasswordField({
   onChange: (value: string) => void
 }) {
   return (
-    <Space direction="vertical" size={4}>
+    <Space orientation="vertical" size={4}>
       <span style={PICKER_LABEL_STYLE}>{label}</span>
       <Input.Password
         placeholder="无加密文档留空"
@@ -97,9 +96,9 @@ function DocumentPicker({
   }
 
   return (
-    <Space direction="vertical" size={4} style={{ flex: 1, minWidth: 220 }}>
+    <div className="document-picker">
       {contextHolder}
-      <span style={PICKER_LABEL_STYLE}>{label}</span>
+      <span className="document-picker__label">{label}</span>
       <Space.Compact style={{ width: "100%" }}>
         <Upload
           name="file"
@@ -132,21 +131,20 @@ function DocumentPicker({
             }
           }}
         >
-          <Button icon={<InboxOutlined />} style={{ width: "100%" }}>
-            {value.display || "点击选择文档"}
+          <Button className="document-picker__button" icon={<FileTextOutlined />}>
+            <span className="document-picker__filename">
+              {value.display || "点击选择文档"}
+            </span>
           </Button>
         </Upload>
         <Select
           placeholder="使用示例"
-          style={{ minWidth: 120 }}
+          className="document-picker__sample"
           value={null}
-          onDropdownVisibleChange={loadSamples}
+          onOpenChange={(open) => open && loadSamples()}
           onChange={(name) => {
             if (!name) return
-            fetch(`/api/files/sample?name=${encodeURIComponent(name)}`, {
-              method: "POST",
-            })
-              .then((r) => r.json())
+            api.samplePath(name)
               .then((payload) => onChange({ path: payload.path, display: payload.name }))
               .catch(() =>
                 messageApi.error(`载入样例「${name}」失败，请重试`),
@@ -155,7 +153,7 @@ function DocumentPicker({
           options={samples.map((name) => ({ value: name, label: name }))}
         />
       </Space.Compact>
-    </Space>
+    </div>
   )
 }
 
@@ -192,22 +190,27 @@ export function CompareBar({
       .catch(() => undefined)
   }
   return (
-    <Space direction="vertical" size={12} style={{ width: "100%" }}>
-      <Space align="start" style={{ width: "100%" }} size={16} wrap>
+    <div className="compare-bar">
+      <div className="compare-bar__main">
         <DocumentPicker label="源文档（原文）" value={source} onChange={onSource} />
+        <ArrowRightOutlined className="compare-bar__arrow" />
         <DocumentPicker label="目标文档（译文）" value={target} onChange={onTarget} />
         <Button
+          className="compare-bar__submit"
           type="primary"
+          size="large"
+          icon={<SearchOutlined />}
           loading={busy}
           disabled={!source.path || !target.path}
           onClick={onSubmit}
-          style={{ marginTop: 20 }}
         >
           开始比较
         </Button>
-      </Space>
+      </div>
       {/* 规则配置与术语库属于进阶能力，默认收起；普通用户开箱即用内置规则。 */}
       <Collapse
+        className="compare-bar__advanced"
+        ghost
         size="small"
         items={[
           {
@@ -219,14 +222,14 @@ export function CompareBar({
             ),
             children: (
               <Space wrap size={16}>
-                <Space direction="vertical" size={4}>
+                <Space orientation="vertical" size={4}>
                   <span style={PICKER_LABEL_STYLE}>规则配置</span>
                   <Select
                     allowClear
                     placeholder="内置平衡配置（推荐）"
                     style={{ minWidth: 200 }}
                     value={profileFilename}
-                    onDropdownVisibleChange={loadProfiles}
+                    onOpenChange={(open) => open && loadProfiles()}
                     onChange={(value) => onProfile(value ?? null)}
                     options={profiles.map((item) => ({
                       value: item.filename,
@@ -234,14 +237,14 @@ export function CompareBar({
                     }))}
                   />
                 </Space>
-                <Space direction="vertical" size={4}>
+                <Space orientation="vertical" size={4}>
                   <span style={PICKER_LABEL_STYLE}>术语库</span>
                   <Select
                     allowClear
                     placeholder="不启用"
                     style={{ minWidth: 200 }}
                     value={glossaryReference}
-                    onDropdownVisibleChange={loadGlossaries}
+                    onOpenChange={(open) => open && loadGlossaries()}
                     onChange={(value) => onGlossary(value ?? null)}
                     options={glossaries.map((item) => ({
                       value: item.reference,
@@ -265,6 +268,6 @@ export function CompareBar({
           },
         ]}
       />
-    </Space>
+    </div>
   )
 }

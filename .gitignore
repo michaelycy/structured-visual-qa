@@ -16,3 +16,6 @@ webapp-artifacts/
 !.env.example
 .DS_Store
 .DS_Store.*
+
+
+design-qa.md

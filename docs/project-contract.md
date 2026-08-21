@@ -116,6 +116,8 @@ Reporter → QAReport/JSON
 
 ```text
 frontend/（React+Vite+TS 前端）
+  router/（TanStack Router：URL、一级菜单、直接访问与前进后退）
+  services/（HTTP 协议、业务服务、TanStack Query 缓存键与失效）
   ↓ HTTP /api
 server/src/document_qa_server/api/（FastAPI 协议层：DTO、状态码映射、静态挂载）
   ↓
@@ -133,6 +135,11 @@ core/src/document_qa（核心引擎：pipeline/matching/detectors/scoring，不�
 - persistence 只服务于 server，负责事务、外键、数据迁移与查询；core 禁止
   import persistence 或 sqlite3；
 - API 的请求 DTO 与核心 schemas 分开演化，互不强制联动。
+- frontend 组件禁止直接调用 `fetch`；HTTP 细节只能位于 `services/httpClient.ts`，
+  业务请求必须经过业务服务和 TanStack Query。一级页面状态以 URL 路由为唯一来源，
+  禁止再用独立的菜单 state 复制路由状态。
+- Tailwind CSS 只负责布局、响应式和组合样式，必须使用 `tw:` 前缀并消费现有
+  `--qa-*` Token；禁止启用 Preflight、复制设计 Token 或替代 Ant Design 复杂组件。
 
 - Parser 不负责问题判定；
 - Grouper 不访问源文档与目标文档的对应关系；

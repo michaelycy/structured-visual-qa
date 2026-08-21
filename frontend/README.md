@@ -1,32 +1,44 @@
-# React + TypeScript + Vite
+# Structured Visual QA Frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+React 19 + Vite + Ant Design + TanStack Router/Query 前端。
 
-Currently, two official plugins are available:
+## 开发
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```bash
+bun install
+bun run dev
+bun run build
+bun run lint
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+开发服务默认监听 `127.0.0.1:5180`，`/api` 代理到 `127.0.0.1:8765`。
+
+## 样式职责
+
+- Ant Design：Table、Form、Drawer、Modal 等复杂交互组件。
+- Tailwind CSS v4：布局、Flex/Grid、响应式和组合样式。
+- `global.css` / `uiTokens.ts`：全局设计 Token 和 Ant Design 主题来源。
+- `components/ui/`：项目级基础组件。
+
+Tailwind 使用 `tw:` 前缀并关闭 Preflight。只允许使用映射到 UI 契约的 `qa`
+视觉 Token，例如：
+
+```tsx
+<section className="tw:flex tw:gap-qa-4 tw:rounded-qa-md tw:bg-qa-surface tw:p-qa-6">
+  <h2 className="tw:text-qa-title tw:text-qa-text">标题</h2>
+</section>
+```
+
+动态类名和外部传入的 `className` 统一通过 `src/lib/cn.ts` 合并：
+
+```tsx
+import { cn } from "./lib/cn"
+
+<section className={cn("tw:p-qa-4", expanded && "tw:p-qa-6")} />
+```
+
+`cn()` 已配置识别 `tw:` 前缀，上例最终只保留 `tw:p-qa-6`。
+禁止在组件中重复使用数组 `join` 或字符串拼接实现相同能力。
+
+禁止使用 Tailwind 默认色板、任意值绕过契约，或用工具类重写 Ant Design 内部结构。
+完整规则见 `docs/ui-guidelines.md` §15.1。

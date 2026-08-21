@@ -4,18 +4,17 @@ import { useMemo, useState } from "react"
 import {
   Button,
   Col,
-  Collapse,
   Empty,
-  Progress,
   Row,
   Segmented,
   Select,
   Space,
+  Table,
   Tag,
   Typography,
 } from "antd"
 import type { Issue, QAReport, ReviewDecision } from "../api"
-import { DECISION_META, ISSUE_TYPE_META, SEVERITY_META, STATUS_META } from "../uiTokens"
+import { DECISION_META, ISSUE_TYPE_META, PALETTE, SEVERITY_META, STATUS_META } from "../uiTokens"
 
 function pageImage(
   side: "source" | "target",
@@ -39,9 +38,9 @@ export function IssueBadge({ index, active }: { index: number; active?: boolean 
         width: 18,
         height: 18,
         borderRadius: 9,
-        background: active ? "#cf1322" : "#fff",
-        color: active ? "#fff" : "#cf1322",
-        border: `1.5px solid ${active ? "#cf1322" : "rgba(180,35,24,0.85)"}`,
+        background: active ? PALETTE.critical : PALETTE.surface,
+        color: active ? PALETTE.surface : PALETTE.critical,
+        border: `1.5px solid ${PALETTE.critical}`,
         fontSize: 11,
         fontWeight: 600,
         lineHeight: 1,
@@ -87,84 +86,82 @@ function PageCompare({
   }
 
   return (
-    <Row gutter={12}>
+    <Row gutter={[14, 14]} className="page-compare">
       {sourceUrl && (
-        <Col span={12}>
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            源文档 · 第 {page} 页
-          </Typography.Text>
-          <div style={{ marginTop: 4 }}>
+        <Col xs={24} xl={12}>
+          <div className="page-compare__panel page-compare__panel--source">
+            <div className="page-compare__panel-head">
+              <span><i />源文档 · 原文</span>
+              <span>第 {page} 页</span>
+            </div>
+            <div className="page-compare__canvas">
             <img
               src={sourceUrl}
               alt={`源文档第 ${page} 页`}
-              style={{ width: "100%", border: "1px solid #d9d9d9", borderRadius: 6 }}
+              className="page-compare__image"
             />
+            </div>
           </div>
         </Col>
       )}
       {targetUrl && (
-        <Col span={sourceUrl ? 12 : 24}>
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            目标文档 · 第 {page} 页（红框为问题位置）
-          </Typography.Text>
-          <div style={{ marginTop: 4, position: "relative" }}>
-            <img
-              src={targetUrl}
-              alt={`目标文档第 ${page} 页`}
-              style={{ width: "100%", border: "1px solid #d9d9d9", borderRadius: 6 }}
-              onLoad={(event) => {
-                const img = event.currentTarget
-                setPageWidth(img.naturalWidth / 2)
-                setPageHeight(img.naturalHeight / 2)
-              }}
-            />
-            {pageWidth > 0 &&
-              bboxGroups.map((group) => {
-                const first = group[0].issue
-                // 组内任一 Issue 激活即整框加粗，便于定位整组。
-                const groupActive = group.some(
-                  ({ issue }) => issue.id === activeIssueId,
-                )
-                return (
-                  <div
-                    key={first.id}
-                    style={{
-                      position: "absolute",
-                      border: groupActive
-                        ? "3px solid #cf1322"
-                        : "2px solid rgba(180,35,24,0.75)",
-                      background: groupActive
-                        ? "rgba(180,35,24,0.2)"
-                        : "rgba(180,35,24,0.08)",
-                      left: `${(first.bbox!.x / pageWidth) * 100}%`,
-                      top: `${(first.bbox!.y / pageHeight) * 100}%`,
-                      width: `${(first.bbox!.width / pageWidth) * 100}%`,
-                      height: `${(first.bbox!.height / pageHeight) * 100}%`,
-                      pointerEvents: "none",
-                    }}
-                  >
-                    {/* 序号角标横排：与列表行首序号对应；同框多问题时
-                        逐个排列（如 ②③），不互相遮挡。 */}
-                    <span
-                      style={{
-                        position: "absolute",
-                        top: -10,
-                        left: -10,
-                        display: "flex",
-                        gap: 2,
-                      }}
-                    >
-                      {group.map(({ issue, index }) => (
-                        <IssueBadge
-                          key={issue.id}
-                          index={index}
-                          active={issue.id === activeIssueId}
-                        />
-                      ))}
-                    </span>
-                  </div>
-                )
-              })}
+        <Col xs={24} xl={sourceUrl ? 12 : 24}>
+          <div className="page-compare__panel page-compare__panel--target">
+            <div className="page-compare__panel-head">
+              <span><i />目标文档 · 译文</span>
+              <span>第 {page} 页 · 红框为问题位置</span>
+            </div>
+            <div className="page-compare__canvas">
+              <div className="page-compare__target-stage">
+                <img
+                  src={targetUrl}
+                  alt={`目标文档第 ${page} 页`}
+                  className="page-compare__image"
+                  onLoad={(event) => {
+                    const img = event.currentTarget
+                    setPageWidth(img.naturalWidth / 2)
+                    setPageHeight(img.naturalHeight / 2)
+                  }}
+                />
+                {pageWidth > 0 &&
+                  bboxGroups.map((group) => {
+                    const first = group[0].issue
+                    // 组内任一 Issue 激活即整框加粗，便于定位整组。
+                    const groupActive = group.some(
+                      ({ issue }) => issue.id === activeIssueId,
+                    )
+                    return (
+                      <div
+                        key={first.id}
+                        style={{
+                          position: "absolute",
+                          border: groupActive
+                            ? `3px solid ${PALETTE.critical}`
+                            : `2px solid ${PALETTE.critical}`,
+                          background: groupActive
+                            ? "rgba(255,82,82,0.18)"
+                            : "rgba(255,82,82,0.08)",
+                          left: `${(first.bbox!.x / pageWidth) * 100}%`,
+                          top: `${(first.bbox!.y / pageHeight) * 100}%`,
+                          width: `${(first.bbox!.width / pageWidth) * 100}%`,
+                          height: `${(first.bbox!.height / pageHeight) * 100}%`,
+                          pointerEvents: "none",
+                        }}
+                      >
+                        <span className="page-compare__badges">
+                          {group.map(({ issue, index }) => (
+                            <IssueBadge
+                              key={issue.id}
+                              index={index}
+                              active={issue.id === activeIssueId}
+                            />
+                          ))}
+                        </span>
+                      </div>
+                    )
+                  })}
+              </div>
+            </div>
           </div>
         </Col>
       )}
@@ -174,15 +171,6 @@ function PageCompare({
 
 /** 复核状态筛选选项。 */
 type ReviewFilter = "all" | "pending" | "done"
-
-/** 严重度排序权重：组内展示取最高严重度。 */
-const SEVERITY_ORDER: Record<string, number> = {
-  critical: 4,
-  high: 3,
-  medium: 2,
-  low: 1,
-  info: 0,
-}
 
 /** 按页内 Issue 列表生成分组：同 bbox 的多条合并为一组（与图上红框
  * 分组同键），无 bbox 的独立成组。返回 [(组键, [issue, index][])]。
@@ -232,7 +220,7 @@ function IssueDetails({
     ["missing_numbers", "extra_numbers"] as const
   ).filter((key) => Array.isArray(metrics[key]) && metrics[key].length)
   return (
-    <Space direction="vertical" size={6} onClick={(e) => e.stopPropagation()}>
+    <Space orientation="vertical" size={6} onClick={(e) => e.stopPropagation()}>
       {!hideLocation && (
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
           {issue.bbox
@@ -243,7 +231,16 @@ function IssueDetails({
       {numberDetail.length > 0 && (
         <Space wrap size={8}>
           {numberDetail.map((key) => (
-            <Tag key={key} color={key === "missing_numbers" ? "red" : "orange"}>
+            <Tag
+              key={key}
+              style={{
+                color: key === "missing_numbers" ? PALETTE.critical : PALETTE.warning,
+                background:
+                  key === "missing_numbers" ? PALETTE.criticalSoft : PALETTE.warningSoft,
+                borderColor:
+                  key === "missing_numbers" ? PALETTE.criticalSoft : PALETTE.warningSoft,
+              }}
+            >
               {key === "missing_numbers" ? "源有目标无" : "目标多出"}：
               {(metrics[key] as (string | number)[]).join("、")}
             </Tag>
@@ -253,7 +250,7 @@ function IssueDetails({
       {/* 原文 → 译文对照：文本类问题（漏译/碎片化/隐形）必须能看到
           两侧内容，否则无法判断是翻译错还是渲染错。 */}
       {(sourceText || targetText) && !numberDetail.length && (
-        <Space direction="vertical" size={2} style={{ fontSize: 12 }}>
+        <Space orientation="vertical" size={2} style={{ fontSize: 12 }}>
           {sourceText && (
             <div>
               <Typography.Text type="secondary">原文：</Typography.Text>
@@ -323,12 +320,11 @@ export function PageDetails({
   const [severityFilter, setSeverityFilter] = useState<string[]>([])
   const [reviewFilter, setReviewFilter] = useState<ReviewFilter>("all")
   const page = report.pages.find((item) => item.page === selected)
-  const totalIssues = report.pages.reduce((sum, p) => sum + p.issues.length, 0)
-  const reviewed = Object.keys(decisions).length
+  const allIssues = useMemo(() => report.pages.flatMap((item) => item.issues), [report.pages])
 
-  // 当前页按筛选条件过滤后的 Issue；红框同步使用过滤结果。
+  // 问题列表覆盖整份文档；点击行会同步切换双栏页码并高亮目标区域。
   const visibleIssues = useMemo(() => {
-    let list = page?.issues ?? []
+    let list = allIssues
     if (severityFilter.length) {
       list = list.filter((issue) => severityFilter.includes(issue.severity))
     }
@@ -338,13 +334,19 @@ export function PageDetails({
       list = list.filter((issue) => decisions[issue.id])
     }
     return list
-  }, [page, severityFilter, reviewFilter, decisions])
+  }, [allIssues, severityFilter, reviewFilter, decisions])
+  const pageVisibleIssues = visibleIssues.filter((issue) => issue.page === selected)
 
   return (
-    <Space direction="vertical" size={12} style={{ width: "100%" }}>
-      <Space wrap>
+    <section className="page-review">
+      <div className="report-section-heading report-section-heading--compare">
+        <Space wrap size={10}>
+          <Typography.Title level={5}>双语对照</Typography.Title>
+          <Tag variant="filled" className="report-count-tag">{report.summary.pages} 页</Tag>
+          {taskId && <span className="page-review__state"><i />复核任务已开启</span>}
+        </Space>
         <Select
-          style={{ minWidth: 220 }}
+          className="page-review__page-select"
           value={selected}
           onChange={(value) => {
             setSelected(value)
@@ -359,181 +361,158 @@ export function PageDetails({
           showSearch
           optionFilterProp="label"
         />
-        {taskId && (
-          <Progress
-            percent={totalIssues ? Math.round((reviewed / totalIssues) * 100) : 100}
-            size="small"
-            style={{ width: 180 }}
-            format={() => `复核 ${reviewed}/${totalIssues}`}
-          />
-        )}
-      </Space>
-
+      </div>
       {page ? (
-        <>
+        <div className="page-review__compare-body">
           {/* key 按页重挂载：换页时清掉上一页的尺寸状态，避免红框按旧尺寸错位闪现。 */}
           <PageCompare
             key={page.page}
             page={page.page}
-            issues={visibleIssues}
+            issues={pageVisibleIssues}
             rendered={rendered}
             activeIssueId={activeIssueId}
           />
-          {page.issues.length > 0 && (
-            <Space wrap>
-              <Select
-                mode="multiple"
-                allowClear
-                placeholder="按严重度筛选"
-                style={{ minWidth: 200 }}
-                value={severityFilter}
-                onChange={setSeverityFilter}
-                options={Object.entries(SEVERITY_META).map(([key, meta]) => ({
-                  value: key,
-                  label: meta.label,
-                }))}
-              />
-              <Segmented
-                value={reviewFilter}
-                onChange={(value) => setReviewFilter(value as ReviewFilter)}
-                options={[
-                  { value: "all", label: `全部 ${page.issues.length}` },
-                  {
-                    value: "pending",
-                    label: `未复核 ${
-                      page.issues.filter((issue) => !decisions[issue.id]).length
-                    }`,
-                  },
-                  {
-                    value: "done",
-                    label: `已复核 ${
-                      page.issues.filter((issue) => decisions[issue.id]).length
-                    }`,
-                  },
-                ]}
-              />
-            </Space>
-          )}
-          {page.issues.length === 0 ? (
-            <Empty
-              image={Empty.PRESENTED_IMAGE_SIMPLE}
-              description="本页没有发现问题。"
-            />
-          ) : visibleIssues.length === 0 ? (
-            <Empty
-              image={Empty.PRESENTED_IMAGE_SIMPLE}
-              description="当前筛选条件下没有匹配的问题，可调整筛选。"
-            />
-          ) : (
-            <Collapse
-              size="small"
-              activeKey={activeIssueId ?? undefined}
-              onChange={(keys) =>
-                setActiveIssueId(
-                  Array.isArray(keys) ? keys[0] ?? null : keys ?? null,
-                )
-              }
-              items={groupIssuesByBbox(visibleIssues).map((group) => {
-                // 组内展示取最高严重度；类型去重后逐个列出。
-                const top = group.reduce((acc, cur) =>
-                  (SEVERITY_ORDER[cur.issue.severity] ?? 0) >
-                  (SEVERITY_ORDER[acc.issue.severity] ?? 0)
-                    ? cur
-                    : acc,
-                )
-                const types = [...new Set(group.map(({ issue }) => issue.type))]
-                const decisionsAll = group.map(({ issue }) => decisions[issue.id])
-                return {
-                  key: group[0].issue.id,
-                  label: (
-                    <Space wrap size={8}>
-                      {/* 组内全部序号角标：与目标页红框上的横排角标一致。 */}
-                      {group.map(({ issue, index }) => (
-                        <IssueBadge
-                          key={issue.id}
-                          index={index}
-                          active={issue.id === activeIssueId}
-                        />
-                      ))}
-                      <Tag color={SEVERITY_META[top.issue.severity]?.color}>
-                        {SEVERITY_META[top.issue.severity]?.label ??
-                          top.issue.severity}
-                      </Tag>
-                      {types.map((type) => (
-                        <Tag
-                          key={type}
-                          bordered={false}
-                          style={{ color: "rgba(0,0,0,0.58)" }}
-                        >
-                          {ISSUE_TYPE_META[type] ?? type}
-                        </Tag>
-                      ))}
-                      <span>{top.issue.description}</span>
-                      {group.length > 1 && (
-                        <Tag bordered={false} color="volcano">
-                          {group.length} 个问题
-                        </Tag>
-                      )}
-                      {!group[0].issue.bbox && (
-                        <Tag bordered={false} color="warning">
-                          图上无定位
-                        </Tag>
-                      )}
-                      {decisionsAll.every(Boolean) && decisionsAll[0] && (
-                        <Tag color={DECISION_META[decisionsAll[0]].color}>
-                          {DECISION_META[decisionsAll[0]].label}
-                        </Tag>
-                      )}
-                    </Space>
-                  ),
-                  children: (
-                    <Space direction="vertical" size={12}>
-                      {/* 组内多条合并展示，但复核判定按 Issue 粒度独立。 */}
-                      {group.map(({ issue }, memberIndex) => (
-                        <div
-                          key={issue.id}
-                          style={
-                            memberIndex > 0
-                              ? {
-                                  borderTop: "1px dashed #d9d9d9",
-                                  paddingTop: 8,
-                                }
-                              : undefined
-                          }
-                        >
-                          {group.length > 1 && (
-                            <Space size={6} style={{ marginBottom: 4 }}>
-                              <IssueBadge
-                                index={group[memberIndex].index}
-                                active={issue.id === activeIssueId}
-                              />
-                              <Tag bordered={false} color="error">
-                                {ISSUE_TYPE_META[issue.type] ?? issue.type}
-                              </Tag>
-                            </Space>
-                          )}
-                          <IssueDetails
-                            issue={issue}
-                            decisions={decisions}
-                            onDecide={onDecide}
-                            onHighlight={setActiveIssueId}
-                            hideLocation={memberIndex > 0}
-                          />
-                        </div>
-                      ))}
-                    </Space>
-                  ),
-                }
-              })}
-            />
-          )}
-        </>
+        </div>
       ) : (
         <Empty
           description="选择页面查看详情。"
           image={Empty.PRESENTED_IMAGE_SIMPLE}
         />
       )}
-    </Space>
+
+      <div className="issue-list-heading">
+        <Space wrap size={10}>
+          <Typography.Title level={5}>问题列表</Typography.Title>
+          <Tag variant="filled" className="issue-list-count">{allIssues.length}</Tag>
+        </Space>
+        <Space wrap size={8}>
+          <Select
+            mode="multiple"
+            allowClear
+            placeholder="按严重度筛选"
+            className="issue-list-filter"
+            value={severityFilter}
+            onChange={setSeverityFilter}
+            options={Object.entries(SEVERITY_META).map(([key, meta]) => ({
+              value: key,
+              label: meta.label,
+            }))}
+          />
+          <Segmented
+            value={reviewFilter}
+            onChange={(value) => setReviewFilter(value as ReviewFilter)}
+            options={[
+              { value: "all", label: `全部 ${allIssues.length}` },
+              {
+                value: "pending",
+                label: `待处理 ${allIssues.filter((issue) => !decisions[issue.id]).length}`,
+              },
+              {
+                value: "done",
+                label: `已复核 ${allIssues.filter((issue) => decisions[issue.id]).length}`,
+              },
+            ]}
+          />
+        </Space>
+      </div>
+
+      <Table<Issue>
+        className="issue-table"
+        rowKey="id"
+        size="small"
+        dataSource={visibleIssues}
+        pagination={{ pageSize: 8, hideOnSinglePage: true, showSizeChanger: false }}
+        locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前筛选条件下没有问题" /> }}
+        columns={[
+          {
+            title: "级别",
+            dataIndex: "severity",
+            width: 104,
+            render: (severity: string) => (
+              <Tag
+                variant="filled"
+                style={{
+                  color: SEVERITY_META[severity]?.color,
+                  background: SEVERITY_META[severity]?.background,
+                }}
+              >
+                <i className="issue-severity-dot" style={{ background: SEVERITY_META[severity]?.color }} />
+                {SEVERITY_META[severity]?.label ?? severity}
+              </Tag>
+            ),
+          },
+          {
+            title: "问题类型",
+            dataIndex: "type",
+            width: 138,
+            render: (type: string, issue) => (
+              <Tag
+                variant="filled"
+                style={{
+                  color: SEVERITY_META[issue.severity]?.color,
+                  background: SEVERITY_META[issue.severity]?.background,
+                }}
+              >
+                {ISSUE_TYPE_META[type] ?? type}
+              </Tag>
+            ),
+          },
+          {
+            title: "位置",
+            dataIndex: "page",
+            width: 118,
+            render: (issuePage: number, issue) =>
+              `第 ${issuePage} 页${issue.bbox ? " · 已定位" : " · 页级"}`,
+          },
+          {
+            title: "问题描述",
+            dataIndex: "description",
+            ellipsis: true,
+          },
+          {
+            title: "状态",
+            width: 104,
+            render: (_, issue) => {
+              const decision = decisions[issue.id]
+              return decision ? (
+                <Tag
+                  variant="filled"
+                  style={{
+                    color: DECISION_META[decision].color,
+                    background: DECISION_META[decision].background,
+                  }}
+                >
+                  {DECISION_META[decision].label}
+                </Tag>
+              ) : (
+                <Tag variant="filled" className="issue-pending-tag">待处理</Tag>
+              )
+            },
+          },
+        ]}
+        expandable={{
+          expandedRowKeys: activeIssueId ? [activeIssueId] : [],
+          onExpand: (expanded, issue) => {
+            setSelected(issue.page)
+            setActiveIssueId(expanded ? issue.id : null)
+          },
+          expandedRowRender: (issue) => (
+            <IssueDetails
+              issue={issue}
+              decisions={decisions}
+              onDecide={onDecide}
+              onHighlight={setActiveIssueId}
+            />
+          ),
+        }}
+        onRow={(issue) => ({
+          className: issue.id === activeIssueId ? "issue-table__row--active" : "",
+          onClick: () => {
+            setSelected(issue.page)
+            setActiveIssueId(issue.id)
+          },
+        })}
+      />
+    </section>
   )
 }

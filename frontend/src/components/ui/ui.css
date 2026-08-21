@@ -1,0 +1,278 @@
+/* 管理页面视觉基线：页面只组合这些结构，不重复发明标题、卡片和表格样式。 */
+
+.qa-page {
+  width: 100%;
+  min-width: 0;
+}
+
+.qa-page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 72px;
+  gap: var(--qa-space-6);
+  padding: 0 var(--qa-space-8);
+  border-bottom: 1px solid var(--qa-border);
+  background: var(--qa-surface);
+}
+
+.qa-page-header__content {
+  min-width: 0;
+}
+
+.qa-page-header__eyebrow {
+  display: block;
+  margin-bottom: var(--qa-space-1);
+  color: var(--qa-info);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+}
+
+.qa-page-header__title-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--qa-space-2);
+}
+
+.qa-page-header__meta {
+  color: var(--qa-text-secondary);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 18px;
+}
+
+.qa-page-header h1,
+.qa-page-section h2 {
+  margin: 0;
+  color: var(--qa-text);
+  font-weight: 600;
+}
+
+.qa-page-header h1 {
+  font-size: 16px;
+  line-height: 24px;
+}
+
+.qa-page-header p,
+.qa-page-section p {
+  margin: var(--qa-space-1) 0 0;
+  color: var(--qa-text-secondary);
+}
+
+.qa-page-header p {
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.qa-page-header__extra,
+.qa-page-section__extra {
+  flex: none;
+}
+
+.qa-page-section {
+  overflow: hidden;
+  border: 1px solid var(--qa-border);
+  border-radius: var(--qa-radius-md);
+  background: var(--qa-surface);
+}
+
+.qa-page-section__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--qa-space-4);
+  min-height: 68px;
+  padding: 0 var(--qa-space-6);
+  border-bottom: 1px solid var(--qa-border);
+}
+
+.qa-page-section h2 {
+  font-size: 14px;
+  line-height: 22px;
+}
+
+.qa-page-section p {
+  font-size: 12px;
+}
+
+.qa-page-section__body {
+  min-width: 0;
+}
+
+.qa-data-table.ant-table-wrapper .ant-table-tbody > tr > td {
+  /* AntD CSS-in-JS 在运行时注入单元格 shorthand；基础组件在此锁定正文对齐基线。 */
+  padding-inline: var(--qa-space-6) !important;
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+
+.qa-data-table.ant-table-wrapper .ant-table-tbody > tr > td.history-record-actions {
+  padding-inline: var(--qa-space-4) !important;
+}
+
+.qa-data-table .ant-table-tbody > tr:last-child > td {
+  border-bottom: 0;
+}
+
+.qa-data-table .ant-pagination {
+  min-height: 64px;
+  align-items: center;
+  margin: 0;
+  padding: 0 var(--qa-space-6);
+  border-top: 1px solid var(--qa-border);
+}
+
+.qa-table-search {
+  width: 320px;
+}
+
+.qa-status-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 62px;
+  min-height: 20px;
+  justify-content: center;
+  margin-inline-end: 0;
+  border-radius: var(--qa-radius-xs);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.qa-status-tag__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--qa-radius-full);
+}
+
+.history-page {
+  min-height: 100%;
+  background: var(--qa-canvas);
+}
+
+.history-records {
+  margin: var(--qa-space-8);
+}
+
+.history-records .qa-page-section__header {
+  justify-content: flex-start;
+}
+
+.history-records .qa-page-section__extra,
+.history-records__filters {
+  width: 100%;
+}
+
+.history-records__status-filter {
+  width: 136px;
+}
+
+.history-record-time.ant-typography {
+  color: var(--qa-text-secondary);
+  font-size: 14px;
+  line-height: 22px;
+  white-space: nowrap;
+}
+
+.history-rerun-modal__lead.ant-typography {
+  font-size: 14px;
+  line-height: 22px;
+}
+
+.history-rerun-modal__help.ant-typography {
+  display: block;
+  margin-top: var(--qa-space-2);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.history-rerun-modal__password-label.ant-typography {
+  margin: var(--qa-space-3) 0 var(--qa-space-2);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.qa-empty-state {
+  margin-block: var(--qa-space-6);
+}
+
+.qa-empty-state--compact {
+  margin-block: var(--qa-space-5);
+}
+
+.qa-empty-state__description {
+  display: flex;
+  flex-direction: column;
+  gap: var(--qa-space-1);
+  color: var(--qa-text-secondary);
+}
+
+.qa-empty-state__description strong {
+  color: var(--qa-text);
+  font-weight: 500;
+}
+
+.qa-form-drawer__title {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.qa-form-drawer__title small {
+  color: var(--qa-text-secondary);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+@media (max-width: 1023px) {
+  .qa-page-header {
+    padding-inline: var(--qa-space-6);
+  }
+
+  .history-records {
+    margin: var(--qa-space-6);
+  }
+}
+
+@media (max-width: 767px) {
+  .qa-page-header,
+  .qa-page-section__header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .qa-page-header {
+    justify-content: center;
+    padding-block: var(--qa-space-3);
+  }
+
+  .history-records {
+    margin: var(--qa-space-3);
+  }
+
+  .history-records .qa-page-section__header {
+    min-height: 112px;
+    padding-block: var(--qa-space-3);
+  }
+
+  .history-records__filters {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .qa-page-header__extra .ant-btn,
+  .qa-page-section__extra,
+  .qa-page-section__extra .ant-space,
+  .qa-table-search {
+    width: 100%;
+  }
+
+  .history-records__status-filter {
+    width: 100%;
+  }
+
+  .qa-data-table.ant-table-wrapper .ant-table-tbody > tr > td {
+    padding-inline: var(--qa-space-2) !important;
+  }
+}

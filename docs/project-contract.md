@@ -115,7 +115,7 @@ Reporter → QAReport/JSON
 界面化分层（2025-08 增补；2025-08 二次拆分为双发行包）：
 
 ```text
-webapp/（React+Vite+TS 前端）
+frontend/（React+Vite+TS 前端）
   ↓ HTTP /api
 server/src/document_qa_server/api/（FastAPI 协议层：DTO、状态码映射、静态挂载）
   ↓

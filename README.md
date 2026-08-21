@@ -81,7 +81,7 @@ python -m document_qa source.pdf target.pdf --output qa-report.json
 启动 React+Vite 开发服务器：
 
 ```bash
-cd webapp && bun run dev
+cd frontend && bun run dev
 ```
 
 前端服务默认运行在 http://localhost:5180/，会自动代理 `/api` 请求到后端服务。
@@ -95,7 +95,7 @@ cd webapp && bun run dev
 .venv/bin/document-qa-server --port 8765
 
 # 终端 2：启动前端
-cd webapp && bun run dev
+cd frontend && bun run dev
 ```
 
 启动完成后访问 http://localhost:5180/ 即可使用 Web 界面。

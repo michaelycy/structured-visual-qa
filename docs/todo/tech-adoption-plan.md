@@ -226,9 +226,9 @@
 **方案**：
 
 1. 仓库根新增 `deploy/Dockerfile`：
-   - 多阶段构建：builder 阶段 `pip install core/ server/` + webapp 产物
+   - 多阶段构建：builder 阶段 `pip install core/ server/` + frontend 产物
      （`bun run build` 或在容器内 node 构建）；
-   - 运行阶段仅含 venv + webapp/dist，uvicorn 托管 API 与静态前端
+   - 运行阶段仅含 venv + frontend/dist，uvicorn 托管 API 与静态前端
      （FastAPI `StaticFiles` 挂载 `/`）。
 2. `deploy/docker-compose.yml`：单服务，卷挂载
      `./webapp-artifacts`（产物持久化）与 `./examples`（样例，只读）。

@@ -830,7 +830,7 @@ draft → 样本验证 → published → archived
 ## 15. 当前限制
 
 - CLI 尚无单独的 `validate-profile` 子命令，加载 Profile 时会自动校验；
-- 当前没有 Profile 数据库，存储为 JSON 文件；Web 配置界面已落地（`/api/profile/*` 路由 + webapp 的 ProfileEditor / ProfileManager）；
+- Profile 已保存到 SQLite 版本表；Web 配置界面已落地（`/api/profile/*` 路由 + frontend 的 ProfileEditor / ProfileManager）；
 - Profile 版本号由配置 JSON 的 `version` 字段维护，尚未由服务端自动递增；
 - 修改配置不会创建自动 Changelog；
 - 新增检测指标仍需要先修改代码和 RuleProfile Schema，然后才能在 JSON 中配置。

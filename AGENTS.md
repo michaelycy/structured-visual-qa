@@ -15,8 +15,8 @@
 
 - `core/`：**document-qa** 核心引擎发行包（解析/分组/对齐/匹配/检测/评分/报告 + `document-qa` CLI），零 HTTP 依赖，可独立安装给其他系统复用
 - `server/`：**document-qa-server** 服务发行包（api 协议层 + services 应用层），依赖 core；入口 `document-qa-server`
-- `webapp/`：React+Vite+TS 前端
-- 依赖方向恒为 `webapp → server(api → services) → core`；core 禁止 import fastapi/uvicorn 或 server 包
+- `frontend/`：React+Vite+TS 前端
+- 依赖方向恒为 `frontend → server(api → services) → core`；core 禁止 import fastapi/uvicorn 或 server 包
 
 ## 常用命令
 
@@ -30,8 +30,8 @@
 
 # 界面化：API 服务（127.0.0.1:8765）与前端（127.0.0.1:5180，/api 已代理）
 .venv/bin/document-qa-server --port 8765
-cd webapp && bun run dev
-cd webapp && bun run build
+cd frontend && bun run dev
+cd frontend && bun run build
 
 PYTHONPATH=core/src .venv/bin/python -m unittest discover -s tests -v
 .venv/bin/python -m compileall -q core/src server/src tests

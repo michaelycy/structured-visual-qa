@@ -328,6 +328,7 @@ position + size + type + order = 1.0
 | `text_fragmented` | 目标文字被竖排/拆散成字母碎片（窄列排版破坏） |
 | `font_grow` | 目标字号明显放大（换行爆炸前兆） |
 | `invisible_text` | 目标文字颜色与页面背景同色（视觉不可见） |
+| `text_alignment_changed` | 段落水平对齐方式变化（如右对齐变左对齐） |
 
 关闭检测器意味着对应 Issue 不再产生，也不参与扣分和状态判定。建议只在明确不适用时关闭，不要通过关闭检测器掩盖阈值问题。
 
@@ -459,6 +460,22 @@ shift = max(abs(x_shift_ratio), abs(y_shift_ratio))
 
 当输入为 Word/PPT/Excel 等 Office 格式时，系统先经 LibreOffice 归一化为 PDF。归一化会引入约 1–3% 的版面转换噪声，该容差会**自动叠加**到偏移类阈值（`shifted_ratio`/`severely_shifted_ratio`）上，纯 PDF 流水线不受影响。报告 `metadata.normalized_from` 会标记转换来源。
 
+### 7.7 段落对齐方式推断
+
+系统先按栏位、行距、字号和水平重叠把相邻文本行聚成临时段落流，再比较左边缘、右边缘和中心线的稳定性，推断 `left/right/center`。主要阈值如下：
+
+| 字段 | 默认值 | 作用 |
+| --- | ---: | --- |
+| `alignment_min_lines` | 3 | 少于该行数不推断对齐方式 |
+| `alignment_line_gap_ratio` | 0.6 | 相邻行最大间距，相对行高归一化 |
+| `alignment_horizontal_overlap_ratio` | 0.3 | 相邻行最小水平重叠比例 |
+| `alignment_font_size_tolerance_ratio` | 0.15 | 同一文本流允许的字号差异 |
+| `alignment_edge_tolerance_ratio` | 0.015 | 稳定边缘允许的页面宽度误差 |
+| `alignment_confidence_margin` | 0.01 | 最优对齐特征相对次优特征的最小优势 |
+| `alignment_group_match_ratio` | 0.6 | 源文本流配对到同一目标文本流的最小多数比例 |
+
+命中对齐变化后，系统输出 `HIGH TEXT_ALIGNMENT_CHANGED`，并抑制同一段落内由换行和对齐变化产生的重复行级 `REGION_SHIFTED/REGION_RESIZED`。
+
 ## 8. Scoring 配置
 
 ### 8.1 状态分数线
@@ -542,6 +559,7 @@ High 存在或 Score < 90     → REVIEW
 | `number_mismatch` | 是 | 12 |
 | `untranslated_text` | 是 | 12 |
 | `glossary_violation` | 是 | 12 |
+| `text_alignment_changed` | 是 | 10 |
 | `other` | 预留 | 10 |
 
 “尚无检测器”表示当前不会自动产生该 Issue，但配置键仍须保留，以保证未来增加检测器时旧 Profile 的评分行为明确。
@@ -818,4 +836,3 @@ draft → 样本验证 → published → archived
 - 新增检测指标仍需要先修改代码和 RuleProfile Schema，然后才能在 JSON 中配置。
 
 后续 FastAPI 和 React 界面应直接复用当前 `RuleProfile` 与导出的 JSON Schema。
-

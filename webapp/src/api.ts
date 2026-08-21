@@ -102,11 +102,30 @@ export interface HistoryRecord {
   target_path?: string | null
 }
 
+export interface SampleRecord {
+  sample_id: string
+  name: string
+  description: string
+  origin: "builtin" | "user"
+  status: "active" | "archived"
+  source_name: string
+  source_path: string
+  source_format: string
+  target_name: string
+  target_path: string
+  target_format: string
+  source_language: string
+  target_language: string
+  created_at: string
+  updated_at: string
+}
+
 export interface CompareSubmitResponse {
   task_id: string | null
   status?: string
   report?: QAReport
   rendered?: { source: string[]; target: string[] }
+  history_record_id?: string | null
 }
 
 export interface TaskPollResponse {
@@ -254,4 +273,56 @@ export const api = {
     ),
   historyItem: (recordId: string) =>
     request<HistoryRecord>(`/api/history/item/${encodeURIComponent(recordId)}`),
+  sampleList: (includeArchived = false) =>
+    request<{ samples: SampleRecord[] }>(
+      `/api/samples?include_archived=${includeArchived}`,
+    ).then((r) => r.samples),
+  sampleCreate: async (
+    name: string,
+    description: string,
+    sourceLanguage: string,
+    targetLanguage: string,
+    source: File,
+    target: File,
+  ) => {
+    const body = new FormData()
+    body.append("name", name)
+    body.append("description", description)
+    body.append("source_language", sourceLanguage)
+    body.append("target_language", targetLanguage)
+    body.append("source", source)
+    body.append("target", target)
+    const response = await fetch("/api/samples", { method: "POST", body })
+    if (!response.ok) {
+      const payload = await response.json().catch(() => null)
+      throw new Error(payload?.detail ?? `创建样本失败 (HTTP ${response.status})`)
+    }
+    return response.json() as Promise<SampleRecord>
+  },
+  sampleUpdate: (
+    sampleId: string,
+    name: string,
+    description: string,
+    sourceLanguage: string,
+    targetLanguage: string,
+  ) =>
+    request<SampleRecord>(`/api/samples/${encodeURIComponent(sampleId)}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        name,
+        description,
+        source_language: sourceLanguage,
+        target_language: targetLanguage,
+      }),
+    }),
+  sampleArchive: (sampleId: string) =>
+    request<{ archived: string }>(
+      `/api/samples/${encodeURIComponent(sampleId)}`,
+      { method: "DELETE" },
+    ),
+  sampleUse: (sampleId: string) =>
+    request<SampleRecord>(
+      `/api/samples/${encodeURIComponent(sampleId)}/use`,
+      { method: "POST" },
+    ),
 }

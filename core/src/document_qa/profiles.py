@@ -97,6 +97,8 @@ class DetectorToggles(SchemaModel):
     font_grow: bool = True
     # 目标文字颜色与页面背景同色（视觉不可见，如白字白底）。
     invisible_text: bool = True
+    # 段落级水平对齐方式发生变化（如右对齐变左对齐）。
+    text_alignment_changed: bool = True
 
 
 class SeverityBand(SchemaModel):
@@ -198,6 +200,20 @@ class DetectorThresholds(SchemaModel):
     # 术语/文本缺失）在该页抑制并显式提示。
     vectorized_min_source_chars: int = Field(default=30, ge=1, le=10000)
     vectorized_max_target_ratio: float = Field(default=0.1, ge=0, le=1)
+    # 对齐检测先把相邻行聚成临时文本流，再根据左右边缘/中心线稳定性
+    # 推断 LEFT/RIGHT/CENTER。所有比例均相对页面或行高归一化。
+    alignment_min_lines: int = Field(default=3, ge=2, le=20)
+    alignment_line_gap_ratio: float = Field(default=0.6, ge=0, le=3)
+    alignment_horizontal_overlap_ratio: float = Field(default=0.3, ge=0, le=1)
+    alignment_font_size_tolerance_ratio: float = Field(default=0.15, ge=0, le=1)
+    alignment_edge_tolerance_ratio: float = Field(default=0.015, ge=0, le=0.2)
+    alignment_confidence_margin: float = Field(default=0.01, ge=0, le=0.2)
+    alignment_group_match_ratio: float = Field(default=0.6, ge=0, le=1)
+    # 短标签的文字墨迹宽度会随语言自然变化；高度和字号稳定时不把
+    # 单纯宽度缩短当作 Region 尺寸剧变。
+    text_label_max_chars: int = Field(default=30, ge=1, le=200)
+    text_resize_height_tolerance_ratio: float = Field(default=0.2, ge=0, le=1)
+    text_resize_font_tolerance_ratio: float = Field(default=0.1, ge=0, le=1)
 
     def band_severity(
         self, bands: list[SeverityBand], value: float, default: Severity
@@ -274,6 +290,7 @@ class ScoringSettings(SchemaModel):
             IssueType.GLOSSARY_VIOLATION: 12.0,
             IssueType.INVISIBLE_TEXT: 25.0,
             IssueType.TEXT_VECTORIZED: 0.0,
+            IssueType.TEXT_ALIGNMENT_CHANGED: 10.0,
             IssueType.OTHER: 10.0,
         }
     )

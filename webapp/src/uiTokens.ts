@@ -82,4 +82,5 @@ export const ISSUE_TYPE_META: Record<string, string> = {
   untranslated_text: "疑似漏译",
   invisible_text: "隐形文字",
   text_vectorized: "文字已转曲",
+  text_alignment_changed: "对齐方式变化",
 }

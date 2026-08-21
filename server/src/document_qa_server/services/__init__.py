@@ -15,6 +15,7 @@ from document_qa_server.services.normalization_service import (
 )
 from document_qa_server.services.profile_service import ProfileService
 from document_qa_server.services.review_service import ReviewService
+from document_qa_server.services.sample_service import SampleService
 from document_qa_server.services.verify_service import VerifyService, VerifyStageResult
 
 __all__ = [
@@ -26,6 +27,7 @@ __all__ = [
     "NormalizationService",
     "ProfileService",
     "ReviewService",
+    "SampleService",
     "VerifyService",
     "VerifyStageResult",
 ]

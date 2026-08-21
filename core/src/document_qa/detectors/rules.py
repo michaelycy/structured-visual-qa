@@ -1,5 +1,9 @@
 """MVP 使用的布局、缺失和字体规则检测。"""
 
+from document_qa.detectors.alignment import (
+    AlignmentDetectionResult,
+    TextAlignmentDetector,
+)
 from document_qa.matching.geometry import (
     intersection_ratio,
     position_similarity,
@@ -15,6 +19,7 @@ from document_qa.schemas import (
     PageMatchResult,
     Region,
     Severity,
+    StructuredDiff,
     TEXT_TYPES,
 )
 
@@ -28,6 +33,7 @@ class RuleDetector:
         """初始化带版本的检测器开关和阈值。"""
 
         self.profile = profile or default_rule_profile()
+        self.alignment_detector = TextAlignmentDetector(self.profile)
 
     def detect(
         self, source: Page, target: Page, match_result: PageMatchResult
@@ -38,13 +44,23 @@ class RuleDetector:
         enabled = self.profile.detectors.enabled
         if enabled.missing_element:
             issues.extend(self._detect_missing(source, target, match_result))
+        alignment_result = AlignmentDetectionResult()
+        if enabled.text_alignment_changed:
+            alignment_result = self.alignment_detector.detect(
+                source, target, match_result
+            )
+            issues.extend(alignment_result.issues)
         if (
             enabled.region_shifted
             or enabled.font_shrink
             or enabled.font_grow
             or enabled.region_resized
         ):
-            issues.extend(self._detect_geometry(target, match_result))
+            issues.extend(
+                self._detect_geometry(
+                    source, target, match_result, alignment_result
+                )
+            )
         if enabled.text_fragmented:
             issues.extend(self._detect_fragmented(target, source, match_result))
         if enabled.invisible_text:
@@ -117,10 +133,15 @@ class RuleDetector:
         )
 
     def _detect_geometry(
-        self, target: Page, result: PageMatchResult
+        self,
+        source: Page,
+        target: Page,
+        result: PageMatchResult,
+        alignment_result: AlignmentDetectionResult,
     ) -> list[Issue]:
         """检测显著位移、尺寸剧变与字号变化，并保留触发规则的比例。"""
 
+        source_regions = {region.id: region for region in source.regions}
         target_regions = {region.id: region for region in target.regions}
         thresholds = self.profile.detectors.thresholds
         enabled = self.profile.detectors.enabled
@@ -128,7 +149,12 @@ class RuleDetector:
         for diff in result.diffs:
             target_region = target_regions[diff.target_region_id]
             shift = max(abs(diff.x_shift_ratio), abs(diff.y_shift_ratio))
-            if enabled.region_shifted and shift > thresholds.shifted_ratio:
+            if (
+                enabled.region_shifted
+                and diff.target_region_id
+                not in alignment_result.suppressed_shift_target_ids
+                and shift > thresholds.shifted_ratio
+            ):
                 severity = (
                     Severity.HIGH
                     if shift > thresholds.severely_shifted_ratio
@@ -209,7 +235,17 @@ class RuleDetector:
             resize = max(
                 abs(diff.width_change_ratio), abs(diff.height_change_ratio)
             )
-            if enabled.region_resized and resize > thresholds.region_resize_ratio:
+            source_region = source_regions[diff.source_region_id]
+            expected_text_width_change = self._is_expected_text_width_change(
+                source_region, target_region, diff
+            )
+            if (
+                enabled.region_resized
+                and diff.target_region_id
+                not in alignment_result.suppressed_resize_target_ids
+                and not expected_text_width_change
+                and resize > thresholds.region_resize_ratio
+            ):
                 issues.append(
                     Issue(
                         id=f"p{target.page}-resize-{diff.target_region_id}",
@@ -233,6 +269,36 @@ class RuleDetector:
                     )
                 )
         return issues
+
+    def _is_expected_text_width_change(
+        self, source: Region, target: Region, diff: StructuredDiff
+    ) -> bool:
+        """识别短标签因跨语言字数变化造成的正常文字墨迹宽度变化。"""
+
+        if source.type not in self._TEXT_TYPES or target.type not in self._TEXT_TYPES:
+            return False
+        source_text = source.content.text if source.content else None
+        target_text = target.content.text if target.content else None
+        if not source_text or not target_text:
+            return False
+        thresholds = self.profile.detectors.thresholds
+        source_chars = len("".join(source_text.split()))
+        target_chars = len("".join(target_text.split()))
+        if max(source_chars, target_chars) > thresholds.text_label_max_chars:
+            return False
+        if (
+            abs(diff.height_change_ratio)
+            > thresholds.text_resize_height_tolerance_ratio
+        ):
+            return False
+        font_change = diff.font_size_change_ratio
+        if (
+            font_change is not None
+            and abs(font_change) > thresholds.text_resize_font_tolerance_ratio
+        ):
+            return False
+        # 只豁免宽度驱动的变化；高度剧变仍由 Region resize 规则报告。
+        return abs(diff.width_change_ratio) > abs(diff.height_change_ratio)
 
     def _detect_fragmented(
         self, target: Page, source: Page, result: PageMatchResult

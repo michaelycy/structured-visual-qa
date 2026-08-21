@@ -34,7 +34,8 @@
 - DOCX、PPTX、XLSX 等 Office 格式的原生结构解析（多格式经 LibreOffice 归一化支持，原生解析仍排除）；
 - 扫描 PDF 的自动 OCR；
 - 复杂表格结构恢复；
-- Web UI、数据库、对象存储和任务队列；
+- 远程数据库、对象存储和任务队列；server 可使用嵌入式 SQLite 保存
+  样本、配置、复核与完整报告等业务数据，原始文档和渲染产物仍存文件系统；
 - 多模态模型自动复核；
 - 翻译语义质量判断。
 
@@ -48,6 +49,7 @@
 | 数据模型 | Pydantic v2 |
 | PDF 引擎 | PyMuPDF |
 | Office 归一化 | LibreOffice headless（server 层调用，core 零依赖；MPL 2.0） |
+| 业务数据持久化 | SQLite（server 层内嵌；WAL、外键约束、版本化迁移） |
 | 数值计算 | NumPy |
 | 最优匹配 | SciPy `linear_sum_assignment` |
 | 测试 | Python `unittest`，后续可迁移 pytest |
@@ -119,6 +121,8 @@ server/src/document_qa_server/api/（FastAPI 协议层：DTO、状态码映射�
   ↓
 server/src/document_qa_server/services/（应用服务：任务互斥、产物目录、用例编排）
   ↓
+server/src/document_qa_server/persistence/（SQLite Schema、迁移、Repository）
+  ↓
 core/src/document_qa（核心引擎：pipeline/matching/detectors/scoring，不感知 HTTP）
 ```
 
@@ -126,6 +130,8 @@ core/src/document_qa（核心引擎：pipeline/matching/detectors/scoring，不�
 - core 可独立安装，作为库或 CLI 嵌入其他系统，禁止 import fastapi/uvicorn 或 server 包；
 - API 层不 import 核心引擎模块，只调用 services；
 - services 返回核心模型或纯数据，不感知 HTTP；
+- persistence 只服务于 server，负责事务、外键、数据迁移与查询；core 禁止
+  import persistence 或 sqlite3；
 - API 的请求 DTO 与核心 schemas 分开演化，互不强制联动。
 
 - Parser 不负责问题判定；
@@ -174,6 +180,11 @@ Critical 问题优先于平均分。规则阈值必须集中配置，禁止散�
 - JSON 报告可重新通过 `QAReport` Schema 校验；
 - 不包含密钥、令牌、文档正文样本或生成产物；
 - Python 编译检查通过。
+- SQLite 必须开启外键约束；Schema 迁移可重复执行且不得重复导入数据；
+- 数据库内每张业务表和每个字段必须在 `schema_descriptions` 数据字典中有
+  中文用途说明；建表 SQL 同时保留中文注释；
+- 对比记录与完整 `QAReport` 必须在同一事务提交，读取后仍可通过当前
+  `QAReport` Schema 校验；
 
 ## 12. 变更规则
 
@@ -182,4 +193,5 @@ Critical 问题优先于平均分。规则阈值必须集中配置，禁止散�
 - 匹配权重和严重度阈值变更必须附带 Golden Sample 结果；
 - 更换 PDF 引擎必须保持 Schema 和坐标规范不变；
 - 引入 OCR、Embedding 或多模态 API 时必须增加可关闭的适配层，并在测试中 Mock 外部认证 API。
-
+- SQLite Schema 变更必须新增单向版本迁移，禁止修改已发布迁移；迁移必须
+  幂等并保留可审计记录，不得静默丢弃旧 JSON 数据。

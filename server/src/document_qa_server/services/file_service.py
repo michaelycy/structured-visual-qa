@@ -106,7 +106,11 @@ class FileService:
         样例库保持只读；比较任务的所有产物都进 webapp-artifacts/。
         """
 
-        if "/" in name or "\\" in name or not name.lower().endswith(".pdf"):
+        if (
+            "/" in name
+            or "\\" in name
+            or Path(name).suffix.lower() not in ACCEPTED_SUFFIXES
+        ):
             raise ValueError("无效样例文件名")
         source = self._samples_dir / name
         if not source.is_file():
@@ -117,8 +121,12 @@ class FileService:
         return target
 
     def list_samples(self) -> list[str]:
-        """列出样例目录中的 PDF 文件名，供前端下拉选择。"""
+        """列出样例目录中的全部可比较文档，兼容旧单文件示例下拉。"""
 
         if not self._samples_dir.is_dir():
             return []
-        return sorted(path.name for path in self._samples_dir.glob("*.pdf"))
+        return sorted(
+            path.name
+            for path in self._samples_dir.iterdir()
+            if path.is_file() and path.suffix.lower() in ACCEPTED_SUFFIXES
+        )

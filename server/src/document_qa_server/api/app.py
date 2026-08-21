@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+from document_qa_server.persistence import Database
 from document_qa_server.services import (
     CompareHistoryService,
     CompareService,
@@ -16,6 +17,7 @@ from document_qa_server.services import (
     NormalizationService,
     ProfileService,
     ReviewService,
+    SampleService,
     VerifyService,
 )
 from document_qa_server.settings import ServerSettings, load_settings
@@ -31,17 +33,23 @@ def create_app(
     config = settings or load_settings()
     root = artifacts_dir or config.artifacts_dir
     root.mkdir(parents=True, exist_ok=True)
+    database = Database(artifacts_dir=root)
 
     # 服务实例在应用级创建一次；互斥锁因此对全部请求生效。
     compare_service = CompareService(artifacts_dir=root)
     verify_service = VerifyService(artifacts_dir=root)
-    profile_service = ProfileService(artifacts_dir=root)
+    profile_service = ProfileService(artifacts_dir=root, database=database)
     file_service = FileService(
         artifacts_dir=root,
         samples_dir=config.samples_dir,
         max_upload_bytes=config.max_upload_bytes,
     )
     normalizer = NormalizationService(artifacts_dir=root)
+    sample_service = SampleService(
+        artifacts_dir=root,
+        samples_dir=config.samples_dir,
+        database=database,
+    )
 
     app = FastAPI(title="Structured Visual QA", version="0.1.0")
     # 前端开发服务器运行在其他端口，需要允许跨源访问本 API。
@@ -58,9 +66,11 @@ def create_app(
     app.state.profiles = profile_service
     app.state.files = file_service
     app.state.normalizer = normalizer
-    app.state.reviews = ReviewService(artifacts_dir=root)
-    app.state.history = CompareHistoryService(artifacts_dir=root)
-    app.state.glossaries = GlossaryService(artifacts_dir=root)
+    app.state.database = database
+    app.state.samples = sample_service
+    app.state.reviews = ReviewService(artifacts_dir=root, database=database)
+    app.state.history = CompareHistoryService(artifacts_dir=root, database=database)
+    app.state.glossaries = GlossaryService(artifacts_dir=root, database=database)
     # 导出路由需要产物根目录；异步模式开关来自配置。
     app.state.artifacts_dir = root
     app.state.async_mode = config.async_mode
@@ -72,6 +82,7 @@ def create_app(
     from document_qa_server.api.routes_normalize import router as normalize_router
     from document_qa_server.api.routes_report import router as report_router
     from document_qa_server.api.routes_review import router as review_router
+    from document_qa_server.api.routes_samples import router as samples_router
     from document_qa_server.api.routes_profile import router as profile_router
     from document_qa_server.api.routes_verify import router as verify_router
 
@@ -81,6 +92,7 @@ def create_app(
     app.include_router(files_router)
     app.include_router(normalize_router)
     app.include_router(review_router)
+    app.include_router(samples_router)
     app.include_router(history_router)
     app.include_router(glossary_router)
     app.include_router(report_router)

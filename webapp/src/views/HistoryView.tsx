@@ -100,9 +100,12 @@ function RerunModal({
 }
 
 export function HistoryView({
+  refreshToken,
   onReopen,
   onRerun,
 }: {
+  /** 每次比较成功落盘后变化，驱动列表重新读取服务端记录。 */
+  refreshToken: number
   onReopen: (record: HistoryRecord) => void
   /** 重新执行比较：profile 为 null 沿用工作台当前配置；密码不落历史需重输。 */
   onRerun: (
@@ -128,7 +131,7 @@ export function HistoryView({
         messageApi.error(exc instanceof Error ? exc.message : String(exc)),
       )
       .finally(() => setLoading(false))
-  }, [messageApi])
+  }, [messageApi, refreshToken])
 
   const reopen = async (recordId: string) => {
     try {

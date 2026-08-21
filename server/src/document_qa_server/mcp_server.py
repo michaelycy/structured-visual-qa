@@ -17,6 +17,7 @@ from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 
 from document_qa.profiles import default_rule_profile
+from document_qa_server.persistence import Database
 from document_qa_server.services import (
     CompareService,
     FileService,
@@ -34,10 +35,11 @@ mcp = FastMCP("document-qa")
 _SETTINGS = load_settings()
 _ROOT = _SETTINGS.artifacts_dir
 _ROOT.mkdir(parents=True, exist_ok=True)
+_DATABASE = Database(artifacts_dir=_ROOT)
 _COMPARE = CompareService(artifacts_dir=_ROOT)
-_HISTORY = CompareHistoryService(artifacts_dir=_ROOT)
-_PROFILES = ProfileService(artifacts_dir=_ROOT)
-_GLOSSARIES = GlossaryService(artifacts_dir=_ROOT)
+_HISTORY = CompareHistoryService(artifacts_dir=_ROOT, database=_DATABASE)
+_PROFILES = ProfileService(artifacts_dir=_ROOT, database=_DATABASE)
+_GLOSSARIES = GlossaryService(artifacts_dir=_ROOT, database=_DATABASE)
 _FILES = FileService(
     artifacts_dir=_ROOT,
     samples_dir=_SETTINGS.samples_dir,

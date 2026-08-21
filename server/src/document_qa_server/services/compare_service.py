@@ -127,14 +127,24 @@ class CompareService:
         state = self._peek(task_id)
         record_id = None
         if history_callback and state:
-            record_id = history_callback(
-                report_dict,
-                source,
-                target,
-                state.source_display or source.name,
-                state.target_display or target.name,
-                rendered,
-            )
+            try:
+                record_id = history_callback(
+                    report_dict,
+                    source,
+                    target,
+                    state.source_display or source.name,
+                    state.target_display or target.name,
+                    rendered,
+                )
+            except Exception as exc:
+                # 报告与历史记录必须形成完整业务结果；持久化失败不能让任务
+                # 永久停在 running，也不能把无历史锚点的结果伪装成成功。
+                self._update(
+                    task_id,
+                    status="error",
+                    error=f"报告持久化失败: {exc}",
+                )
+                return
         self._update(
             task_id,
             status="done",
@@ -216,9 +226,15 @@ class CompareService:
             # rendered 中的路径是相对 pages/ 根的完整段（含任务目录）。
         # 在流水线产物之上补记归一化来源，提示验收人结论含转换因素。
         origins = {"source": source_origin, "target": target_origin}
+        metadata = dict(report.metadata)
         if any(origins.values()):
+            metadata["normalized_from"] = origins
+        if glossary is not None:
+            # 报告保存本次实际术语版本引用，持久化层据此建立不可变外键。
+            metadata["glossary_reference"] = glossary.reference
+        if metadata != report.metadata:
             report = report.model_copy(
-                update={"metadata": {**report.metadata, "normalized_from": origins}}
+                update={"metadata": metadata}
             )
         return report, rendered
 

@@ -43,6 +43,7 @@ class IssueType(StrEnum):
     GLOSSARY_VIOLATION = "glossary_violation"
     INVISIBLE_TEXT = "invisible_text"
     TEXT_VECTORIZED = "text_vectorized"
+    TEXT_ALIGNMENT_CHANGED = "text_alignment_changed"
     OTHER = "other"
 
 

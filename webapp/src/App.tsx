@@ -3,21 +3,23 @@ import { Button, Card, Empty, Layout, Menu, message, Tabs, Typography } from "an
 import {
   BookOutlined,
   ControlOutlined,
+  FolderOpenOutlined,
   FileSearchOutlined,
 } from "@ant-design/icons"
-import type { CompareResponse, HistoryRecord, TaskPollResponse } from "./api"
+import type { CompareResponse, HistoryRecord, SampleRecord, TaskPollResponse } from "./api"
 import { api } from "./api"
 import { ReportDetail } from "./views/ReportDetail"
 import { ProfileManager } from "./views/ProfileManager"
 import { GlossaryManager } from "./views/GlossaryManager"
 import { CompareBar } from "./views/CompareBar"
 import { HistoryView } from "./views/HistoryView"
+import { SampleManager } from "./views/SampleManager"
 
 const { Sider, Content } = Layout
 const { Title, Text } = Typography
 
 /** 一级导航：工作台（比较任务全流程）与配置管理。 */
-type Section = "workbench" | "manager" | "glossary"
+type Section = "workbench" | "samples" | "manager" | "glossary"
 
 /** 任务状态 → 进度文案（后端无阶段粒度，只做诚实的状态+耗时展示）。 */
 const TASK_STATUS_TEXT: Record<string, string> = {
@@ -44,6 +46,8 @@ export function App() {
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   // 导出锚点：异步比较完成后保存 history_record_id。
   const [historyRecordId, setHistoryRecordId] = useState<string | null>(null)
+  // 历史列表刷新令牌：比较落盘后触发重新拉取，避免列表停留在首次快照。
+  const [historyRefreshToken, setHistoryRefreshToken] = useState(0)
   // 比较参数：术语库与规则配置（null = 内置默认）。
   const [glossaryReference, setGlossaryReference] = useState<string | null>(null)
   const [profileFilename, setProfileFilename] = useState<string | null>(null)
@@ -134,8 +138,9 @@ export function App() {
       if (submitted.report) {
         applyReport(
           { report: submitted.report, rendered: submitted.rendered },
-          null,
+          submitted.history_record_id ?? null,
         )
+        setHistoryRefreshToken((n) => n + 1)
         messageApi.success(
           `比较完成：${submitted.report.document_score.toFixed(1)} 分`,
         )
@@ -181,6 +186,7 @@ export function App() {
         { report: poll.report, rendered: poll.rendered ?? undefined },
         poll.history_record_id,
       )
+      setHistoryRefreshToken((n) => n + 1)
       messageApi.success(
         `比较完成：${poll.report.document_score.toFixed(1)} 分`,
       )
@@ -271,6 +277,14 @@ export function App() {
     })
   }
 
+  /** 从样本库一次载入源、目标文档对，并返回工作台等待用户执行。 */
+  const useSample = (sample: SampleRecord) => {
+    setSource({ path: sample.source_path, display: sample.source_name })
+    setTarget({ path: sample.target_path, display: sample.target_name })
+    setSection("workbench")
+    setActiveTab("detail")
+  }
+
   return (
     <Layout style={{ minHeight: "100dvh" }}>
       {contextHolder}
@@ -290,6 +304,7 @@ export function App() {
           onClick={({ key }) => setSection(key as Section)}
           items={[
             { key: "workbench", icon: <FileSearchOutlined />, label: "工作台" },
+            { key: "samples", icon: <FolderOpenOutlined />, label: "样本管理" },
             { key: "manager", icon: <ControlOutlined />, label: "规则管理" },
             { key: "glossary", icon: <BookOutlined />, label: "术语库" },
           ]}
@@ -368,12 +383,18 @@ export function App() {
                     key: "history",
                     label: "对比记录",
                     children: (
-                      <HistoryView onReopen={reopenHistory} onRerun={rerunHistory} />
+                      <HistoryView
+                        refreshToken={historyRefreshToken}
+                        onReopen={reopenHistory}
+                        onRerun={rerunHistory}
+                      />
                     ),
                   },
                 ]}
               />
             </>
+          ) : section === "samples" ? (
+            <SampleManager onUse={useSample} />
           ) : section === "manager" ? (
             <ProfileManager />
           ) : (

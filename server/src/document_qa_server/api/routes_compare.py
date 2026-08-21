@@ -126,6 +126,7 @@ def compare(request: CompareRequest, http: Request, background: BackgroundTasks)
             "task_id": None,
             "report": report.model_dump(mode="json"),
             "rendered": rendered,
+            "history_record_id": record.record_id,
         }
 
     task_id = service.submit(

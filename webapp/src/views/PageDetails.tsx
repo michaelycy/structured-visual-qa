@@ -28,6 +28,31 @@ function pageImage(
   return match ? `/api/pages/${match}` : null
 }
 
+/** 序号角标：图上红框左上角与 Issue 列表行首共用，保证两侧对应。 */
+export function IssueBadge({ index, active }: { index: number; active?: boolean }) {
+  return (
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        width: 18,
+        height: 18,
+        borderRadius: 9,
+        background: active ? "#cf1322" : "#fff",
+        color: active ? "#fff" : "#cf1322",
+        border: `1.5px solid ${active ? "#cf1322" : "rgba(180,35,24,0.85)"}`,
+        fontSize: 11,
+        fontWeight: 600,
+        lineHeight: 1,
+        flexShrink: 0,
+      }}
+    >
+      {index + 1}
+    </span>
+  )
+}
+
 /** 源/目标渲染图并排对比，目标图叠加 Issue 红框（BBox 为 PDF point）。 */
 function PageCompare({
   page,
@@ -45,6 +70,12 @@ function PageCompare({
   // 渲染 dpi=144 即 2px/point；图片加载后由自然宽度反推页面 point 尺寸。
   const [pageWidth, setPageWidth] = useState(0)
   const [pageHeight, setPageHeight] = useState(0)
+  // 同一目标区域的多个 Issue（同 bbox，如偏移+字号变化）共用一个红框，
+  // 角标横排——避免同位置叠出多个框和重叠角标（与列表分组同键）。
+  const bboxGroups = useMemo(
+    () => groupIssuesByBbox(issues.filter((issue) => issue.bbox)),
+    [issues],
+  )
 
   if (!sourceUrl && !targetUrl) {
     return (
@@ -88,29 +119,52 @@ function PageCompare({
               }}
             />
             {pageWidth > 0 &&
-              issues
-                .filter((issue) => issue.bbox)
-                .map((issue) => (
+              bboxGroups.map((group) => {
+                const first = group[0].issue
+                // 组内任一 Issue 激活即整框加粗，便于定位整组。
+                const groupActive = group.some(
+                  ({ issue }) => issue.id === activeIssueId,
+                )
+                return (
                   <div
-                    key={issue.id}
+                    key={first.id}
                     style={{
                       position: "absolute",
-                      border:
-                        issue.id === activeIssueId
-                          ? "3px solid #cf1322"
-                          : "2px solid rgba(180,35,24,0.75)",
-                      background:
-                        issue.id === activeIssueId
-                          ? "rgba(180,35,24,0.2)"
-                          : "rgba(180,35,24,0.08)",
-                      left: `${(issue.bbox!.x / pageWidth) * 100}%`,
-                      top: `${(issue.bbox!.y / pageHeight) * 100}%`,
-                      width: `${(issue.bbox!.width / pageWidth) * 100}%`,
-                      height: `${(issue.bbox!.height / pageHeight) * 100}%`,
+                      border: groupActive
+                        ? "3px solid #cf1322"
+                        : "2px solid rgba(180,35,24,0.75)",
+                      background: groupActive
+                        ? "rgba(180,35,24,0.2)"
+                        : "rgba(180,35,24,0.08)",
+                      left: `${(first.bbox!.x / pageWidth) * 100}%`,
+                      top: `${(first.bbox!.y / pageHeight) * 100}%`,
+                      width: `${(first.bbox!.width / pageWidth) * 100}%`,
+                      height: `${(first.bbox!.height / pageHeight) * 100}%`,
                       pointerEvents: "none",
                     }}
-                  />
-                ))}
+                  >
+                    {/* 序号角标横排：与列表行首序号对应；同框多问题时
+                        逐个排列（如 ②③），不互相遮挡。 */}
+                    <span
+                      style={{
+                        position: "absolute",
+                        top: -10,
+                        left: -10,
+                        display: "flex",
+                        gap: 2,
+                      }}
+                    >
+                      {group.map(({ issue, index }) => (
+                        <IssueBadge
+                          key={issue.id}
+                          index={index}
+                          active={issue.id === activeIssueId}
+                        />
+                      ))}
+                    </span>
+                  </div>
+                )
+              })}
           </div>
         </Col>
       )}
@@ -121,17 +175,52 @@ function PageCompare({
 /** 复核状态筛选选项。 */
 type ReviewFilter = "all" | "pending" | "done"
 
+/** 严重度排序权重：组内展示取最高严重度。 */
+const SEVERITY_ORDER: Record<string, number> = {
+  critical: 4,
+  high: 3,
+  medium: 2,
+  low: 1,
+  info: 0,
+}
+
+/** 按页内 Issue 列表生成分组：同 bbox 的多条合并为一组（与图上红框
+ * 分组同键），无 bbox 的独立成组。返回 [(组键, [issue, index][])]。
+ */
+export function groupIssuesByBbox(issues: Issue[]): { issue: Issue; index: number }[][] {
+  const groups = new Map<string, { issue: Issue; index: number }[]>()
+  issues.forEach((issue, index) => {
+    const key = issue.bbox
+      ? [
+          issue.bbox.x,
+          issue.bbox.y,
+          issue.bbox.width,
+          issue.bbox.height,
+        ]
+          .map((value) => Math.round(value))
+          .join(",")
+      : `solo-${issue.id}`
+    const bucket = groups.get(key)
+    if (bucket) bucket.push({ issue, index })
+    else groups.set(key, [{ issue, index }])
+  })
+  return [...groups.values()]
+}
+
 /** Issue 展开详情：定位状态 + 阈值/差异明细，让"哪里出的问题"可读。 */
 function IssueDetails({
   issue,
   decisions,
   onDecide,
   onHighlight,
+  hideLocation = false,
 }: {
   issue: Issue
   decisions: Record<string, ReviewDecision>
   onDecide: (issueId: string, decision: ReviewDecision) => void
   onHighlight: (issueId: string) => void
+  /** 合并组内非首条不重复"位置"行。 */
+  hideLocation?: boolean
 }) {
   // 数字不一致的差集明细按"缺失/多余"分组展示，比原始 metrics 更直观。
   const metrics = issue.metrics ?? {}
@@ -144,11 +233,13 @@ function IssueDetails({
   ).filter((key) => Array.isArray(metrics[key]) && metrics[key].length)
   return (
     <Space direction="vertical" size={6} onClick={(e) => e.stopPropagation()}>
-      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-        {issue.bbox
-          ? `位置：目标文档第 ${issue.page} 页红框处（点击列表项可在图中高亮）`
-          : "位置：无法定位到具体区域（差异为页面级，请对照左右两页人工检查）"}
-      </Typography.Text>
+      {!hideLocation && (
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          {issue.bbox
+            ? `位置：目标文档第 ${issue.page} 页红框处（点击列表项可在图中高亮）`
+            : "位置：无法定位到具体区域（差异为页面级，请对照左右两页人工检查）"}
+        </Typography.Text>
+      )}
       {numberDetail.length > 0 && (
         <Space wrap size={8}>
           {numberDetail.map((key) => (
@@ -342,39 +433,98 @@ export function PageDetails({
                   Array.isArray(keys) ? keys[0] ?? null : keys ?? null,
                 )
               }
-              items={visibleIssues.map((issue) => ({
-                key: issue.id,
-                label: (
-                  <Space wrap size={8}>
-                    <Tag color={SEVERITY_META[issue.severity]?.color}>
-                      {SEVERITY_META[issue.severity]?.label ?? issue.severity}
-                    </Tag>
-                    <Tag bordered={false} style={{ color: "rgba(0,0,0,0.58)" }}>
-                      {ISSUE_TYPE_META[issue.type] ?? issue.type}
-                    </Tag>
-                    <span>{issue.description}</span>
-                    {/* 无 bbox 的 Issue 在图上没有红框，显式标记避免用户在图里找不到。 */}
-                    {!issue.bbox && (
-                      <Tag bordered={false} color="warning">
-                        图上无定位
+              items={groupIssuesByBbox(visibleIssues).map((group) => {
+                // 组内展示取最高严重度；类型去重后逐个列出。
+                const top = group.reduce((acc, cur) =>
+                  (SEVERITY_ORDER[cur.issue.severity] ?? 0) >
+                  (SEVERITY_ORDER[acc.issue.severity] ?? 0)
+                    ? cur
+                    : acc,
+                )
+                const types = [...new Set(group.map(({ issue }) => issue.type))]
+                const decisionsAll = group.map(({ issue }) => decisions[issue.id])
+                return {
+                  key: group[0].issue.id,
+                  label: (
+                    <Space wrap size={8}>
+                      {/* 组内全部序号角标：与目标页红框上的横排角标一致。 */}
+                      {group.map(({ issue, index }) => (
+                        <IssueBadge
+                          key={issue.id}
+                          index={index}
+                          active={issue.id === activeIssueId}
+                        />
+                      ))}
+                      <Tag color={SEVERITY_META[top.issue.severity]?.color}>
+                        {SEVERITY_META[top.issue.severity]?.label ??
+                          top.issue.severity}
                       </Tag>
-                    )}
-                    {decisions[issue.id] && (
-                      <Tag color={DECISION_META[decisions[issue.id]].color}>
-                        {DECISION_META[decisions[issue.id]].label}
-                      </Tag>
-                    )}
-                  </Space>
-                ),
-                children: (
-                  <IssueDetails
-                    issue={issue}
-                    decisions={decisions}
-                    onDecide={onDecide}
-                    onHighlight={setActiveIssueId}
-                  />
-                ),
-              }))}
+                      {types.map((type) => (
+                        <Tag
+                          key={type}
+                          bordered={false}
+                          style={{ color: "rgba(0,0,0,0.58)" }}
+                        >
+                          {ISSUE_TYPE_META[type] ?? type}
+                        </Tag>
+                      ))}
+                      <span>{top.issue.description}</span>
+                      {group.length > 1 && (
+                        <Tag bordered={false} color="volcano">
+                          {group.length} 个问题
+                        </Tag>
+                      )}
+                      {!group[0].issue.bbox && (
+                        <Tag bordered={false} color="warning">
+                          图上无定位
+                        </Tag>
+                      )}
+                      {decisionsAll.every(Boolean) && decisionsAll[0] && (
+                        <Tag color={DECISION_META[decisionsAll[0]].color}>
+                          {DECISION_META[decisionsAll[0]].label}
+                        </Tag>
+                      )}
+                    </Space>
+                  ),
+                  children: (
+                    <Space direction="vertical" size={12}>
+                      {/* 组内多条合并展示，但复核判定按 Issue 粒度独立。 */}
+                      {group.map(({ issue }, memberIndex) => (
+                        <div
+                          key={issue.id}
+                          style={
+                            memberIndex > 0
+                              ? {
+                                  borderTop: "1px dashed #d9d9d9",
+                                  paddingTop: 8,
+                                }
+                              : undefined
+                          }
+                        >
+                          {group.length > 1 && (
+                            <Space size={6} style={{ marginBottom: 4 }}>
+                              <IssueBadge
+                                index={group[memberIndex].index}
+                                active={issue.id === activeIssueId}
+                              />
+                              <Tag bordered={false} color="error">
+                                {ISSUE_TYPE_META[issue.type] ?? issue.type}
+                              </Tag>
+                            </Space>
+                          )}
+                          <IssueDetails
+                            issue={issue}
+                            decisions={decisions}
+                            onDecide={onDecide}
+                            onHighlight={setActiveIssueId}
+                            hideLocation={memberIndex > 0}
+                          />
+                        </div>
+                      ))}
+                    </Space>
+                  ),
+                }
+              })}
             />
           )}
         </>

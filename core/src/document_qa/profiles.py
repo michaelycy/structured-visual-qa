@@ -193,6 +193,11 @@ class DetectorThresholds(SchemaModel):
     # 白色）即视为同色不可见。235/255 ≈ 92% 白，可捕获 #FFFFFF 等
     # 纯白/近白字，同时放过浅灰绿正文（#A7C4B3 最低通道 167）。
     invisible_color_threshold: int = Field(default=235, ge=200, le=255)
+    # 转曲判定：源页文本字符数达到下限、且目标页文本字符数降到源的
+    # 比例以下时，判目标文字已矢量化（转曲），内容级检测（数字/漏译/
+    # 术语/文本缺失）在该页抑制并显式提示。
+    vectorized_min_source_chars: int = Field(default=30, ge=1, le=10000)
+    vectorized_max_target_ratio: float = Field(default=0.1, ge=0, le=1)
 
     def band_severity(
         self, bands: list[SeverityBand], value: float, default: Severity
@@ -268,6 +273,7 @@ class ScoringSettings(SchemaModel):
             IssueType.UNTRANSLATED_TEXT: 12.0,
             IssueType.GLOSSARY_VIOLATION: 12.0,
             IssueType.INVISIBLE_TEXT: 25.0,
+            IssueType.TEXT_VECTORIZED: 0.0,
             IssueType.OTHER: 10.0,
         }
     )

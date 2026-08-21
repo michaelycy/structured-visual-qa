@@ -166,6 +166,27 @@ class DocumentQAPipeline:
                 password=target_password,
             )
 
+    def _is_text_vectorized(self, source: Page, target: Page) -> bool:
+        """判断目标页文字是否被矢量化（转曲）。
+
+        用总文本字符数而非区域数判断：区域数受分组粒度影响（多行
+        文本可能合成一个 Region），字符数是文本层是否存在的直接
+        证据。源页有足量字符而目标页字符骤降（阈值见 RuleProfile）
+        说明目标文字被转成矢量路径——内容仍在页面上，但文本层提取
+        不到，内容级检测（数字/漏译/术语/文本缺失）会全部假阳性。
+        """
+
+        thresholds = self.profile.detectors.thresholds
+        source_chars = sum(
+            len(r.content.text) for r in source.regions if r.content and r.content.text
+        )
+        target_chars = sum(
+            len(r.content.text) for r in target.regions if r.content and r.content.text
+        )
+        if source_chars < thresholds.vectorized_min_source_chars:
+            return False
+        return target_chars <= source_chars * thresholds.vectorized_max_target_ratio
+
     def _group_document(self, document: Document) -> Document:
         """为文档中的每一页建立 Region，保留原始 Block 供追溯。"""
 
@@ -212,13 +233,50 @@ class DocumentQAPipeline:
 
         match_result = self.matcher.match_page(source, target)
         issues = self.detector.detect(source, target, match_result)
-        # 内容级检测（数字/漏译）复用同一匹配结果，位于布局规则之后。
-        issues.extend(self.content_detector.detect(source, target, match_result))
-        # 术语合规检测同样复用匹配结果；未配置术语库时为空。
-        if self.glossary_detector is not None:
-            issues.extend(
-                self.glossary_detector.detect(source, target, match_result)
+        if self._is_text_vectorized(source, target):
+            # 目标文字已矢量化（转曲）：文本层为空，内容级检测与
+            # 文本缺失判定必然假阳性（内容其实在，只是提取不到）。
+            # 抑制这些检测并显式提示，避免误导验收人。
+            issues = [
+                issue
+                for issue in issues
+                if issue.type != IssueType.MISSING_ELEMENT
+            ]
+            issues.append(
+                Issue(
+                    id=f"p{target.page}-vectorized",
+                    page=target.page,
+                    type=IssueType.TEXT_VECTORIZED,
+                    severity=Severity.INFO,
+                    description=(
+                        "目标页面文字已矢量化（转曲），无法进行内容级质检"
+                        "（数字一致性、漏译、术语），布局与图片检测照常。"
+                    ),
+                    metrics={
+                        "source_text_chars": sum(
+                            len(r.content.text)
+                            for r in source.regions
+                            if r.content and r.content.text
+                        ),
+                        "target_text_chars": sum(
+                            len(r.content.text)
+                            for r in target.regions
+                            if r.content and r.content.text
+                        ),
+                    },
+                    detector="pipeline",
+                )
             )
+        else:
+            # 内容级检测（数字/漏译）复用同一匹配结果，位于布局规则之后。
+            issues.extend(
+                self.content_detector.detect(source, target, match_result)
+            )
+            # 术语合规检测同样复用匹配结果；未配置术语库时为空。
+            if self.glossary_detector is not None:
+                issues.extend(
+                    self.glossary_detector.detect(source, target, match_result)
+                )
         score, status = self.scorer.score(issues)
         return PageQAResult(
             page=page_number,

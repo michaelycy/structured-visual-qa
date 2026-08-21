@@ -1,12 +1,13 @@
 /** 规则管理页：antd Table + 编辑抽屉内嵌表单。 */
 
 import { useCallback, useEffect, useState } from "react"
-import { Button, Card, message, Popconfirm, Space, Table, Tag } from "antd"
+import { Button, Card, message, Popconfirm, Space, Tag } from "antd"
 import type { ColumnsType } from "antd/es/table"
 import type { RuleProfile } from "../api"
 import { api } from "../services/queryClient"
 import { ProfileEditor } from "./ProfileEditor"
 import { PALETTE } from "../uiTokens"
+import { DataTable, PageHeader, PageSection } from "../components/ui"
 
 interface ProfileListItem {
   filename: string
@@ -90,7 +91,7 @@ export function ProfileManager() {
       title: "标识",
       dataIndex: "profile_id",
       render: (value: string) => (
-        <Tag style={{ fontFamily: "monospace", fontSize: 12 }}>{value}</Tag>
+        <Tag className="qa-code-value">{value}</Tag>
       ),
     },
     { title: "版本", dataIndex: "version", width: 70, render: (v: number) => `v${v}` },
@@ -117,7 +118,7 @@ export function ProfileManager() {
       title: "引用",
       dataIndex: "reference",
       render: (value: string) => (
-        <span style={{ fontFamily: "monospace", fontSize: 12 }}>{value}</span>
+        <span className="qa-code-value">{value}</span>
       ),
     },
     {
@@ -148,31 +149,34 @@ export function ProfileManager() {
   ]
 
   return (
-    <Card
-      title="规则配置管理"
-      extra={
-        <Button type="primary" onClick={startNew}>
-          新建配置
-        </Button>
-      }
-    >
+    <div className="qa-page management-page">
       {contextHolder}
-      <Table
-        size="small"
+      <PageHeader
+        title="规则管理"
+        meta={`· ${profiles.length} 个配置`}
+        description="管理文档质检所使用的规则阈值、检测开关和版本引用。"
+        extra={
+          <Button type="primary" onClick={startNew}>
+            新建配置
+          </Button>
+        }
+      />
+      <PageSection className="management-page__section">
+      <DataTable
         rowKey="filename"
         loading={loading}
         columns={columns}
         dataSource={profiles}
         pagination={false}
-        locale={{
-          emptyText: "尚未保存任何规则配置。点击「新建配置」从内置平衡配置起步。",
-        }}
+        emptyTitle="尚未保存规则配置"
+        emptyDescription="新建配置可从内置平衡配置起步。"
       />
+      </PageSection>
       {editing && (
         <Card
+          className="management-page__editor"
           size="small"
           title={`编辑：${editing.name ?? editing.profile_id}`}
-          style={{ marginTop: 16 }}
           extra={
             <Button size="small" onClick={() => setEditing(null)}>
               关闭
@@ -189,6 +193,6 @@ export function ProfileManager() {
           />
         </Card>
       )}
-    </Card>
+    </div>
   )
 }

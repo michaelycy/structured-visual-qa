@@ -44,7 +44,7 @@ export function StageView({
   }
 
   return (
-    <Space direction="vertical" size={12} style={{ width: "100%" }}>
+    <Space orientation="vertical" size={12} style={{ width: "100%" }}>
       <Steps
         size="small"
         current={stages.length}

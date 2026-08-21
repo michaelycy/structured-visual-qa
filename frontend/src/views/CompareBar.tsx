@@ -1,6 +1,6 @@
 /** 比较任务栏：源/目标文档选择 + 规则配置/术语库 + 提交按钮。 */
 
-import { useState } from "react"
+import { useId, useState } from "react"
 import { Button, Collapse, Input, Select, Space, Upload, message } from "antd"
 import {
   ArrowRightOutlined,
@@ -56,18 +56,23 @@ const MAX_UPLOAD_MB = 100
 /** 密码输入：仅在文档受打开密码保护时填写，不持久化。 */
 function PasswordField({
   label,
+  name,
   value,
   onChange,
 }: {
   label: string
+  name: string
   value: string
   onChange: (value: string) => void
 }) {
+  const inputId = useId()
   return (
     <Space orientation="vertical" size={4}>
-      <span style={PICKER_LABEL_STYLE}>{label}</span>
+      <label htmlFor={inputId} style={PICKER_LABEL_STYLE}>{label}</label>
       <Input.Password
-        placeholder="无加密文档留空"
+        id={inputId}
+        name={name}
+        placeholder="无密码时留空…"
         style={{ minWidth: 160 }}
         value={value}
         onChange={(event) => onChange(event.target.value)}
@@ -92,7 +97,10 @@ function DocumentPicker({
 
   const loadSamples = () => {
     if (samples.length) return
-    api.sampleFiles().then(setSamples).catch(() => undefined)
+    api.sampleFiles().then(setSamples).catch((error) => {
+      const reason = error instanceof Error ? error.message : String(error)
+      messageApi.error(`示例文档加载失败：${reason}。请检查服务状态后重试。`)
+    })
   }
 
   return (
@@ -131,14 +139,18 @@ function DocumentPicker({
             }
           }}
         >
-          <Button className="document-picker__button" icon={<FileTextOutlined />}>
+          <Button
+            className="document-picker__button"
+            icon={<FileTextOutlined aria-hidden="true" />}
+          >
             <span className="document-picker__filename">
               {value.display || "点击选择文档"}
             </span>
           </Button>
         </Upload>
         <Select
-          placeholder="使用示例"
+          aria-label={`${label}：从示例文档中选择`}
+          placeholder="使用示例…"
           className="document-picker__sample"
           value={null}
           onOpenChange={(open) => open && loadSamples()}
@@ -178,33 +190,41 @@ export function CompareBar({
   const [profiles, setProfiles] = useState<
     { filename: string; name: string; version: number }[]
   >([])
+  const [messageApi, contextHolder] = message.useMessage()
   const loadGlossaries = () => {
     if (glossaries.length) return
-    api.glossaryList().then(setGlossaries).catch(() => undefined)
+    api.glossaryList().then(setGlossaries).catch((error) => {
+      const reason = error instanceof Error ? error.message : String(error)
+      messageApi.error(`术语库加载失败：${reason}。请检查服务状态后重试。`)
+    })
   }
   const loadProfiles = () => {
     if (profiles.length) return
     api
       .profileList()
       .then(setProfiles)
-      .catch(() => undefined)
+      .catch((error) => {
+        const reason = error instanceof Error ? error.message : String(error)
+        messageApi.error(`规则配置加载失败：${reason}。请检查服务状态后重试。`)
+      })
   }
   return (
     <div className="compare-bar">
+      {contextHolder}
       <div className="compare-bar__main">
         <DocumentPicker label="源文档（原文）" value={source} onChange={onSource} />
-        <ArrowRightOutlined className="compare-bar__arrow" />
+        <ArrowRightOutlined className="compare-bar__arrow" aria-hidden="true" />
         <DocumentPicker label="目标文档（译文）" value={target} onChange={onTarget} />
         <Button
           className="compare-bar__submit"
           type="primary"
           size="large"
-          icon={<SearchOutlined />}
+          icon={<SearchOutlined aria-hidden="true" />}
           loading={busy}
           disabled={!source.path || !target.path}
           onClick={onSubmit}
         >
-          开始比较
+          开始质检
         </Button>
       </div>
       {/* 规则配置与术语库属于进阶能力，默认收起；普通用户开箱即用内置规则。 */}
@@ -216,17 +236,19 @@ export function CompareBar({
           {
             key: "advanced",
             label: (
-              <span style={{ fontSize: 13 }}>
-                <SettingOutlined /> 高级选项（规则配置 / 术语库）
+              <span className="compare-bar__advanced-label">
+                <SettingOutlined aria-hidden="true" /> 高级选项（规则配置 / 术语库）
               </span>
             ),
             children: (
               <Space wrap size={16}>
                 <Space orientation="vertical" size={4}>
-                  <span style={PICKER_LABEL_STYLE}>规则配置</span>
+                  <label htmlFor="workbench-profile-select" style={PICKER_LABEL_STYLE}>规则配置</label>
                   <Select
+                    id="workbench-profile-select"
+                    aria-label="选择规则配置"
                     allowClear
-                    placeholder="内置平衡配置（推荐）"
+                    placeholder="内置平衡配置（推荐）…"
                     style={{ minWidth: 200 }}
                     value={profileFilename}
                     onOpenChange={(open) => open && loadProfiles()}
@@ -238,10 +260,12 @@ export function CompareBar({
                   />
                 </Space>
                 <Space orientation="vertical" size={4}>
-                  <span style={PICKER_LABEL_STYLE}>术语库</span>
+                  <label htmlFor="workbench-glossary-select" style={PICKER_LABEL_STYLE}>术语库</label>
                   <Select
+                    id="workbench-glossary-select"
+                    aria-label="选择术语库"
                     allowClear
-                    placeholder="不启用"
+                    placeholder="不启用…"
                     style={{ minWidth: 200 }}
                     value={glossaryReference}
                     onOpenChange={(open) => open && loadGlossaries()}
@@ -255,11 +279,13 @@ export function CompareBar({
                 {/* 打开密码只在受保护文档时填写；权限密码文档无需密码。 */}
                 <PasswordField
                   label="源文档打开密码"
+                  name="source-document-password"
                   value={sourcePassword}
                   onChange={onSourcePassword}
                 />
                 <PasswordField
                   label="目标文档打开密码"
+                  name="target-document-password"
                   value={targetPassword}
                   onChange={onTargetPassword}
                 />

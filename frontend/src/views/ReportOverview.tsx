@@ -14,6 +14,8 @@ import type { QAReport } from "../api"
 import { api } from "../services/queryClient"
 import { PALETTE, STATUS_META, scoreColor } from "../uiTokens"
 
+const SCORE_FORMATTER = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 })
+
 /** 触发浏览器下载导出产物。 */
 function download(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob)
@@ -66,7 +68,7 @@ export function ReportOverview({
         <Space wrap size={10}>
           <Typography.Title level={5}>报告概览</Typography.Title>
           <Tag variant="filled" className="report-profile-tag">
-            {report.rule_profile_reference}
+            <span translate="no">{report.rule_profile_reference}</span>
           </Tag>
           <Typography.Text type="secondary" className="report-page-summary">
             共 {summary.pages} 页 · {summary.passed_pages} 页通过 · {summary.review_pages} 页复核 · {summary.failed_pages} 页失败
@@ -76,7 +78,7 @@ export function ReportOverview({
           <span className="report-sync"><i />报告已同步</span>
           <Button
             size="small"
-            icon={<FileExcelOutlined />}
+            icon={<FileExcelOutlined aria-hidden="true" />}
             loading={exporting === "xlsx"}
             disabled={!historyRecordId}
             onClick={() => void doExport("xlsx")}
@@ -85,7 +87,7 @@ export function ReportOverview({
           </Button>
           <Button
             size="small"
-            icon={<FileTextOutlined />}
+            icon={<FileTextOutlined aria-hidden="true" />}
             loading={exporting === "html"}
             disabled={!historyRecordId}
             onClick={() => void doExport("html")}
@@ -112,7 +114,7 @@ export function ReportOverview({
             </div>
             <div className="metric-card__body">
               <span className="metric-card__value" style={{ color: scoreColor(report.document_score) }}>
-                {report.document_score.toFixed(0)}
+                {SCORE_FORMATTER.format(report.document_score)}
               </span>
               <span className="metric-card__unit">/100</span>
             </div>
@@ -128,7 +130,7 @@ export function ReportOverview({
         <Col xs={24} sm={12} xl={6}>
           <Card className="metric-card metric-card--critical" variant="borderless">
             <div className="metric-card__label">
-              <span><ExclamationCircleFilled /> 严重问题</span>
+              <span><ExclamationCircleFilled aria-hidden="true" /> 严重问题</span>
               <span>Critical / High</span>
             </div>
             <div className="metric-card__body">
@@ -141,7 +143,7 @@ export function ReportOverview({
         <Col xs={24} sm={12} xl={6}>
           <Card className="metric-card metric-card--warning" variant="borderless">
             <div className="metric-card__label">
-              <span><WarningFilled /> 一般问题</span>
+              <span><WarningFilled aria-hidden="true" /> 一般问题</span>
               <span>Medium / Low / Info</span>
             </div>
             <div className="metric-card__body">
@@ -154,7 +156,7 @@ export function ReportOverview({
         <Col xs={24} sm={12} xl={6}>
           <Card className="metric-card metric-card--review" variant="borderless">
             <div className="metric-card__label">
-              <span><CheckCircleFilled /> 复核进度</span>
+              <span><CheckCircleFilled aria-hidden="true" /> 复核进度</span>
               <span>{reviewedPercent}%</span>
             </div>
             <div className="metric-card__body">
@@ -174,7 +176,7 @@ export function ReportOverview({
 
       {(report.metadata as Record<string, unknown> | undefined)?.normalized_from ? (
         <div className="report-normalized-note">
-          <DownloadOutlined /> 输入含 Office 文档归一化转换，版面结论已叠加转换容差。
+          <DownloadOutlined aria-hidden="true" /> 输入含 Office 文档归一化转换，版面结论已叠加转换容差。
         </div>
       ) : null}
     </section>

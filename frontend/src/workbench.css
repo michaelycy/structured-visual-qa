@@ -1,30 +1,17 @@
 /* 工作台内容区：参考报告控制台图稿，保留应用级侧栏与真实业务交互。 */
 
-.app-content {
-  padding: 24px;
-}
-
-/* 质检记录已迁移到契约页骨架，自身负责 72px 页头与内容区间距。 */
-.app-content--history {
-  padding: 0;
-}
-
-.workbench-content {
-  min-width: 0;
-  background: var(--qa-canvas);
-}
-
 .workbench-page {
-  min-height: 100dvh;
+  min-height: 100%;
+  background: var(--qa-canvas);
 }
 
 .workbench-taskbar {
   display: grid;
   grid-template-columns: minmax(240px, 0.72fr) minmax(640px, 1.65fr);
   align-items: start;
-  gap: 28px;
-  padding: 14px 24px 10px;
-  background: #fff;
+  gap: 24px;
+  padding: 16px 24px;
+  background: var(--qa-surface);
   border-bottom: 1px solid var(--qa-border);
 }
 
@@ -51,8 +38,8 @@
   overflow: hidden;
   margin: 0;
   color: var(--qa-text);
-  font-size: 18px;
-  line-height: 1.4;
+  font-size: 16px;
+  line-height: 24px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -61,7 +48,8 @@
   flex: none;
   margin: 0;
   border-radius: 999px;
-  font-size: 11px;
+  font-size: 12px;
+  line-height: 18px;
   font-weight: 600;
 }
 
@@ -79,7 +67,7 @@
 
 .compare-bar__arrow {
   align-self: center;
-  margin-top: 17px;
+  margin-top: 16px;
   color: var(--qa-text-secondary);
 }
 
@@ -91,19 +79,26 @@
   display: block;
   margin: 0 0 4px 12px;
   color: var(--qa-text-secondary);
-  font-size: 11px;
+  font-size: 12px;
+  line-height: 18px;
 }
 
 .document-picker .ant-space-compact {
   display: flex;
 }
 
+.document-picker .ant-space-compact:focus-within {
+  outline: 2px solid var(--qa-info);
+  outline-offset: 2px;
+  border-radius: var(--qa-radius-md);
+}
+
 .document-picker__button.ant-btn {
   min-width: 0;
-  height: 40px;
+  height: 36px;
   flex: 1;
   justify-content: flex-start;
-  border-radius: 10px 0 0 10px;
+  border-radius: var(--qa-radius-md) 0 0 var(--qa-radius-md);
   color: var(--qa-text);
   box-shadow: none;
 }
@@ -120,9 +115,9 @@
 }
 
 .document-picker__sample .ant-select-selector {
-  height: 40px !important;
+  height: 36px !important;
   padding-inline: 9px !important;
-  border-radius: 0 10px 10px 0 !important;
+  border-radius: 0 var(--qa-radius-md) var(--qa-radius-md) 0 !important;
 }
 
 .document-picker__sample .ant-select-selection-placeholder {
@@ -130,11 +125,16 @@
 }
 
 .compare-bar__submit.ant-btn {
-  height: 40px;
-  padding-inline: 24px;
-  border-radius: 10px;
+  height: 36px;
+  padding-inline: 16px;
+  border-radius: var(--qa-radius-md);
   font-weight: 600;
-  box-shadow: 0 5px 14px rgba(31, 111, 235, 0.2);
+  box-shadow: none;
+}
+
+.compare-bar__advanced-label {
+  font-size: 12px;
+  line-height: 18px;
 }
 
 .compare-bar__advanced.ant-collapse {
@@ -162,7 +162,8 @@
   grid-column: 2;
   display: block;
   margin-top: -6px;
-  font-size: 13px;
+  font-size: 14px;
+  line-height: 22px;
 }
 
 .workbench-detail-nav {
@@ -170,7 +171,8 @@
   align-items: flex-end;
   height: 46px;
   padding: 0 24px;
-  background: #fff;
+  margin: 0;
+  background: var(--qa-surface);
   border-bottom: 1px solid var(--qa-border);
 }
 
@@ -196,14 +198,21 @@
 }
 
 .workbench-detail-content {
-  padding: 22px 24px 32px;
+  padding: 24px 24px 32px;
 }
 
 .workbench-empty {
   padding: 72px 0 !important;
   border: 1px solid var(--qa-border);
   border-radius: 12px;
-  background: #fff;
+  background: var(--qa-surface);
+}
+
+.workbench-loading {
+  display: flex;
+  min-height: 320px;
+  align-items: center;
+  justify-content: center;
 }
 
 .report-dashboard {
@@ -211,7 +220,7 @@
 }
 
 .report-overview {
-  margin-bottom: 18px;
+  margin-bottom: 24px;
 }
 
 .report-section-heading,
@@ -260,13 +269,13 @@
 .metric-card.ant-card {
   min-height: 122px;
   border: 1px solid var(--qa-border);
-  border-radius: 12px;
-  background: #fff;
-  box-shadow: 0 2px 8px rgba(20, 24, 30, 0.025);
+  border-radius: var(--qa-radius-md);
+  background: var(--qa-surface);
+  box-shadow: none;
 }
 
 .metric-card .ant-card-body {
-  padding: 15px 16px;
+  padding: 16px;
 }
 
 .metric-card__label {
@@ -286,20 +295,20 @@
 }
 
 .metric-card__label > span:last-child {
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .metric-card__label .ant-tag {
   margin: 0;
   border-radius: 999px;
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .metric-card__body {
   display: flex;
   align-items: baseline;
   gap: 5px;
-  margin: 7px 0 4px;
+  margin: 8px 0 4px;
 }
 
 .metric-card__value {
@@ -308,17 +317,19 @@
   font-weight: 700;
   line-height: 1.1;
   letter-spacing: -1px;
+  font-variant-numeric: tabular-nums;
 }
 
 .metric-card__unit,
 .metric-card__hint {
   color: var(--qa-text-secondary);
-  font-size: 11px;
+  font-size: 12px;
+  line-height: 18px;
 }
 
 .metric-card--critical.ant-card {
-  border-color: #ffd1d1;
-  background: #fffafa;
+  border-color: var(--qa-critical-soft);
+  background: var(--qa-critical-soft);
 }
 
 .metric-card--critical .metric-card__label > span:first-child,
@@ -327,8 +338,8 @@
 }
 
 .metric-card--warning.ant-card {
-  border-color: #ffe0b8;
-  background: #fffcf7;
+  border-color: var(--qa-warning-soft);
+  background: var(--qa-warning-soft);
 }
 
 .metric-card--warning .metric-card__label > span:first-child,
@@ -337,8 +348,8 @@
 }
 
 .metric-card--review.ant-card {
-  border-color: #cddfff;
-  background: #fbfdff;
+  border-color: var(--qa-info-soft);
+  background: var(--qa-info-soft);
 }
 
 .metric-card--review .metric-card__label > span:first-child,
@@ -347,11 +358,11 @@
 }
 
 .report-normalized-note {
-  margin-top: 10px;
+  margin-top: 12px;
   padding: 8px 11px;
-  border: 1px solid #ffe0b8;
+  border: 1px solid var(--qa-warning-soft);
   border-radius: 8px;
-  color: #b56a1b;
+  color: var(--qa-warning-text);
   background: var(--qa-warning-soft);
   font-size: 12px;
 }
@@ -378,31 +389,32 @@
 }
 
 .page-review__compare-body {
-  margin-bottom: 14px;
+  margin-bottom: 16px;
 }
 
 .page-compare__panel {
   overflow: hidden;
-  height: 330px;
+  height: clamp(330px, 52vh, 520px);
   border: 1px solid var(--qa-border);
-  border-radius: 12px;
-  background: #fff;
+  border-radius: var(--qa-radius-md);
+  background: var(--qa-surface);
 }
 
 .page-compare__panel--target {
-  border-color: #d9eee7;
+  border-color: var(--qa-success-soft);
 }
 
 .page-compare__panel-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: 38px;
-  padding: 0 14px;
+  min-height: 40px;
+  padding: 0 16px;
   border-bottom: 1px solid var(--qa-border);
   color: var(--qa-text-secondary);
-  background: #fcfcfd;
-  font-size: 11px;
+  background: var(--qa-canvas);
+  font-size: 12px;
+  line-height: 18px;
 }
 
 .page-compare__panel-head > span:first-child {
@@ -422,7 +434,7 @@
 }
 
 .page-compare__panel--target .page-compare__panel-head {
-  background: #fbfefd;
+  background: var(--qa-success-soft);
 }
 
 .page-compare__panel--target .page-compare__panel-head i {
@@ -431,9 +443,9 @@
 
 .page-compare__canvas {
   overflow: auto;
-  height: calc(100% - 38px);
+  height: calc(100% - 40px);
   padding: 12px;
-  background: #f6f7f9;
+  background: var(--qa-canvas);
 }
 
 .page-compare__image,
@@ -444,8 +456,9 @@
 
 .page-compare__image {
   border: 1px solid var(--qa-border);
-  background: #fff;
-  box-shadow: 0 2px 10px rgba(20, 24, 30, 0.06);
+  height: auto;
+  background: var(--qa-surface);
+  box-shadow: none;
 }
 
 .page-compare__target-stage {
@@ -481,32 +494,25 @@
   border-radius: 12px;
 }
 
-.issue-table .ant-table-thead > tr > th {
-  height: 36px;
-  padding-block: 7px;
-  color: var(--qa-text-secondary);
-  background: #f5f7fa;
-  font-size: 11px;
-  font-weight: 500;
-}
-
 .issue-table .ant-table-tbody > tr > td {
-  height: 42px;
-  padding-block: 7px;
-  color: #4d5664;
-  font-size: 12px;
+  font-variant-numeric: tabular-nums;
 }
 
 .issue-table .ant-table-tbody > tr {
   cursor: pointer;
 }
 
+.issue-table .ant-table-tbody > tr:focus-visible {
+  outline: 2px solid var(--qa-info);
+  outline-offset: -2px;
+}
+
 .issue-table .ant-table-tbody > tr.issue-table__row--active > td {
-  background: #fff8f8;
+  background: var(--qa-critical-soft);
 }
 
 .issue-table .ant-table-expanded-row > td {
-  background: #fcfcfd !important;
+  background: var(--qa-canvas) !important;
 }
 
 .issue-table .ant-tag {
@@ -523,14 +529,8 @@
 }
 
 .issue-pending-tag.ant-tag {
-  color: #c67722;
+  color: var(--qa-warning-text);
   background: var(--qa-warning-soft);
-}
-
-@media (max-width: 1280px) {
-  .page-compare__panel {
-    height: 520px;
-  }
 }
 
 @media (max-width: 1180px) {
@@ -546,21 +546,13 @@
 }
 
 @media (max-width: 760px) {
-  .app-content {
-    padding: 12px;
-  }
-
-  .app-content.app-content--history {
-    padding: 0;
-  }
-
   .workbench-taskbar,
   .workbench-detail-content {
-    padding-inline: 14px;
+    padding-inline: 16px;
   }
 
   .workbench-detail-nav {
-    padding-inline: 14px;
+    padding-inline: 16px;
   }
 
   .compare-bar__main {
@@ -586,7 +578,4 @@
     width: 100%;
   }
 
-  .page-compare__panel {
-    height: 420px;
-  }
 }

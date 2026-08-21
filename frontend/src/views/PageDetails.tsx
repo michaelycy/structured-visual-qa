@@ -16,6 +16,9 @@ import {
 import type { Issue, QAReport, ReviewDecision } from "../api"
 import { DECISION_META, ISSUE_TYPE_META, PALETTE, SEVERITY_META, STATUS_META } from "../uiTokens"
 
+const INTEGER_FORMATTER = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 })
+const EMPTY_SEVERITIES: string[] = []
+
 function pageImage(
   side: "source" | "target",
   page: number,
@@ -79,7 +82,7 @@ function PageCompare({
   if (!sourceUrl && !targetUrl) {
     return (
       <Empty
-        description="本页无渲染图：默认只渲染需复核页面，历史记录回看也不含渲染图（可在工作台重新比较生成）。"
+        description="本页无渲染图：默认只渲染需复核页面，历史记录回看也不含渲染图（可在工作台重新质检生成）。"
         image={Empty.PRESENTED_IMAGE_SIMPLE}
       />
     )
@@ -99,6 +102,10 @@ function PageCompare({
               src={sourceUrl}
               alt={`源文档第 ${page} 页`}
               className="page-compare__image"
+              width={1191}
+              height={1684}
+              loading="lazy"
+              decoding="async"
             />
             </div>
           </div>
@@ -117,6 +124,10 @@ function PageCompare({
                   src={targetUrl}
                   alt={`目标文档第 ${page} 页`}
                   className="page-compare__image"
+                  width={1191}
+                  height={1684}
+                  loading="lazy"
+                  decoding="async"
                   onLoad={(event) => {
                     const img = event.currentTarget
                     setPageWidth(img.naturalWidth / 2)
@@ -170,12 +181,20 @@ function PageCompare({
 }
 
 /** 复核状态筛选选项。 */
-type ReviewFilter = "all" | "pending" | "done"
+export type ReviewFilter = "all" | "pending" | "done"
+
+export interface PageDetailsViewState {
+  page?: number
+  issue?: string
+  severity?: string[]
+  review?: ReviewFilter
+  issuePage?: number
+}
 
 /** 按页内 Issue 列表生成分组：同 bbox 的多条合并为一组（与图上红框
  * 分组同键），无 bbox 的独立成组。返回 [(组键, [issue, index][])]。
  */
-export function groupIssuesByBbox(issues: Issue[]): { issue: Issue; index: number }[][] {
+function groupIssuesByBbox(issues: Issue[]): { issue: Issue; index: number }[][] {
   const groups = new Map<string, { issue: Issue; index: number }[]>()
   issues.forEach((issue, index) => {
     const key = issue.bbox
@@ -304,21 +323,45 @@ export function PageDetails({
   taskId,
   decisions,
   onDecide,
+  viewState,
+  onViewStateChange,
 }: {
   report: QAReport
   rendered?: { source: string[]; target: string[] }
   taskId: string | null
   decisions: Record<string, ReviewDecision>
   onDecide: (issueId: string, decision: ReviewDecision) => void
+  viewState?: PageDetailsViewState
+  onViewStateChange?: (state: PageDetailsViewState) => void
 }) {
   const problems = report.pages.filter((page) => page.status !== "pass")
-  const [selected, setSelected] = useState<number | null>(
-    problems[0]?.page ?? report.pages[0]?.page ?? null,
-  )
-  const [activeIssueId, setActiveIssueId] = useState<string | null>(null)
+  const defaultPage = problems[0]?.page ?? report.pages[0]?.page ?? null
+  const [localSelected, setLocalSelected] = useState<number | null>(defaultPage)
+  const [localActiveIssueId, setLocalActiveIssueId] = useState<string | null>(null)
   // 复核工作流筛选：只看某种严重度 / 只看未复核，处理上百条 Issue 时定位更快。
-  const [severityFilter, setSeverityFilter] = useState<string[]>([])
-  const [reviewFilter, setReviewFilter] = useState<ReviewFilter>("all")
+  const [localSeverityFilter, setLocalSeverityFilter] = useState<string[]>([])
+  const [localReviewFilter, setLocalReviewFilter] = useState<ReviewFilter>("all")
+  const [localIssuePage, setLocalIssuePage] = useState(1)
+  const selected = viewState ? viewState.page ?? defaultPage : localSelected
+  const activeIssueId = viewState ? viewState.issue ?? null : localActiveIssueId
+  const severityFilter = viewState ? viewState.severity ?? EMPTY_SEVERITIES : localSeverityFilter
+  const reviewFilter = viewState ? viewState.review ?? "all" : localReviewFilter
+  const issuePage = viewState ? viewState.issuePage ?? 1 : localIssuePage
+
+  const updateViewState = (patch: Partial<PageDetailsViewState>) => {
+    onViewStateChange?.({ ...viewState, ...patch })
+  }
+
+  const selectPage = (value: number | null) => {
+    setLocalSelected(value)
+    setLocalActiveIssueId(null)
+    updateViewState({ page: value ?? undefined, issue: undefined })
+  }
+
+  const highlightIssue = (value: string | null) => {
+    setLocalActiveIssueId(value)
+    updateViewState({ issue: value ?? undefined })
+  }
   const page = report.pages.find((item) => item.page === selected)
   const allIssues = useMemo(() => report.pages.flatMap((item) => item.issues), [report.pages])
 
@@ -346,15 +389,15 @@ export function PageDetails({
           {taskId && <span className="page-review__state"><i />复核任务已开启</span>}
         </Space>
         <Select
+          aria-label="选择对照页码"
           className="page-review__page-select"
           value={selected}
           onChange={(value) => {
-            setSelected(value)
-            setActiveIssueId(null)
+            selectPage(value)
           }}
           options={report.pages.map((item) => ({
             value: item.page,
-            label: `第 ${item.page} 页 · ${item.score.toFixed(0)} 分 · ${
+            label: `第 ${item.page} 页 · ${INTEGER_FORMATTER.format(item.score)} 分 · ${
               STATUS_META[item.status]?.label ?? item.status
             }${item.issues.length ? ` · ${item.issues.length} 个问题` : ""}`,
           }))}
@@ -387,20 +430,31 @@ export function PageDetails({
         </Space>
         <Space wrap size={8}>
           <Select
+            aria-label="按严重度筛选问题"
             mode="multiple"
             allowClear
-            placeholder="按严重度筛选"
+            placeholder="按严重度筛选…"
             className="issue-list-filter"
             value={severityFilter}
-            onChange={setSeverityFilter}
+            onChange={(value) => {
+              setLocalSeverityFilter(value)
+              setLocalIssuePage(1)
+              updateViewState({ severity: value.length ? value : undefined, issuePage: undefined })
+            }}
             options={Object.entries(SEVERITY_META).map(([key, meta]) => ({
               value: key,
               label: meta.label,
             }))}
           />
           <Segmented
+            aria-label="按复核状态筛选问题"
             value={reviewFilter}
-            onChange={(value) => setReviewFilter(value as ReviewFilter)}
+            onChange={(value) => {
+              const next = value as ReviewFilter
+              setLocalReviewFilter(next)
+              setLocalIssuePage(1)
+              updateViewState({ review: next === "all" ? undefined : next, issuePage: undefined })
+            }}
             options={[
               { value: "all", label: `全部 ${allIssues.length}` },
               {
@@ -419,9 +473,18 @@ export function PageDetails({
       <Table<Issue>
         className="issue-table"
         rowKey="id"
-        size="small"
+        size="middle"
         dataSource={visibleIssues}
-        pagination={{ pageSize: 8, hideOnSinglePage: true, showSizeChanger: false }}
+        pagination={{
+          current: issuePage,
+          pageSize: 8,
+          hideOnSinglePage: true,
+          showSizeChanger: false,
+          onChange: (value) => {
+            setLocalIssuePage(value)
+            updateViewState({ issuePage: value === 1 ? undefined : value })
+          },
+        }}
         locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前筛选条件下没有问题" /> }}
         columns={[
           {
@@ -493,23 +556,34 @@ export function PageDetails({
         expandable={{
           expandedRowKeys: activeIssueId ? [activeIssueId] : [],
           onExpand: (expanded, issue) => {
-            setSelected(issue.page)
-            setActiveIssueId(expanded ? issue.id : null)
+            setLocalSelected(issue.page)
+            setLocalActiveIssueId(expanded ? issue.id : null)
+            updateViewState({ page: issue.page, issue: expanded ? issue.id : undefined })
           },
           expandedRowRender: (issue) => (
             <IssueDetails
               issue={issue}
               decisions={decisions}
               onDecide={onDecide}
-              onHighlight={setActiveIssueId}
+              onHighlight={(issueId) => highlightIssue(issueId)}
             />
           ),
         }}
         onRow={(issue) => ({
           className: issue.id === activeIssueId ? "issue-table__row--active" : "",
+          tabIndex: 0,
+          "aria-label": `查看第 ${issue.page} 页问题：${issue.description}`,
           onClick: () => {
-            setSelected(issue.page)
-            setActiveIssueId(issue.id)
+            setLocalSelected(issue.page)
+            setLocalActiveIssueId(issue.id)
+            updateViewState({ page: issue.page, issue: issue.id })
+          },
+          onKeyDown: (event) => {
+            if (event.key !== "Enter" && event.key !== " ") return
+            event.preventDefault()
+            setLocalSelected(issue.page)
+            setLocalActiveIssueId(issue.id)
+            updateViewState({ page: issue.page, issue: issue.id })
           },
         })}
       />

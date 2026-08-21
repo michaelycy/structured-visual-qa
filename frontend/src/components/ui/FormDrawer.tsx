@@ -13,14 +13,14 @@ export function FormDrawer({
   title,
   description,
   children,
-  width = 560,
+  size = 560,
   ...props
 }: FormDrawerProps) {
   return (
     <Drawer
       {...props}
       className="qa-form-drawer"
-      width={width}
+      size={size}
       title={
         <span className="qa-form-drawer__title">
           <strong>{title}</strong>

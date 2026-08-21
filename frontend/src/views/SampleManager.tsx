@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react"
 import {
   Button,
-  Card,
   Form,
   Input,
   message,
@@ -11,7 +10,6 @@ import {
   Popconfirm,
   Select,
   Space,
-  Table,
   Tag,
   Typography,
   Upload,
@@ -22,6 +20,7 @@ import { PALETTE } from "../uiTokens"
 import type { UploadFile } from "antd/es/upload/interface"
 import type { SampleRecord } from "../api"
 import { api } from "../services/queryClient"
+import { DataTable, PageHeader, PageSection } from "../components/ui"
 
 const ACCEPT = ".pdf,.docx,.doc,.pptx,.ppt,.xlsx,.xls,.odt,.odp"
 const LANGUAGE_OPTIONS = [
@@ -143,10 +142,10 @@ export function SampleManager({
       title: "样本",
       dataIndex: "name",
       render: (_, record) => (
-        <Space direction="vertical" size={0}>
+        <Space orientation="vertical" size={0}>
           <Typography.Text strong>{record.name}</Typography.Text>
           {record.description && (
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            <Typography.Text type="secondary">
               {record.description}
             </Typography.Text>
           )}
@@ -250,27 +249,30 @@ export function SampleManager({
   ]
 
   return (
-    <>
+    <div className="qa-page management-page">
       {contextHolder}
-      <Card
+      <PageHeader
         title="样本管理"
+        meta={`· ${records.length} 个样本`}
+        description="维护可复用的源文档与目标文档对；内置样本只读，用户样本可编辑和归档。"
         extra={
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
             新建样本
           </Button>
         }
-      >
-        <Typography.Paragraph type="secondary">
-          一个样本同时包含源文档和目标文档；内置样本只读，用户样本可编辑和归档。
-        </Typography.Paragraph>
-        <Table
+      />
+      <PageSection className="management-page__section">
+        <DataTable
           rowKey="sample_id"
           loading={loading}
           columns={columns}
           dataSource={records}
           pagination={{ pageSize: 10, showSizeChanger: false }}
+          scroll={{ x: 1120 }}
+          emptyTitle="还没有用户样本"
+          emptyDescription="新建样本后，可将一组源文档与目标文档快速载入工作台。"
         />
-      </Card>
+      </PageSection>
 
       <Modal
         title="新建样本"
@@ -375,6 +377,6 @@ export function SampleManager({
           </Form.Item>
         </Form>
       </Modal>
-    </>
+    </div>
   )
 }

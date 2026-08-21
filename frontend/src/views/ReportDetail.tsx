@@ -11,15 +11,20 @@ import type { QAReport, ReviewDecision } from "../api"
 import { api } from "../services/queryClient"
 import { ReportOverview } from "./ReportOverview"
 import { PageDetails } from "./PageDetails"
+import type { PageDetailsViewState } from "./PageDetails"
 
 export function ReportDetail({
   report,
   rendered,
   historyRecordId,
+  viewState,
+  onViewStateChange,
 }: {
   report: QAReport
   rendered?: { source: string[]; target: string[] }
   historyRecordId: string | null
+  viewState?: PageDetailsViewState
+  onViewStateChange?: (state: PageDetailsViewState) => void
 }) {
   const [decisions, setDecisions] = useState<Record<string, ReviewDecision>>({})
   const [messageApi, contextHolder] = message.useMessage()
@@ -45,14 +50,24 @@ export function ReportDetail({
 
   const decide = useCallback(
     (issueId: string, decision: ReviewDecision) => {
+      const previousDecision = decisions[issueId]
       setDecisions((prev) => ({ ...prev, [issueId]: decision }))
       api
         .reviewDecision(taskId, report, issueId, decision)
-        .catch((exc) =>
-          messageApi.error(exc instanceof Error ? exc.message : String(exc)),
-        )
+        .catch((exc) => {
+          // 请求失败时只回滚本次仍在展示的乐观结果，避免覆盖用户随后提交的新判定。
+          setDecisions((current) => {
+            if (current[issueId] !== decision) return current
+            const next = { ...current }
+            if (previousDecision) next[issueId] = previousDecision
+            else delete next[issueId]
+            return next
+          })
+          const reason = exc instanceof Error ? exc.message : String(exc)
+          messageApi.error(`复核结果保存失败：${reason}。请检查服务状态后重试。`)
+        })
     },
-    [taskId, report, messageApi],
+    [taskId, report, decisions, messageApi],
   )
 
   return (
@@ -70,6 +85,8 @@ export function ReportDetail({
           taskId={taskId}
           decisions={decisions}
           onDecide={decide}
+          viewState={viewState}
+          onViewStateChange={onViewStateChange}
         />
       </div>
     </>

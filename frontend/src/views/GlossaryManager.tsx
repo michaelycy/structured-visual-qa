@@ -17,6 +17,7 @@ import {
 import type { ColumnsType } from "antd/es/table"
 import type { Glossary, GlossarySummary } from "../api"
 import { api } from "../services/queryClient"
+import { DataTable, PageHeader, PageSection } from "../components/ui"
 
 interface EntryRow {
   key: string
@@ -98,7 +99,7 @@ function GlossaryEditor({
           {error}
         </Typography.Paragraph>
       )}
-      <Space direction="vertical" size={8} style={{ width: "100%" }}>
+      <Space orientation="vertical" size={8} style={{ width: "100%" }}>
         <Space wrap>
           <Input
             placeholder="术语库名称"
@@ -244,7 +245,7 @@ export function GlossaryManager() {
       title: "标识",
       dataIndex: "glossary_id",
       render: (value: string) => (
-        <Tag style={{ fontFamily: "monospace", fontSize: 12 }}>{value}</Tag>
+        <Tag className="qa-code-value">{value}</Tag>
       ),
     },
     { title: "版本", dataIndex: "version", width: 70, render: (v: number) => `v${v}` },
@@ -253,7 +254,7 @@ export function GlossaryManager() {
       title: "引用",
       dataIndex: "reference",
       render: (value: string) => (
-        <span style={{ fontFamily: "monospace", fontSize: 12 }}>{value}</span>
+        <span className="qa-code-value">{value}</span>
       ),
     },
     {
@@ -286,12 +287,14 @@ export function GlossaryManager() {
   ]
 
   return (
-    <>
-    {contextHolder}
-    <Card
-      title="术语库管理"
-      extra={
-        <Space>
+    <div className="qa-page management-page">
+      {contextHolder}
+      <PageHeader
+        title="术语库"
+        meta={`· ${glossaries.length} 个术语库`}
+        description="管理行业术语及允许译法，供质检任务检查术语一致性。"
+        extra={
+          <Space wrap>
           <Select
             placeholder="从已有术语库复制"
             style={{ minWidth: 180 }}
@@ -328,28 +331,31 @@ export function GlossaryManager() {
           >
             新建术语库
           </Button>
-        </Space>
-      }
-    >
-      <Table
-        size="small"
-        rowKey="filename"
-        loading={loading}
-        columns={columns}
-        dataSource={glossaries}
-        pagination={false}
-        locale={{ emptyText: "尚未保存术语库。" }}
+          </Space>
+        }
       />
-      {editing && (
-        <GlossaryEditor
-          initial={editing}
-          onSaved={() => {
-            setEditing(null)
-            refresh()
-          }}
+      <PageSection className="management-page__section">
+        <DataTable
+          rowKey="filename"
+          loading={loading}
+          columns={columns}
+          dataSource={glossaries}
+          pagination={false}
+          emptyTitle="尚未保存术语库"
+          emptyDescription="创建术语库后，可在工作台为单次质检选择使用。"
         />
+      </PageSection>
+      {editing && (
+        <div className="management-page__editor">
+          <GlossaryEditor
+            initial={editing}
+            onSaved={() => {
+              setEditing(null)
+              refresh()
+            }}
+          />
+        </div>
       )}
-    </Card>
-    </>
+    </div>
   )
 }

@@ -14,8 +14,10 @@ from document_qa.profiles import (
 from document_qa.schemas import (
     BoundingBox,
     ElementType,
+    IssueType,
     Page,
     Region,
+    Severity,
 )
 from document_qa.detectors import RuleDetector
 from document_qa.matching import RegionMatcher
@@ -111,6 +113,27 @@ class RuleProfileTests(unittest.TestCase):
         issues = RuleDetector(profile).detect(source, target, result)
 
         self.assertEqual(issues, [])
+
+    def test_rasterized_severity_override_defaults_to_high(self) -> None:
+        """文本改为图片显示默认保持 HIGH，并允许规则配置覆盖为提示。"""
+
+        settings = default_rule_profile().detectors
+
+        self.assertEqual(
+            settings.severity_for(IssueType.TEXT_RASTERIZED, Severity.HIGH),
+            Severity.HIGH,
+        )
+        configured = settings.model_copy(
+            update={
+                "severity_overrides": {
+                    IssueType.TEXT_RASTERIZED: Severity.INFO,
+                }
+            }
+        )
+        self.assertEqual(
+            configured.severity_for(IssueType.TEXT_RASTERIZED, Severity.HIGH),
+            Severity.INFO,
+        )
 
 
 if __name__ == "__main__":

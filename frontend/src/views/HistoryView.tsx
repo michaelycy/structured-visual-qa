@@ -42,7 +42,7 @@ function RerunModal({
   const [sourcePassword, setSourcePassword] = useState("")
   const [targetPassword, setTargetPassword] = useState("")
   const [profiles, setProfiles] = useState<
-    { filename: string; name: string; version: number; reference: string }[]
+    { filename: string; name: string; version: number; reference: string; status: string }[]
   >([])
 
   useEffect(() => {
@@ -50,7 +50,10 @@ function RerunModal({
       setProfile(null)
       setSourcePassword("")
       setTargetPassword("")
-      api.profileList().then(setProfiles).catch(() => undefined)
+      api
+        .profileList()
+        .then((items) => setProfiles(items.filter((item) => item.status === "published")))
+        .catch(() => undefined)
     }
   }, [open])
 

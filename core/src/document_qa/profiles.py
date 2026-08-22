@@ -251,9 +251,18 @@ class DetectorSettings(SchemaModel):
 
     enabled: DetectorToggles = Field(default_factory=DetectorToggles)
     thresholds: DetectorThresholds = Field(default_factory=DetectorThresholds)
+    # 只覆盖确有业务策略差异的 Issue；未配置项继续使用检测器默认严重度。
+    severity_overrides: dict[IssueType, Severity] = Field(
+        default_factory=lambda: {IssueType.TEXT_RASTERIZED: Severity.HIGH}
+    )
     layout_analog_weights: LayoutAnalogWeights = Field(
         default_factory=LayoutAnalogWeights
     )
+
+    def severity_for(self, issue_type: IssueType, default: Severity) -> Severity:
+        """返回规则配置指定的严重度，未覆盖时沿用检测器默认值。"""
+
+        return self.severity_overrides.get(issue_type, default)
 
 
 class ScoringSettings(SchemaModel):

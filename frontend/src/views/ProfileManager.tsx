@@ -1,21 +1,27 @@
 /** 规则管理页：antd Table + 编辑抽屉内嵌表单。 */
 
 import { useCallback, useEffect, useState } from "react"
-import { Button, Card, message, Popconfirm, Space, Tag } from "antd"
+import { Button, message, Popconfirm, Space, Tag } from "antd"
 import type { ColumnsType } from "antd/es/table"
 import type { RuleProfile } from "../api"
 import { api } from "../services/queryClient"
 import { ProfileEditor } from "./ProfileEditor"
 import { PALETTE } from "../uiTokens"
-import { DataTable, PageHeader, PageSection } from "../components/ui"
+import { DataTable, FormDrawer, PageHeader, PageSection } from "../components/ui"
 
 interface ProfileListItem {
   filename: string
   profile_id: string
   name: string
   version: number
-  status: string
+  status: "draft" | "published" | "archived"
   reference: string
+}
+
+interface EditingProfile {
+  profile: RuleProfile
+  title: string
+  description: string
 }
 
 const STATUS_COLOR: Record<string, { color: string; background: string; label: string }> = {
@@ -24,31 +30,74 @@ const STATUS_COLOR: Record<string, { color: string; background: string; label: s
   archived: { color: PALETTE.textSecondary, background: PALETTE.canvas, label: "已归档" },
 }
 
-/** 新建/编辑共用的加载器封装。 */
-function useProfileLoader() {
-  const [editing, setEditing] = useState<RuleProfile | null>(null)
+/** 生成未被现有规则家族占用的稳定标识。 */
+function uniqueProfileId(profiles: ProfileListItem[], preferred: string) {
+  const used = new Set(profiles.map((item) => item.profile_id))
+  if (!used.has(preferred)) return preferred
+  let suffix = 2
+  while (used.has(`${preferred}-${suffix}`)) suffix += 1
+  return `${preferred}-${suffix}`
+}
+
+/** 新建、派生和版本升级共用的加载器封装。 */
+function useProfileLoader(profiles: ProfileListItem[]) {
+  const [editing, setEditing] = useState<EditingProfile | null>(null)
   const startNew = () =>
     api
       .defaultProfile()
       .then((profile) =>
         setEditing({
-          ...profile,
-          profile_id: "custom-rules",
-          name: "自定义规则",
-          version: 1,
+          title: "新建规则",
+          description: "从内置平衡配置开始创建草稿。",
+          profile: {
+            ...profile,
+            profile_id: uniqueProfileId(profiles, "custom-rules"),
+            name: "自定义规则",
+            version: 1,
+            status: "draft",
+            description: "",
+          },
         }),
       )
       .catch(() => message.error("无法加载默认配置"))
-  const startEdit = (filename: string) =>
-    api.profileItem(filename).then(setEditing).catch(() => message.error("读取失败"))
+  const startEdit = (record: ProfileListItem) =>
+    api
+      .profileItem(record.filename)
+      .then((profile) => {
+        if (record.status === "draft") {
+          setEditing({
+            profile,
+            title: "编辑规则",
+            description: `正在编辑草稿 ${record.reference}。`,
+          })
+          return
+        }
+        const nextVersion = Math.max(
+          ...profiles
+            .filter((item) => item.profile_id === record.profile_id)
+            .map((item) => item.version),
+        ) + 1
+        setEditing({
+          title: "新建规则版本",
+          description: `基于 ${record.reference} 创建不可冲突的新版本。`,
+          profile: { ...profile, version: nextVersion, status: "draft" },
+        })
+      })
+      .catch(() => message.error("读取失败"))
   const startFork = (filename: string) =>
     api
       .profileItem(filename)
       .then((profile) =>
         setEditing({
-          ...profile,
-          profile_id: `${profile.profile_id}-copy`,
-          name: `${profile.name}（副本）`,
+          title: "复制规则",
+          description: `基于 ${profile.profile_id}@${profile.version} 创建独立规则。`,
+          profile: {
+            ...profile,
+            profile_id: uniqueProfileId(profiles, `${profile.profile_id}-copy`),
+            name: `${profile.name}（副本）`,
+            version: 1,
+            status: "draft",
+          },
         }),
       )
       .catch(() => message.error("读取失败"))
@@ -59,8 +108,7 @@ export function ProfileManager() {
   const [profiles, setProfiles] = useState<ProfileListItem[]>([])
   const [loading, setLoading] = useState(true)
   const [messageApi, contextHolder] = message.useMessage()
-  const { editing, setEditing, startNew, startEdit, startFork } =
-    useProfileLoader()
+  const { editing, setEditing, startNew, startEdit, startFork } = useProfileLoader(profiles)
 
   const refresh = useCallback(() => {
     setLoading(true)
@@ -75,10 +123,20 @@ export function ProfileManager() {
 
   useEffect(refresh, [refresh])
 
-  const remove = async (filename: string, reference: string) => {
+  const archive = async (filename: string, reference: string) => {
     try {
       await api.profileDelete(filename)
-      messageApi.success(`已删除 ${reference}`)
+      messageApi.success(`已归档 ${reference}`)
+      refresh()
+    } catch (exc) {
+      messageApi.error(exc instanceof Error ? exc.message : String(exc))
+    }
+  }
+
+  const publish = async (filename: string, reference: string) => {
+    try {
+      await api.profilePublish(filename)
+      messageApi.success(`已发布 ${reference}`)
       refresh()
     } catch (exc) {
       messageApi.error(exc instanceof Error ? exc.message : String(exc))
@@ -123,24 +181,30 @@ export function ProfileManager() {
     },
     {
       title: "操作",
-      width: 220,
+      width: 240,
       render: (_, record) => (
         <Space size={4}>
-          <Button type="link" size="small" onClick={() => void startEdit(record.filename)}>
-            编辑
+          <Button type="link" size="small" onClick={() => void startEdit(record)}>
+            {record.status === "draft" ? "编辑" : "新建版本"}
           </Button>
-          <Button type="link" size="small" onClick={() => void startFork(record.filename)}>
-            复制派生
-          </Button>
+          {record.status === "draft" ? (
+            <Button type="link" size="small" onClick={() => void publish(record.filename, record.reference)}>
+              发布
+            </Button>
+          ) : (
+            <Button type="link" size="small" onClick={() => void startFork(record.filename)}>
+              复制派生
+            </Button>
+          )}
           <Popconfirm
-            title={`确定删除 ${record.reference}？`}
-            description="此操作不可恢复。"
-            okText="删除"
+            title={`确定归档 ${record.reference}？`}
+            description="归档后不再用于新质检，历史记录仍可复现。"
+            okText="归档"
             okButtonProps={{ danger: true }}
-            onConfirm={() => void remove(record.filename, record.reference)}
+            onConfirm={() => void archive(record.filename, record.reference)}
           >
             <Button type="link" size="small" danger>
-              删除
+              归档
             </Button>
           </Popconfirm>
         </Space>
@@ -154,7 +218,7 @@ export function ProfileManager() {
       <PageHeader
         title="规则管理"
         meta={`· ${profiles.length} 个配置`}
-        description="管理文档质检所使用的规则阈值、检测开关和版本引用。"
+        description="配置检测规则与阈值；草稿发布后不可覆盖，调整时创建新版本。"
         extra={
           <Button type="primary" onClick={startNew}>
             新建配置
@@ -162,37 +226,35 @@ export function ProfileManager() {
         }
       />
       <PageSection className="management-page__section">
-      <DataTable
-        rowKey="filename"
-        loading={loading}
-        columns={columns}
-        dataSource={profiles}
-        pagination={false}
-        emptyTitle="尚未保存规则配置"
-        emptyDescription="新建配置可从内置平衡配置起步。"
-      />
+        <DataTable
+          rowKey="filename"
+          loading={loading}
+          columns={columns}
+          dataSource={profiles}
+          pagination={false}
+          emptyTitle="尚未保存规则配置"
+          emptyDescription="新建配置可从内置平衡配置起步。"
+        />
       </PageSection>
-      {editing && (
-        <Card
-          className="management-page__editor"
-          size="small"
-          title={`编辑：${editing.name ?? editing.profile_id}`}
-          extra={
-            <Button size="small" onClick={() => setEditing(null)}>
-              关闭
-            </Button>
-          }
-        >
+      <FormDrawer
+        open={Boolean(editing)}
+        title={editing?.title ?? "规则配置"}
+        description={editing?.description}
+        size={720}
+        destroyOnHidden
+        onClose={() => setEditing(null)}
+      >
+        {editing ? (
           <ProfileEditor
-            initial={editing}
+            initial={editing.profile}
             onSaved={(reference) => {
               messageApi.success(`已保存 ${reference}`)
               setEditing(null)
               refresh()
             }}
           />
-        </Card>
-      )}
+        ) : null}
+      </FormDrawer>
     </div>
   )
 }

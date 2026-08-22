@@ -207,7 +207,7 @@ export const documentQaService = {
         profile_id: string
         name: string
         version: number
-        status: string
+        status: "draft" | "published" | "archived"
         reference: string
       }[]
     }>("/api/profile/list").then((r) => r.profiles),
@@ -217,6 +217,11 @@ export const documentQaService = {
     httpClient.json<{ deleted: string }>(
       `/api/profile/item/${encodeURIComponent(filename)}`,
       { method: "DELETE" },
+    ),
+  profilePublish: (filename: string) =>
+    httpClient.json<{ filename: string; reference: string; status: string }>(
+      `/api/profile/item/${encodeURIComponent(filename)}/publish`,
+      { method: "POST" },
     ),
   saveProfile: (profile: RuleProfile) =>
     httpClient.json<{ path: string; reference: string }>("/api/profile/save", {

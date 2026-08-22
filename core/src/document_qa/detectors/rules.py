@@ -49,13 +49,15 @@ class RuleDetector:
         rasterized_image_ids: set[str] = set()
         rasterized_text_ids: set[str] = set()
         rasterized_pairs: set[frozenset[str]] = set()
+        # 即使业务策略关闭“文本改为图片显示”提示，也要识别这种结构并
+        # 抑制同一区域的新增图片、不可见文字和重叠误报。
+        (
+            rasterized_issues,
+            rasterized_image_ids,
+            rasterized_text_ids,
+            rasterized_pairs,
+        ) = self._detect_rasterized_text(source, target, match_result)
         if enabled.text_rasterized:
-            (
-                rasterized_issues,
-                rasterized_image_ids,
-                rasterized_text_ids,
-                rasterized_pairs,
-            ) = self._detect_rasterized_text(source, target, match_result)
             issues.extend(rasterized_issues)
         if enabled.missing_element:
             issues.extend(
@@ -243,7 +245,9 @@ class RuleDetector:
                     id=f"p{target.page}-rasterized-{image_region.id}",
                     page=target.page,
                     type=IssueType.TEXT_RASTERIZED,
-                    severity=Severity.HIGH,
+                    severity=self.profile.detectors.severity_for(
+                        IssueType.TEXT_RASTERIZED, Severity.HIGH
+                    ),
                     source_region=source_region.id,
                     target_region=image_region.id,
                     bbox=image_region.bbox,

@@ -188,7 +188,7 @@ export function CompareBar({
 }: CompareBarProps) {
   const [glossaries, setGlossaries] = useState<GlossarySummary[]>([])
   const [profiles, setProfiles] = useState<
-    { filename: string; name: string; version: number }[]
+    { filename: string; name: string; version: number; status: string }[]
   >([])
   const [messageApi, contextHolder] = message.useMessage()
   const loadGlossaries = () => {
@@ -202,7 +202,7 @@ export function CompareBar({
     if (profiles.length) return
     api
       .profileList()
-      .then(setProfiles)
+      .then((items) => setProfiles(items.filter((item) => item.status === "published")))
       .catch((error) => {
         const reason = error instanceof Error ? error.message : String(error)
         messageApi.error(`规则配置加载失败：${reason}。请检查服务状态后重试。`)

@@ -416,10 +416,19 @@ const RATIO_METRICS = new Set([
 
 const REGION_TYPE_LABELS: Record<string, string> = {
   text: "文本",
-  image: "栅格图片",
-  vector: "矢量图形",
-  group: "组合",
+  image: "图片",
+  vector: "图形",
+  group: "组合内容",
   unknown: "未知类型",
+}
+
+const ALIGNMENT_LABELS: Record<string, string> = {
+  left: "左对齐",
+  center: "居中对齐",
+  right: "右对齐",
+  justify: "两端对齐",
+  other: "其他对齐方式",
+  unknown: "无法判断",
 }
 
 function formatPercent(value: number): string {
@@ -447,6 +456,12 @@ function issueDisplayDescription(issue: Issue): string {
   const fontChange = typeof metrics.font_size_change_ratio === "number"
     ? metrics.font_size_change_ratio
     : null
+  const sourceAlignment = typeof metrics.source_alignment === "string"
+    ? metrics.source_alignment
+    : null
+  const targetAlignment = typeof metrics.target_alignment === "string"
+    ? metrics.target_alignment
+    : null
 
   if (issue.type === "region_shifted" && xShift !== null && yShift !== null) {
     const horizontal = `${xShift < 0 ? "向左" : "向右"} ${formatPercent(Math.abs(xShift))}`
@@ -465,13 +480,42 @@ function issueDisplayDescription(issue: Issue): string {
   if (issue.type === "text_rasterized") {
     return "目标文档改用图片显示这段文字。该项不代表翻译错误，请核对文字内容、清晰度，以及交付规范是否允许文字转为图片。"
   }
-  if ((issue.type === "added_element" || issue.type === "missing_element") && regionType) {
-    const documentSide = issue.type === "added_element" ? "目标文档" : "源文档"
-    const matchResult = issue.type === "added_element" ? "未与原文匹配" : "未在译文中匹配到"
-    const rasterNote = regionType === "image"
-      ? "PDF 将该内容存储为图片对象，也可能是导出时栅格化的文字或图形。"
-      : ""
-    return `${documentSide}存在${matchResult}的${regionTypeLabel}区域。${rasterNote}`
+  if (issue.type === "text_vectorized") {
+    return "目标页面把文字改成了图形，系统无法继续检查数字、漏译和术语。请人工核对页面文字内容是否正确。"
+  }
+  if (issue.type === "text_fragmented") {
+    return "目标文字被拆成窄列、竖排或零散字符，阅读顺序可能异常。请核对文字是否完整且排列正确。"
+  }
+  if (issue.type === "invisible_text") {
+    return "目标文档中存在页面上看不到的文字。请核对文字是否遗漏显示，以及交付文件是否符合预期。"
+  }
+  if (issue.type === "text_image_overlap") {
+    return "目标文档中的文字与图片明显重叠，可能影响阅读。请核对文字或图片是否被遮挡。"
+  }
+  if (issue.type === "text_overflow") {
+    return "目标文字超出所在文本区域，可能挤到其他内容。请核对换行、间距和遮挡情况。"
+  }
+  if (issue.type === "text_clipped") {
+    return "目标文字没有完整显示，部分内容可能被裁切。请核对句尾和区域边缘。"
+  }
+  if (issue.type === "abnormal_wrap") {
+    return "目标文字的换行方式与原文差异明显。请核对断句、段落高度和阅读顺序。"
+  }
+  if (issue.type === "line_count_explosion") {
+    return "译文行数相对原文明显增加，可能导致版面拥挤。请核对换行和文字区域高度。"
+  }
+  if (issue.type === "text_alignment_changed" && sourceAlignment && targetAlignment) {
+    const sourceLabel = ALIGNMENT_LABELS[sourceAlignment] ?? sourceAlignment
+    const targetLabel = ALIGNMENT_LABELS[targetAlignment] ?? targetAlignment
+    return `目标段落由${sourceLabel}变为${targetLabel}。请确认是否符合原版式要求。`
+  }
+  if (issue.type === "missing_element") {
+    const typeHint = regionTypeLabel ? `${regionTypeLabel}内容` : "内容"
+    return `目标文档未找到与原文对应的${typeHint}。请确认内容是否确实缺失，或只是位置变化导致未能对应。`
+  }
+  if (issue.type === "added_element") {
+    const typeHint = regionTypeLabel ? `${regionTypeLabel}内容` : "内容"
+    return `目标文档中存在未与原文对应的${typeHint}。请确认是否确实多出内容，或只是位置变化导致未能对应。`
   }
   return issue.description
 }

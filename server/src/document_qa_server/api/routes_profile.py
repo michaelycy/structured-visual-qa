@@ -63,13 +63,28 @@ def get_profile(filename: str, http: Request) -> dict:
 
 @router.delete("/item/{filename}")
 def delete_profile(filename: str, http: Request) -> dict:
-    """删除已保存 Profile。"""
+    """归档已保存 Profile。"""
 
     try:
         _service(http).delete(filename)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return {"deleted": filename}
+
+
+@router.post("/item/{filename}/publish")
+def publish_profile(filename: str, http: Request) -> dict:
+    """发布草稿 Profile，发布后同版本不可覆盖。"""
+
+    try:
+        summary = _service(http).publish(filename)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "filename": summary.filename,
+        "reference": summary.reference,
+        "status": summary.status,
+    }
 
 
 @router.post("/save")

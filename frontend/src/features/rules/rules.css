@@ -1,0 +1,56 @@
+.rule-editor {
+  display: grid;
+  gap: var(--qa-space-4);
+}
+
+.rule-editor .ant-card {
+  box-shadow: none;
+}
+
+.rule-editor__rule,
+.rule-editor__policy {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--qa-space-4);
+  min-height: 64px;
+  padding-block: var(--qa-space-3);
+  border-bottom: 1px solid var(--qa-border);
+}
+
+.rule-editor__rule:last-child,
+.rule-editor__policy:last-child {
+  border-bottom: 0;
+}
+
+.rule-editor__rule-content {
+  display: grid;
+  gap: var(--qa-space-1);
+}
+
+.rule-editor__number {
+  width: 100%;
+}
+
+.rule-editor__policy-select {
+  width: 180px;
+}
+
+.rule-editor__expert {
+  width: 100%;
+}
+
+.rule-editor__actions {
+  padding-top: var(--qa-space-2);
+}
+
+@media (max-width: 767px) {
+  .rule-editor__policy {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .rule-editor__policy-select {
+    width: 100%;
+  }
+}

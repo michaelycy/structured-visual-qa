@@ -19,7 +19,8 @@ RuleProfile
 │   ├── enabled
 │   └── max_shift / skip_penalty / shift_margin
 ├── grouping
-│   └── heading_ratio
+│   ├── heading_ratio
+│   └── disconnected_span_gap_ratio
 ├── detectors
 │   ├── enabled
 │   ├── thresholds
@@ -92,4 +93,3 @@ DELETE /api/profile/item/{filename}
 ```
 
 保存路径由服务端按 `profile_id` 与 `version` 生成，不接受客户端指定任意路径；写入采用原子替换。
-

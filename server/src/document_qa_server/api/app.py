@@ -14,6 +14,7 @@ from document_qa_server.services import (
     CompareService,
     FileService,
     GlossaryService,
+    ImageEvidenceService,
     NormalizationService,
     ProfileService,
     ReviewService,
@@ -69,7 +70,9 @@ def create_app(
     app.state.database = database
     app.state.samples = sample_service
     app.state.reviews = ReviewService(artifacts_dir=root, database=database)
-    app.state.history = CompareHistoryService(artifacts_dir=root, database=database)
+    history_service = CompareHistoryService(artifacts_dir=root, database=database)
+    app.state.history = history_service
+    app.state.image_evidence = ImageEvidenceService(history_service)
     app.state.glossaries = GlossaryService(artifacts_dir=root, database=database)
     # 导出路由需要产物根目录；异步模式开关来自配置。
     app.state.artifacts_dir = root

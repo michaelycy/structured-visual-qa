@@ -201,6 +201,38 @@
   white-space: nowrap;
 }
 
+.history-record-id {
+  position: relative;
+  display: block;
+  overflow: hidden;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  color: var(--qa-text-secondary);
+  background: transparent;
+  line-height: 22px;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.history-record-id::after {
+  position: absolute;
+  inset: -11px 0;
+  content: "";
+}
+
+.history-record-id:hover {
+  color: var(--qa-info);
+}
+
+.history-record-id:focus-visible {
+  border-radius: var(--qa-radius-xs);
+  outline: 2px solid var(--qa-info);
+  outline-offset: 2px;
+}
+
 .history-rerun-modal__lead.ant-typography {
   font-size: 14px;
   line-height: 22px;

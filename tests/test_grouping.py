@@ -78,7 +78,42 @@ class RegionGrouperTests(unittest.TestCase):
         self.assertEqual(regions[0].relationships.below, regions[1].id)
         self.assertEqual(regions[1].relationships.above, regions[0].id)
 
+    def test_splits_distant_labels_from_same_source_block(self) -> None:
+        """同一原始 Block 中相距很远的同排标签不得合并成超宽 Region。"""
+
+        blocks = [
+            Block(
+                id="label-left",
+                page=1,
+                type=ElementType.TEXT,
+                bbox=BoundingBox(x=10, y=10, width=30, height=10),
+                style=TextStyle(font_size=10),
+                content=Content(text="左侧标签"),
+                metadata={"source_block_index": 0},
+            ),
+            Block(
+                id="label-right",
+                page=1,
+                type=ElementType.TEXT,
+                bbox=BoundingBox(x=150, y=10, width=30, height=10),
+                style=TextStyle(font_size=10),
+                content=Content(text="右侧标签"),
+                metadata={"source_block_index": 0},
+            ),
+        ]
+        page = Page(
+            document_id="doc",
+            page=1,
+            width=200,
+            height=200,
+            blocks=blocks,
+        )
+
+        regions = RegionGrouper().group_page(page).regions
+
+        self.assertEqual([region.id for region in regions], ["p1-r0", "p1-r0-c2"])
+        self.assertEqual([region.content.text for region in regions], ["左侧标签", "右侧标签"])
+
 
 if __name__ == "__main__":
     unittest.main()
-

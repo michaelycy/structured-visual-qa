@@ -9,20 +9,23 @@ from document_qa_server.services.compare_service import CompareService
 from document_qa_server.services.file_service import FileService
 from document_qa_server.services.glossary_service import GlossaryService
 from document_qa_server.services.history_service import CompareHistoryService
+from document_qa_server.services.image_evidence_service import ImageEvidenceService
 from document_qa_server.services.normalization_service import (
     NormalizationError,
     NormalizationService,
 )
 from document_qa_server.services.profile_service import ProfileService
 from document_qa_server.services.review_service import ReviewService
-from document_qa_server.services.sample_service import SampleService
+from document_qa_server.services.sample_service import BuiltinSampleScanResult, SampleService
 from document_qa_server.services.verify_service import VerifyService, VerifyStageResult
 
 __all__ = [
     "CompareHistoryService",
     "CompareService",
+    "BuiltinSampleScanResult",
     "FileService",
     "GlossaryService",
+    "ImageEvidenceService",
     "NormalizationError",
     "NormalizationService",
     "ProfileService",

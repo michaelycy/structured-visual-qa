@@ -42,6 +42,7 @@ class IssueType(StrEnum):
     UNTRANSLATED_TEXT = "untranslated_text"
     GLOSSARY_VIOLATION = "glossary_violation"
     INVISIBLE_TEXT = "invisible_text"
+    TEXT_RASTERIZED = "text_rasterized"
     TEXT_VECTORIZED = "text_vectorized"
     TEXT_ALIGNMENT_CHANGED = "text_alignment_changed"
     OTHER = "other"

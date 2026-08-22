@@ -10,9 +10,9 @@ import { HistoryDetail } from "./HistoryDetail"
 import { PALETTE, scoreColor } from "../uiTokens"
 import { DataTable, PageHeader, PageSection, StatusTag } from "../components/ui"
 
-// 固定列合计约 730 px，给两个可省略的文档列各保留约 95 px；
+// 固定列合计约 920 px，给两个可省略的文档列各保留约 90 px；
 // 容器达到该宽度时不应再被人为强制出横向滚动条。
-const HISTORY_TABLE_MIN_WIDTH = 920
+const HISTORY_TABLE_MIN_WIDTH = 1100
 
 /** 本地时间格式化：created_at 为 UTC ISO 串，直接截串会差时区。 */
 function formatTime(iso: string): string {
@@ -192,6 +192,17 @@ export function HistoryView({
     }
   }
 
+  /** 复制完整记录 ID，失败时保留明确反馈，避免省略文本无法手动确认。 */
+  const copyRecordId = async (recordId: string) => {
+    try {
+      if (!navigator.clipboard) throw new Error("浏览器不支持剪贴板 API")
+      await navigator.clipboard.writeText(recordId)
+      messageApi.success("记录 ID 已复制")
+    } catch {
+      messageApi.error("复制记录 ID 失败，请检查浏览器剪贴板权限后重试。")
+    }
+  }
+
   /** 确认重新质检：拉取完整记录拿服务器端路径，缺失（如清理后的临时文件）时报错。 */
   const confirmRerun = async (
     profile: string | null,
@@ -213,6 +224,23 @@ export function HistoryView({
   }
 
   const columns: ColumnsType<Omit<HistoryRecord, "report">> = [
+    {
+      title: "ID",
+      dataIndex: "record_id",
+      width: 160,
+      render: (value: string) => (
+        <Tooltip title={`${value}（点击复制）`}>
+          <button
+            type="button"
+            className="history-record-id qa-code-value"
+            aria-label={`复制记录 ID：${value}`}
+            onClick={() => void copyRecordId(value)}
+          >
+            {value}
+          </button>
+        </Tooltip>
+      ),
+    },
     {
       title: "时间",
       dataIndex: "created_at",

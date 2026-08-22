@@ -8,6 +8,7 @@ import sqlite3
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
+from threading import Lock
 
 from document_qa_server.persistence import Database
 from document_qa_server.services.file_service import ACCEPTED_SUFFIXES
@@ -34,6 +35,16 @@ class SampleRecord:
     updated_at: str
 
 
+@dataclass(frozen=True)
+class BuiltinSampleScanResult:
+    """一次内置样本目录扫描的结构化摘要。"""
+
+    discovered: int
+    created: int
+    existing: int
+    conflicts: tuple[str, ...]
+
+
 class SampleService:
     """封装样本创建、查询、编辑、归档及内置样本发现。"""
 
@@ -48,7 +59,8 @@ class SampleService:
 
         self._database = database or Database(artifacts_dir=artifacts_dir)
         self._samples_dir = samples_dir
-        self._seed_builtin_pairs()
+        self._scan_lock = Lock()
+        self.rescan_builtins()
 
     def create(
         self,
@@ -182,58 +194,97 @@ class SampleService:
             raise ValueError("样本文档已丢失，无法载入")
         return record
 
-    def _seed_builtin_pairs(self) -> None:
-        """按 translated_ 与 en/zh 命名约定识别只读内置样本对。"""
+    def rescan_builtins(self) -> BuiltinSampleScanResult:
+        """重新扫描只读目录，只登记新增样本并返回冲突摘要。"""
+
+        with self._scan_lock:
+            pairs = self._discover_builtin_pairs()
+            created = 0
+            existing = 0
+            conflicts: list[str] = []
+            for source, target in pairs:
+                pair_label = f"{source.name} → {target.name}"
+                sample_id = "builtin-" + hashlib.sha256(
+                    f"{source.resolve()}\0{target.resolve()}".encode()
+                ).hexdigest()[:16]
+                source_language, target_language = (
+                    ("en", "zh-CN")
+                    if "-en." in source.name and "-zh." in target.name
+                    else ("und", "und")
+                )
+                try:
+                    with self._database.transaction() as connection:
+                        if connection.execute(
+                            "SELECT 1 FROM samples WHERE sample_id = ?", (sample_id,)
+                        ).fetchone():
+                            existing += 1
+                            continue
+                        if connection.execute(
+                            "SELECT 1 FROM samples WHERE name = ? COLLATE NOCASE",
+                            (source.stem,),
+                        ).fetchone():
+                            conflicts.append(f"{pair_label}：样本名称已存在")
+                            continue
+                        source_id = self._register_file(
+                            connection, source, source.name, origin="builtin"
+                        )
+                        target_id = self._register_file(
+                            connection, target, target.name, origin="builtin"
+                        )
+                        if source_id == target_id:
+                            raise ValueError("源文档与目标文档内容相同")
+                        now = Database.now()
+                        connection.execute(
+                            "INSERT INTO samples(sample_id, name, description, "
+                            "source_file_id, target_file_id, origin, status, created_at, "
+                            "updated_at, source_language, target_language) "
+                            "VALUES (?, ?, ?, ?, ?, 'builtin', 'active', ?, ?, ?, ?)",
+                            (
+                                sample_id,
+                                source.stem,
+                                "仓库内置只读样本对",
+                                source_id,
+                                target_id,
+                                now,
+                                now,
+                                source_language,
+                                target_language,
+                            ),
+                        )
+                    created += 1
+                except (OSError, sqlite3.IntegrityError, ValueError) as exc:
+                    conflicts.append(f"{pair_label}：{exc}")
+            return BuiltinSampleScanResult(
+                discovered=len(pairs),
+                created=created,
+                existing=existing,
+                conflicts=tuple(conflicts),
+            )
+
+    def _discover_builtin_pairs(self) -> list[tuple[Path, Path]]:
+        """按 translated_ 与 en/zh 约定发现并去重内置样本对。"""
 
         if not self._samples_dir.is_dir():
-            return
-        files = {
-            path.name: path
-            for path in self._samples_dir.iterdir()
-            if path.is_file() and path.suffix.lower() in ACCEPTED_SUFFIXES
-        }
-        pairs: list[tuple[Path, Path]] = []
+            return []
+        try:
+            files = {
+                path.name: path
+                for path in self._samples_dir.iterdir()
+                if path.is_file() and path.suffix.lower() in ACCEPTED_SUFFIXES
+            }
+        except OSError as exc:
+            raise RuntimeError("无法读取内置样本目录") from exc
+        pairs: dict[tuple[str, str], tuple[Path, Path]] = {}
         for name, target in files.items():
             if name.startswith("translated_") and name.removeprefix("translated_") in files:
-                pairs.append((files[name.removeprefix("translated_")], target))
+                source = files[name.removeprefix("translated_")]
+                pairs[(str(source.resolve()), str(target.resolve()))] = (source, target)
             if "-zh." in name:
                 source_name = name.replace("-zh.", "-en.")
                 if source_name in files:
-                    pairs.append((files[source_name], target))
-        for source, target in pairs:
-            sample_id = "builtin-" + hashlib.sha256(
-                f"{source.resolve()}\0{target.resolve()}".encode()
-            ).hexdigest()[:16]
-            now = Database.now()
-            source_language, target_language = (
-                ("en", "zh-CN")
-                if "-en." in source.name and "-zh." in target.name
-                else ("und", "und")
-            )
-            with self._database.transaction() as connection:
-                source_id = self._register_file(
-                    connection, source, source.name, origin="builtin"
-                )
-                target_id = self._register_file(
-                    connection, target, target.name, origin="builtin"
-                )
-                connection.execute(
-                    "INSERT OR IGNORE INTO samples(sample_id, name, description, "
-                    "source_file_id, target_file_id, origin, status, created_at, updated_at, "
-                    "source_language, target_language) "
-                    "VALUES (?, ?, ?, ?, ?, 'builtin', 'active', ?, ?, ?, ?)",
-                    (
-                        sample_id,
-                        source.stem,
-                        "仓库内置只读样本对",
-                        source_id,
-                        target_id,
-                        now,
-                        now,
-                        source_language,
-                        target_language,
-                    ),
-                )
+                    source = files[source_name]
+                    pairs[(str(source.resolve()), str(target.resolve()))] = (source, target)
+        return [pairs[key] for key in sorted(pairs)]
 
     @staticmethod
     def _register_file(connection, path: Path, name: str, *, origin: str) -> str:

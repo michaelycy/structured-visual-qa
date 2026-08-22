@@ -97,6 +97,8 @@ class DetectorToggles(SchemaModel):
     font_grow: bool = True
     # 目标文字颜色与页面背景同色（视觉不可见，如白字白底）。
     invisible_text: bool = True
+    # 目标使用透明文本层承载可检索内容、同位置图片负责可见渲染。
+    text_rasterized: bool = True
     # 段落级水平对齐方式发生变化（如右对齐变左对齐）。
     text_alignment_changed: bool = True
 
@@ -195,6 +197,10 @@ class DetectorThresholds(SchemaModel):
     # 白色）即视为同色不可见。235/255 ≈ 92% 白，可捕获 #FFFFFF 等
     # 纯白/近白字，同时放过浅灰绿正文（#A7C4B3 最低通道 167）。
     invisible_color_threshold: int = Field(default=235, ge=200, le=255)
+    # 文本透明度低于该值视为不可见；透明度由 PDF alpha/255 得到。
+    invisible_opacity_threshold: float = Field(default=0.01, ge=0, le=1)
+    # 透明目标文本与未匹配图片的重叠达到该比例时，判为局部文字栅格化。
+    rasterized_image_overlap_ratio: float = Field(default=0.8, ge=0, le=1)
     # 转曲判定：源页文本字符数达到下限、且目标页文本字符数降到源的
     # 比例以下时，判目标文字已矢量化（转曲），内容级检测（数字/漏译/
     # 术语/文本缺失）在该页抑制并显式提示。
@@ -289,6 +295,7 @@ class ScoringSettings(SchemaModel):
             IssueType.UNTRANSLATED_TEXT: 12.0,
             IssueType.GLOSSARY_VIOLATION: 12.0,
             IssueType.INVISIBLE_TEXT: 25.0,
+            IssueType.TEXT_RASTERIZED: 10.0,
             IssueType.TEXT_VECTORIZED: 0.0,
             IssueType.TEXT_ALIGNMENT_CHANGED: 10.0,
             IssueType.OTHER: 10.0,
@@ -319,6 +326,9 @@ class GroupingSettings(SchemaModel):
 
     # 相对页内正文字号显著放大的文本判定为标题的倍数阈值。
     heading_ratio: float = Field(default=1.25, ge=1.0, le=5.0)
+    # 同一 PDF 原始 Block 内，两个文本 Span 的水平/垂直间距超过
+    # 行高倍数时视为不连通，避免流程图、表格标签被合并成超宽 Region。
+    disconnected_span_gap_ratio: float = Field(default=3.0, ge=0.5, le=20.0)
 
 
 class RuleProfile(SchemaModel):

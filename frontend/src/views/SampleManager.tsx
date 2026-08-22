@@ -14,7 +14,7 @@ import {
   Typography,
   Upload,
 } from "antd"
-import { PlusOutlined } from "@ant-design/icons"
+import { PlusOutlined, ReloadOutlined } from "@ant-design/icons"
 import type { ColumnsType } from "antd/es/table"
 import { PALETTE } from "../uiTokens"
 import type { UploadFile } from "antd/es/upload/interface"
@@ -40,8 +40,17 @@ const LANGUAGE_OPTIONS = [
 
 export function SampleManager({
   onUse,
+  onRescan,
+  rescanning,
 }: {
   onUse: (sample: SampleRecord) => void
+  onRescan: () => Promise<{
+    discovered: number
+    created: number
+    existing: number
+    conflict_count: number
+  }>
+  rescanning: boolean
 }) {
   const [records, setRecords] = useState<SampleRecord[]>([])
   const [loading, setLoading] = useState(true)
@@ -132,6 +141,21 @@ export function SampleManager({
       const full = await api.sampleUse(record.sample_id)
       onUse(full)
       messageApi.success(`已载入样本「${full.name}」`)
+    } catch (exc) {
+      messageApi.error(exc instanceof Error ? exc.message : String(exc))
+    }
+  }
+
+  const rescanBuiltins = async () => {
+    try {
+      const result = await onRescan()
+      const summary = `扫描完成：发现 ${result.discovered} 个，新增 ${result.created} 个，已存在 ${result.existing} 个，冲突 ${result.conflict_count} 个`
+      if (result.conflict_count > 0) {
+        messageApi.warning(summary)
+      } else {
+        messageApi.success(summary)
+      }
+      reload()
     } catch (exc) {
       messageApi.error(exc instanceof Error ? exc.message : String(exc))
     }
@@ -256,9 +280,18 @@ export function SampleManager({
         meta={`· ${records.length} 个样本`}
         description="维护可复用的源文档与目标文档对；内置样本只读，用户样本可编辑和归档。"
         extra={
-          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
-            新建样本
-          </Button>
+          <Space>
+            <Button
+              icon={<ReloadOutlined />}
+              loading={rescanning}
+              onClick={() => void rescanBuiltins()}
+            >
+              重新扫描
+            </Button>
+            <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
+              新建样本
+            </Button>
+          </Space>
         }
       />
       <PageSection className="management-page__section">

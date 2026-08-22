@@ -81,6 +81,69 @@ class PyMuPDFParser:
             metadata={"parser": "pymupdf", "page_count": len(pages)},
         )
 
+    def extract_image_block(
+        self,
+        path: Path,
+        *,
+        page: int,
+        block_index: int,
+        password: str | None = None,
+    ) -> tuple[bytes, str]:
+        """提取指定 PDF 图片 Block 的内嵌数据及媒体类型。
+
+        返回值仅包含可序列化字节和 MIME 类型，不向调用方泄漏 PyMuPDF
+        运行时对象。浏览器原生不支持的图片编码会无损解码为 PNG。
+        """
+
+        safe_path = self._validate_path(path)
+        if page < 1:
+            raise DocumentParsingError("PDF 页码必须从 1 开始")
+        if block_index < 0:
+            raise DocumentParsingError("PDF Block 索引不能为负数")
+
+        try:
+            with pymupdf.open(safe_path) as pdf:
+                if pdf.needs_pass:
+                    if password is None:
+                        raise DocumentParsingError(
+                            "PDF 受打开密码保护，历史记录未保存密码，无法提取图片"
+                        )
+                    if not pdf.authenticate(password):
+                        raise DocumentParsingError("PDF 打开密码错误")
+                if page > pdf.page_count:
+                    raise DocumentParsingError(
+                        f"PDF 页码 {page} 超出总页数 {pdf.page_count}"
+                    )
+                raw_blocks = pdf[page - 1].get_text("dict").get("blocks", [])
+                if block_index >= len(raw_blocks):
+                    raise DocumentParsingError(
+                        f"PDF 图片 Block 不存在: 第 {page} 页索引 {block_index}"
+                    )
+                raw_block = raw_blocks[block_index]
+                if raw_block.get("type") != 1:
+                    raise DocumentParsingError(
+                        f"指定区域不是图片 Block: 第 {page} 页索引 {block_index}"
+                    )
+                image_bytes = raw_block.get("image")
+                if not isinstance(image_bytes, bytes) or not image_bytes:
+                    raise DocumentParsingError("PDF 图片 Block 不包含可提取的图片数据")
+                extension = str(raw_block.get("ext") or "").lower()
+                media_types = {
+                    "jpeg": "image/jpeg",
+                    "jpg": "image/jpeg",
+                    "png": "image/png",
+                    "gif": "image/gif",
+                    "webp": "image/webp",
+                }
+                if extension in media_types:
+                    return image_bytes, media_types[extension]
+                pixmap = pymupdf.Pixmap(image_bytes)
+                return pixmap.tobytes("png"), "image/png"
+        except DocumentParsingError:
+            raise
+        except Exception as exc:
+            raise DocumentParsingError(f"PDF 图片提取失败: {exc}") from exc
+
     def _validate_path(self, path: Path) -> Path:
         """验证输入路径、扩展名和大小，不接受目录或非 PDF 文件。"""
 
@@ -245,10 +308,21 @@ class PyMuPDFParser:
                             "source_block_index": block_index,
                             "source_line_index": line_index,
                             "source_span_index": span_index,
+                            # PyMuPDF alpha 为 0～255；统一保存为 0～1，
+                            # 供检测器区分可见正文与透明检索文本层。
+                            "opacity": self._opacity(span.get("alpha")),
                         },
                     )
                 )
         return blocks
+
+    @staticmethod
+    def _opacity(value: Any) -> float | None:
+        """把 PDF 文本 alpha 归一化为 0～1；旧引擎缺字段时保持未知。"""
+
+        if not isinstance(value, (int, float)):
+            return None
+        return max(0.0, min(1.0, float(value) / 255.0))
 
     def _parse_image_block(
         self,
@@ -307,4 +381,3 @@ class PyMuPDFParser:
         if not isinstance(value, int):
             return None
         return f"#{value & 0xFFFFFF:06X}"
-

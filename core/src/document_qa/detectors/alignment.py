@@ -6,6 +6,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 
 from document_qa.profiles import RuleProfile, default_rule_profile
+from document_qa.detectors.evidence import region_evidence
 from document_qa.schemas import (
     BoundingBox,
     HorizontalAlignment,
@@ -134,6 +135,10 @@ class TextAlignmentDetector:
                         "target_spreads": target_group.spreads,
                         "group_match_count": count,
                         "group_match_ratio": ratio,
+                        **region_evidence(
+                            source_group.regions[0],
+                            target_group.regions[0],
+                        ),
                     },
                     description=(
                         "目标段落水平对齐方式由"

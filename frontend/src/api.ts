@@ -16,6 +16,8 @@ export interface Issue {
   type: string
   severity: "info" | "low" | "medium" | "high" | "critical"
   description: string
+  source_region?: string | null
+  target_region?: string | null
   bbox?: { x: number; y: number; width: number; height: number }
   metrics?: Record<string, unknown>
 }

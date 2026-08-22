@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field
 
-from document_qa_server.services import FileService, SampleService
+from document_qa_server.services import BuiltinSampleScanResult, FileService, SampleService
 
 router = APIRouter(prefix="/api/samples", tags=["samples"])
 
@@ -31,6 +31,18 @@ def _payload(record) -> dict:
     return record.__dict__
 
 
+def _scan_payload(result: BuiltinSampleScanResult) -> dict:
+    """把扫描结果转换为稳定的 JSON 摘要。"""
+
+    return {
+        "discovered": result.discovered,
+        "created": result.created,
+        "existing": result.existing,
+        "conflict_count": len(result.conflicts),
+        "conflicts": list(result.conflicts),
+    }
+
+
 @router.get("")
 def list_samples(http: Request, include_archived: bool = False) -> dict:
     """返回样本列表；默认不含归档样本。"""
@@ -41,6 +53,16 @@ def list_samples(http: Request, include_archived: bool = False) -> dict:
             for item in _service(http).list(include_archived=include_archived)
         ]
     }
+
+
+@router.post("/rescan")
+def rescan_builtin_samples(http: Request) -> dict:
+    """重新扫描内置样本目录，并返回新增、已有与冲突摘要。"""
+
+    try:
+        return _scan_payload(_service(http).rescan_builtins())
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.get("/{sample_id}")

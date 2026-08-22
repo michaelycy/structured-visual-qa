@@ -10,6 +10,7 @@ import re
 from collections import Counter
 
 from document_qa.profiles import RuleProfile, default_rule_profile
+from document_qa.detectors.evidence import region_evidence
 from document_qa.schemas import Issue, IssueType, Page, PageMatchResult, Region, Severity, TEXT_TYPES
 
 # 数字抽取：整数、千分位、小数的完整组合。千分位必须恰好 3 位且后随
@@ -166,6 +167,7 @@ class ContentDetector:
                     "missing_numbers": sorted(missing.elements()),
                     "extra_numbers": sorted(extra.elements()),
                     "diff_count": diff_count,
+                    **region_evidence(source_anchor, target_region),
                 },
                 description=(
                     "目标页面数字与源页面不一致，可能存在错漏译。"
@@ -290,6 +292,7 @@ class ContentDetector:
                             if source_region.content
                             else None,
                             "target_text": text,
+                            **region_evidence(source_region, target_region, match),
                         },
                         description="目标文本区仍保留源语言内容，疑似漏译。",
                         detector="content-untranslated",

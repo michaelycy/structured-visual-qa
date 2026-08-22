@@ -4,6 +4,7 @@ from document_qa.detectors.alignment import (
     AlignmentDetectionResult,
     TextAlignmentDetector,
 )
+from document_qa.detectors.evidence import region_evidence
 from document_qa.matching.geometry import (
     intersection_ratio,
     position_similarity,
@@ -11,6 +12,7 @@ from document_qa.matching.geometry import (
 )
 from document_qa.profiles import RuleProfile, default_rule_profile
 from document_qa.schemas import (
+    Block,
     BoundingBox,
     ElementType,
     Issue,
@@ -18,6 +20,7 @@ from document_qa.schemas import (
     Page,
     PageMatchResult,
     Region,
+    RegionMatch,
     Severity,
     StructuredDiff,
     TEXT_TYPES,
@@ -42,8 +45,27 @@ class RuleDetector:
 
         issues: list[Issue] = []
         enabled = self.profile.detectors.enabled
+        rasterized_issues: list[Issue] = []
+        rasterized_image_ids: set[str] = set()
+        rasterized_text_ids: set[str] = set()
+        rasterized_pairs: set[frozenset[str]] = set()
+        if enabled.text_rasterized:
+            (
+                rasterized_issues,
+                rasterized_image_ids,
+                rasterized_text_ids,
+                rasterized_pairs,
+            ) = self._detect_rasterized_text(source, target, match_result)
+            issues.extend(rasterized_issues)
         if enabled.missing_element:
-            issues.extend(self._detect_missing(source, target, match_result))
+            issues.extend(
+                self._detect_missing(
+                    source,
+                    target,
+                    match_result,
+                    suppressed_target_ids=rasterized_image_ids,
+                )
+            )
         alignment_result = AlignmentDetectionResult()
         if enabled.text_alignment_changed:
             alignment_result = self.alignment_detector.detect(
@@ -65,22 +87,39 @@ class RuleDetector:
             issues.extend(self._detect_fragmented(target, source, match_result))
         if enabled.invisible_text:
             issues.extend(
-                self._detect_invisible_text(target, source, match_result)
+                self._detect_invisible_text(
+                    target,
+                    source,
+                    match_result,
+                    suppressed_target_ids=rasterized_text_ids,
+                )
             )
         if enabled.content_out_of_page:
             issues.extend(self._detect_out_of_page(target))
         if enabled.overlap:
-            issues.extend(self._detect_overlaps(source, target, match_result))
+            issues.extend(
+                self._detect_overlaps(
+                    source,
+                    target,
+                    match_result,
+                    suppressed_pairs=rasterized_pairs,
+                )
+            )
         return issues
 
     def _detect_missing(
-        self, source: Page, target: Page, result: PageMatchResult
+        self,
+        source: Page,
+        target: Page,
+        result: PageMatchResult,
+        suppressed_target_ids: set[str] | None = None,
     ) -> list[Issue]:
         """识别源元素缺失和目标文档意外新增元素。"""
 
         source_regions = {region.id: region for region in source.regions}
         target_regions = {region.id: region for region in target.regions}
         issues: list[Issue] = []
+        suppressed_target_ids = suppressed_target_ids or set()
         for region_id in result.unmatched_source_region_ids:
             region = source_regions[region_id]
             is_image = region.type == ElementType.IMAGE
@@ -98,7 +137,10 @@ class RuleDetector:
                     severity=Severity.CRITICAL if is_image else Severity.HIGH,
                     source_region=region_id,
                     bbox=region.bbox,
-                    metrics={"region_type": region.type.value},
+                    metrics={
+                        "region_type": region.type.value,
+                        **region_evidence(source=region),
+                    },
                     description="目标文档缺少源文档中的图片。"
                     if is_image
                     else "目标文档缺少可匹配的源区域。",
@@ -106,6 +148,8 @@ class RuleDetector:
                 )
             )
         for region_id in result.unmatched_target_region_ids:
+            if region_id in suppressed_target_ids:
+                continue
             region = target_regions[region_id]
             issues.append(
                 Issue(
@@ -115,12 +159,130 @@ class RuleDetector:
                     severity=Severity.LOW,
                     target_region=region_id,
                     bbox=region.bbox,
-                    metrics={"region_type": region.type.value},
+                    metrics={
+                        "region_type": region.type.value,
+                        **region_evidence(target=region),
+                    },
                     description="目标文档出现未能与源文档匹配的新增区域。",
                     detector="missing-element",
                 )
             )
         return issues
+
+    def _detect_rasterized_text(
+        self, source: Page, target: Page, result: PageMatchResult
+    ) -> tuple[list[Issue], set[str], set[str], set[frozenset[str]]]:
+        """识别“透明译文文本层 + 同位置可见图片”的局部文字栅格化。
+
+        只使用已匹配的源/目标文本建立语义对应，再从未匹配目标图片中寻找
+        高重叠证据；正常插图、图片背景叠字和仅靠位置猜测的跨类型区域不会命中。
+        """
+
+        source_regions = {region.id: region for region in source.regions}
+        target_regions = {region.id: region for region in target.regions}
+        blocks_by_id = {block.id: block for block in target.blocks}
+        thresholds = self.profile.detectors.thresholds
+        image_regions = [
+            target_regions[region_id]
+            for region_id in result.unmatched_target_region_ids
+            if target_regions[region_id].type == ElementType.IMAGE
+        ]
+        candidates: list[tuple[float, Region, Region, Region, RegionMatch]] = []
+        for match in result.matches:
+            source_region = source_regions.get(match.source_region_id)
+            target_text = target_regions.get(match.target_region_id)
+            if (
+                source_region is None
+                or target_text is None
+                or source_region.type not in self._TEXT_TYPES
+                or target_text.type not in self._TEXT_TYPES
+            ):
+                continue
+            opacities = self._region_opacities(target_text, blocks_by_id)
+            if (
+                not opacities
+                or max(opacities) > thresholds.invisible_opacity_threshold
+            ):
+                continue
+            for image_region in image_regions:
+                overlap = intersection_ratio(target_text.bbox, image_region.bbox)
+                if overlap >= thresholds.rasterized_image_overlap_ratio:
+                    candidates.append(
+                        (overlap, source_region, target_text, image_region, match)
+                    )
+
+        issues: list[Issue] = []
+        claimed_text_ids: set[str] = set()
+        claimed_image_ids: set[str] = set()
+        suppressed_pairs: set[frozenset[str]] = set()
+        for overlap, source_region, target_text, image_region, match in sorted(
+            candidates, key=lambda item: (-item[0], item[2].id, item[3].id)
+        ):
+            if (
+                target_text.id in claimed_text_ids
+                or image_region.id in claimed_image_ids
+            ):
+                continue
+            opacities = self._region_opacities(target_text, blocks_by_id)
+            evidence = region_evidence(source_region, target_text, match)
+            evidence.update(
+                {
+                    "region_type": ElementType.IMAGE.value,
+                    "type_change": "text->image",
+                    "text_opacity": max(opacities),
+                    "image_overlap_ratio": overlap,
+                    "invisible_text_region": target_text.id,
+                    "invisible_text_bbox": target_text.bbox.model_dump(mode="json"),
+                    "visible_image_region": image_region.id,
+                    "target_bbox": image_region.bbox.model_dump(mode="json"),
+                    "target_region_type": ElementType.IMAGE.value,
+                }
+            )
+            issues.append(
+                Issue(
+                    id=f"p{target.page}-rasterized-{image_region.id}",
+                    page=target.page,
+                    type=IssueType.TEXT_RASTERIZED,
+                    severity=Severity.HIGH,
+                    source_region=source_region.id,
+                    target_region=image_region.id,
+                    bbox=image_region.bbox,
+                    metrics=evidence,
+                    description=(
+                        "原文文本区域在目标文档中由图片负责可见渲染，"
+                        "并保留透明文本层供检索，文字显示方式已栅格化。"
+                    ),
+                    detector="text-rasterization",
+                )
+            )
+            claimed_text_ids.add(target_text.id)
+            claimed_image_ids.add(image_region.id)
+            suppressed_pairs.add(frozenset((target_text.id, image_region.id)))
+        # 候选选择按重叠率保证一对一最优，输出再恢复 Matcher 的目标 Region
+        # 原始顺序，使既有报告中的页面内问题序号尽量保持稳定。
+        target_order = {
+            region_id: index
+            for index, region_id in enumerate(result.unmatched_target_region_ids)
+        }
+        issues.sort(
+            key=lambda issue: target_order.get(issue.target_region or "", len(target_order))
+        )
+        return issues, claimed_image_ids, claimed_text_ids, suppressed_pairs
+
+    @staticmethod
+    def _region_opacities(
+        region: Region, blocks_by_id: dict[str, Block]
+    ) -> list[float]:
+        """返回 Region 子文本 Block 中已知的归一化透明度。"""
+
+        values: list[float] = []
+        for block_id in region.children:
+            block = blocks_by_id.get(block_id)
+            metadata = getattr(block, "metadata", None)
+            opacity = metadata.get("opacity") if metadata else None
+            if isinstance(opacity, (int, float)):
+                values.append(float(opacity))
+        return values
 
     def _is_covered_by_target_text(self, source_region: Region, target: Page) -> bool:
         """判断未匹配源文本是否已被目标文本框通过多对一方式承载。"""
@@ -145,9 +307,21 @@ class RuleDetector:
         target_regions = {region.id: region for region in target.regions}
         thresholds = self.profile.detectors.thresholds
         enabled = self.profile.detectors.enabled
+        matches_by_pair = {
+            (match.source_region_id, match.target_region_id): match
+            for match in result.matches
+        }
         issues: list[Issue] = []
         for diff in result.diffs:
+            source_region = source_regions[diff.source_region_id]
             target_region = target_regions[diff.target_region_id]
+            evidence = region_evidence(
+                source_region,
+                target_region,
+                matches_by_pair.get(
+                    (diff.source_region_id, diff.target_region_id)
+                ),
+            )
             shift = max(abs(diff.x_shift_ratio), abs(diff.y_shift_ratio))
             if (
                 enabled.region_shifted
@@ -172,6 +346,7 @@ class RuleDetector:
                         metrics={
                             "x_shift_ratio": diff.x_shift_ratio,
                             "y_shift_ratio": diff.y_shift_ratio,
+                            **evidence,
                         },
                         description="目标区域相对源区域发生显著位置偏移。",
                         detector="geometry",
@@ -202,7 +377,10 @@ class RuleDetector:
                         source_region=diff.source_region_id,
                         target_region=diff.target_region_id,
                         bbox=target_region.bbox,
-                        metrics={"font_size_change_ratio": font_change},
+                        metrics={
+                            "font_size_change_ratio": font_change,
+                            **evidence,
+                        },
                         description="目标区域字号为适应版面而明显缩小。",
                         detector="typography",
                     )
@@ -224,7 +402,10 @@ class RuleDetector:
                         source_region=diff.source_region_id,
                         target_region=diff.target_region_id,
                         bbox=target_region.bbox,
-                        metrics={"font_size_change_ratio": font_change},
+                        metrics={
+                            "font_size_change_ratio": font_change,
+                            **evidence,
+                        },
                         description="目标区域字号相对源区域明显放大。",
                         detector="typography",
                     )
@@ -235,7 +416,6 @@ class RuleDetector:
             resize = max(
                 abs(diff.width_change_ratio), abs(diff.height_change_ratio)
             )
-            source_region = source_regions[diff.source_region_id]
             expected_text_width_change = self._is_expected_text_width_change(
                 source_region, target_region, diff
             )
@@ -263,6 +443,7 @@ class RuleDetector:
                             "width_change_ratio": diff.width_change_ratio,
                             "height_change_ratio": diff.height_change_ratio,
                             "resize_magnitude": resize,
+                            **evidence,
                         },
                         description="目标区域尺寸相对源区域剧变，可能发生段落合并或拆散。",
                         detector="geometry",
@@ -355,6 +536,7 @@ class RuleDetector:
                             "target_text": text,
                             "bbox_width": region.bbox.width,
                             "letter_count": len(letters),
+                            **region_evidence(source_region, region),
                         },
                         description="目标文字疑似被竖排或拆散成字母碎片（窄列排版破坏）。",
                         detector="fragmentation",
@@ -363,9 +545,13 @@ class RuleDetector:
         return issues
 
     def _detect_invisible_text(
-        self, target: Page, source: Page, result: PageMatchResult
+        self,
+        target: Page,
+        source: Page,
+        result: PageMatchResult,
+        suppressed_target_ids: set[str] | None = None,
     ) -> list[Issue]:
-        """检测文字颜色与页面背景同色的隐形文字。
+        """检测透明文字或文字颜色与页面背景同色的隐形文字。
 
         典型场景：翻译工具转换 PPT 时丢失了文字效果层（描边/阴影），
         标题白字落到白底上整行不可见。判据：
@@ -375,15 +561,13 @@ class RuleDetector:
         Issue 附带源区域原文，供界面做"原文 → 译文"对照。
         """
 
+        thresholds = self.profile.detectors.thresholds
+        color_threshold = thresholds.invisible_color_threshold
+        opacity_threshold = thresholds.invisible_opacity_threshold
         background = (target.metadata or {}).get("background_color")
-        if not background:
-            return []
-        threshold = self.profile.detectors.thresholds.invisible_color_threshold
-        if self._min_channel(background) < threshold:
-            # 深色/图片背景：白字是正常设计，不做隐形判定。
-            return []
         dark_boxes = (target.metadata or {}).get("dark_boxes") or []
         blocks_by_id = {block.id: block for block in target.blocks}
+        suppressed_target_ids = suppressed_target_ids or set()
         source_regions = {region.id: region for region in source.regions}
         source_by_target = {
             match.target_region_id: source_regions.get(match.source_region_id)
@@ -391,8 +575,13 @@ class RuleDetector:
         }
         issues: list[Issue] = []
         for region in target.regions:
-            if region.type not in self._TEXT_TYPES:
+            if (
+                region.type not in self._TEXT_TYPES
+                or region.id in suppressed_target_ids
+            ):
                 continue
+            opacities = self._region_opacities(region, blocks_by_id)
+            is_transparent = bool(opacities) and max(opacities) <= opacity_threshold
             text_colors = [
                 block.style.color
                 for block_id in region.children
@@ -401,16 +590,20 @@ class RuleDetector:
                 and block.style is not None
                 and block.style.color
             ]
-            # 无颜色信息（个别解析异常）不判定。
-            if not text_colors:
-                continue
-            # 任一文本 Block 是深色 → 视觉可见（叠层/描边正常显示）。
-            if any(self._min_channel(color) < threshold for color in text_colors):
-                continue
-            # 文字落在深色填充块或图片上 → 白字正常可见（黑底白字、
-            # 图上白字），按区域排除；只有浅色页面背景上的白字才隐形。
-            if self._overlaps_dark_block(region, dark_boxes):
-                continue
+            if not is_transparent:
+                # 颜色判据需要明确的浅色页面背景和文字颜色；透明度判据
+                # 不依赖背景，即使透明文字叠在图片上也仍然不可见。
+                if (
+                    not background
+                    or self._min_channel(background) < color_threshold
+                    or not text_colors
+                    or any(
+                        self._min_channel(color) < color_threshold
+                        for color in text_colors
+                    )
+                    or self._overlaps_dark_block(region, dark_boxes)
+                ):
+                    continue
             source_region = source_by_target.get(region.id)
             source_text = (
                 source_region.content.text
@@ -428,13 +621,19 @@ class RuleDetector:
                     target_region=region.id,
                     bbox=region.bbox,
                     metrics={
-                        "text_color": text_colors[0],
+                        "text_color": text_colors[0] if text_colors else None,
                         "background_color": background,
+                        "text_opacity": max(opacities) if opacities else None,
                         "text": target_text[:60] if target_text else None,
                         "source_text": source_text,
                         "target_text": target_text,
+                        **region_evidence(source_region, region),
                     },
-                    description="目标文字颜色与页面背景同色，视觉上不可见。",
+                    description=(
+                        "目标文字透明度为零，视觉上不可见。"
+                        if is_transparent
+                        else "目标文字颜色与页面背景同色，视觉上不可见。"
+                    ),
                     detector="typography",
                 )
             )
@@ -503,6 +702,7 @@ class RuleDetector:
                         metrics={
                             "page_width": target.width,
                             "page_height": target.height,
+                            **region_evidence(target=region),
                         },
                         description="目标区域超出页面边界，内容可能被裁切。",
                         detector="overflow",
@@ -511,12 +711,17 @@ class RuleDetector:
         return issues
 
     def _detect_overlaps(
-        self, source: Page, target: Page, result: PageMatchResult
+        self,
+        source: Page,
+        target: Page,
+        result: PageMatchResult,
+        suppressed_pairs: set[frozenset[str]] | None = None,
     ) -> list[Issue]:
         """只报告翻译后新增或显著加剧的区域重叠。"""
 
         issues: list[Issue] = []
         thresholds = self.profile.detectors.thresholds
+        suppressed_pairs = suppressed_pairs or set()
         # 每个 Region 的源版面类比只需计算一次；两两组合会重复请求同一 Region。
         analog_cache: dict[str, Region | None] = {}
         regions = target.regions
@@ -526,6 +731,8 @@ class RuleDetector:
         for first_index, second_index in candidate_pairs:
             first = regions[first_index]
             second = regions[second_index]
+            if frozenset((first.id, second.id)) in suppressed_pairs:
+                continue
             ratio = intersection_ratio(first.bbox, second.bbox)
             if ratio <= thresholds.overlap_ratio:
                 continue
@@ -595,6 +802,12 @@ class RuleDetector:
                         "source_overlap_ratio": source_ratio,
                         "overlap_increase_ratio": ratio - source_ratio,
                         "other_region": second.id,
+                        "primary_text": first.content.text if first.content else None,
+                        "other_text": second.content.text if second.content else None,
+                        "primary_region_type": first.type.value,
+                        "other_region_type": second.type.value,
+                        "other_bbox": second.bbox.model_dump(mode="json"),
+                        **region_evidence(target=first),
                     },
                     description="目标文本与图片发生明显重叠。"
                     if is_text_image

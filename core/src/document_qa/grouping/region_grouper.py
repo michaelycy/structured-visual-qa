@@ -40,10 +40,23 @@ class RegionGrouper:
         ]
         median_font_size = median(text_sizes) if text_sizes else None
 
-        regions = [
-            self._build_region(page.page, source_index, blocks, median_font_size)
-            for source_index, blocks in sorted(groups.items())
-        ]
+        regions = []
+        for source_index, blocks in sorted(groups.items()):
+            components = self._split_disconnected_blocks(blocks)
+            for component_index, component in enumerate(components):
+                region_id = f"p{page.page}-r{source_index}"
+                if component_index:
+                    region_id = f"{region_id}-c{component_index + 1}"
+                regions.append(
+                    self._build_region(
+                        page.page,
+                        source_index,
+                        component,
+                        median_font_size,
+                        region_id,
+                        component_index,
+                    )
+                )
         regions.sort(key=lambda region: (region.bbox.y, region.bbox.x))
         regions = self._attach_relationships(regions)
         return page.model_copy(update={"regions": regions})
@@ -54,6 +67,8 @@ class RegionGrouper:
         source_index: int,
         blocks: list[Block],
         median_font_size: float | None,
+        region_id: str,
+        component_index: int,
     ) -> Region:
         """合并同一原始 Block 的几何范围、文本和代表样式。"""
 
@@ -98,14 +113,85 @@ class RegionGrouper:
             style = representative.style
 
         return Region(
-            id=f"p{page_number}-r{source_index}",
+            id=region_id,
             page=page_number,
             type=region_type,
             bbox=bbox,
             style=style,
             content=content,
             children=[block.id for block in blocks],
-            metadata={"source_block_index": source_index},
+            metadata={
+                "source_block_index": source_index,
+                "source_component_index": component_index,
+            },
+        )
+
+    def _split_disconnected_blocks(self, blocks: list[Block]) -> list[list[Block]]:
+        """拆开原始 Block 中空间上明显不连通的独立文本标签。
+
+        PyMuPDF 偶尔把流程图同一行的多个标签放进一个原始 Block。仅按
+        source_block_index 合并会产生横跨多个节点的 Region，继而污染匹配与
+        几何检测。这里按视觉连通分量拆分；正常段落行因水平重叠或左边缘接近
+        仍保持在同一 Region。
+        """
+
+        if len(blocks) < 2 or any(block.type != ElementType.TEXT for block in blocks):
+            return [blocks]
+
+        remaining = set(range(len(blocks)))
+        components: list[list[Block]] = []
+        while remaining:
+            seed = min(remaining)
+            remaining.remove(seed)
+            component_indexes = [seed]
+            queue = [seed]
+            while queue:
+                current = queue.pop()
+                connected = [
+                    candidate
+                    for candidate in sorted(remaining)
+                    if self._blocks_are_connected(blocks[current], blocks[candidate])
+                ]
+                for candidate in connected:
+                    remaining.remove(candidate)
+                    component_indexes.append(candidate)
+                    queue.append(candidate)
+            component = [blocks[index] for index in component_indexes]
+            component.sort(key=lambda block: (block.bbox.y, block.bbox.x, block.id))
+            components.append(component)
+
+        components.sort(
+            key=lambda component: (
+                min(block.bbox.y for block in component),
+                min(block.bbox.x for block in component),
+            )
+        )
+        return components
+
+    def _blocks_are_connected(self, first: Block, second: Block) -> bool:
+        """按行高归一化间距判断两个文本 Span 是否属于同一视觉文本块。"""
+
+        gap_limit = (
+            max(first.bbox.height, second.bbox.height)
+            * self.profile.grouping.disconnected_span_gap_ratio
+        )
+        horizontal_gap = max(
+            0.0,
+            max(first.bbox.x, second.bbox.x)
+            - min(first.bbox.right, second.bbox.right),
+        )
+        vertical_gap = max(
+            0.0,
+            max(first.bbox.y, second.bbox.y)
+            - min(first.bbox.bottom, second.bbox.bottom),
+        )
+        horizontal_overlap = horizontal_gap == 0
+        vertical_overlap = vertical_gap == 0
+        same_left_edge = abs(first.bbox.x - second.bbox.x) <= gap_limit
+        return (
+            vertical_overlap and horizontal_gap <= gap_limit
+        ) or (
+            vertical_gap <= gap_limit and (horizontal_overlap or same_left_edge)
         )
 
     @staticmethod
@@ -130,4 +216,3 @@ class RegionGrouper:
             )
             updated.append(region.model_copy(update={"relationships": relationships}))
         return updated
-

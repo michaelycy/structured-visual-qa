@@ -141,6 +141,7 @@ export const ISSUE_TYPE_META: Record<string, string> = {
   number_mismatch: "数字不一致",
   untranslated_text: "疑似漏译",
   invisible_text: "隐形文字",
+  text_rasterized: "文本改为图片显示",
   text_vectorized: "文字已转曲",
   text_alignment_changed: "对齐方式变化",
 }

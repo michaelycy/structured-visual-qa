@@ -12,6 +12,7 @@ from __future__ import annotations
 import re
 
 from document_qa.glossary import Glossary
+from document_qa.detectors.evidence import region_evidence
 from document_qa.schemas import (
     Issue,
     IssueType,
@@ -123,6 +124,7 @@ class GlossaryDetector:
                         "allowed_translations": entry.translations,
                         "note": entry.note,
                         "glossary_reference": self.glossary.reference,
+                        **region_evidence(source_region, target_region),
                     },
                     description=(
                         f"术语「{entry.term}」未使用指定译法"

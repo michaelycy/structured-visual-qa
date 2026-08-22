@@ -83,6 +83,7 @@ export function ReportDetail({
           report={report}
           rendered={rendered}
           taskId={taskId}
+          historyRecordId={historyRecordId}
           decisions={decisions}
           onDecide={decide}
           viewState={viewState}

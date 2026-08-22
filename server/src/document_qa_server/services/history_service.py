@@ -109,7 +109,12 @@ class CompareHistoryService:
             ).fetchone()
         if row is None:
             raise ValueError(f"记录不存在或已淘汰: {record_id}")
-        report = QAReport.model_validate_json(row["report_json"]).model_dump(mode="json")
+        # 旧报告的 Profile 快照不会包含后来新增的 detector toggle、阈值或
+        # Issue 扣分上限。读取边界先递归补默认键，再交给当前严格 Schema
+        # 校验；数据库中的历史 JSON 和当时的分数、状态均保持不变。
+        legacy_report = json.loads(row["report_json"])
+        compatible_report = self._upgrade_legacy_report(legacy_report)
+        report = QAReport.model_validate(compatible_report).model_dump(mode="json")
         return self._record_from_row(row, report=report, include_paths=True)
 
     def _save(

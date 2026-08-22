@@ -3,6 +3,7 @@ import unittest
 from document_qa.detectors import RuleDetector
 from document_qa.matching import RegionMatcher
 from document_qa.schemas import (
+    Block,
     BoundingBox,
     Content,
     ElementType,
@@ -92,6 +93,137 @@ class MatchingAndDetectionTests(unittest.TestCase):
 
         self.assertEqual(len(image_issues), 1)
         self.assertEqual(QAScorer().score(issues)[1], QAStatus.FAIL)
+
+    def test_detects_text_rasterized_without_duplicate_added_image(self) -> None:
+        """透明译文层与同位置图片应合并为一个文字栅格化问题。"""
+
+        bbox = BoundingBox(x=20, y=30, width=100, height=20)
+        source = Page(
+            document_id="source",
+            page=1,
+            width=200,
+            height=200,
+            regions=[
+                Region(
+                    id="source-text",
+                    page=1,
+                    type=ElementType.PARAGRAPH,
+                    bbox=bbox,
+                    content=Content(text="원문"),
+                )
+            ],
+        )
+        target = Page(
+            document_id="target",
+            page=1,
+            width=200,
+            height=200,
+            blocks=[
+                Block(
+                    id="target-text-block",
+                    page=1,
+                    type=ElementType.TEXT,
+                    bbox=bbox,
+                    content=Content(text="译文"),
+                    metadata={"opacity": 0.0},
+                ),
+                Block(
+                    id="target-image-block",
+                    page=1,
+                    type=ElementType.IMAGE,
+                    bbox=bbox,
+                ),
+            ],
+            regions=[
+                Region(
+                    id="target-text",
+                    page=1,
+                    type=ElementType.PARAGRAPH,
+                    bbox=bbox,
+                    content=Content(text="译文"),
+                    children=["target-text-block"],
+                ),
+                Region(
+                    id="target-image",
+                    page=1,
+                    type=ElementType.IMAGE,
+                    bbox=bbox,
+                    children=["target-image-block"],
+                ),
+            ],
+        )
+        result = RegionMatcher().match_page(source, target)
+
+        issues = RuleDetector().detect(source, target, result)
+
+        self.assertEqual(
+            [issue.type for issue in issues].count(IssueType.TEXT_RASTERIZED), 1
+        )
+        self.assertNotIn(IssueType.ADDED_ELEMENT, {issue.type for issue in issues})
+        self.assertNotIn(IssueType.INVISIBLE_TEXT, {issue.type for issue in issues})
+        rasterized = next(
+            issue for issue in issues if issue.type == IssueType.TEXT_RASTERIZED
+        )
+        self.assertEqual(rasterized.metrics["type_change"], "text->image")
+        self.assertEqual(rasterized.target_region, "target-image")
+
+    def test_visible_text_over_image_is_not_text_rasterized(self) -> None:
+        """正常可见文字叠在图片上时不得误判为文字栅格化。"""
+
+        bbox = BoundingBox(x=20, y=30, width=100, height=20)
+        source = Page(
+            document_id="source",
+            page=1,
+            width=200,
+            height=200,
+            regions=[
+                Region(
+                    id="source-text",
+                    page=1,
+                    type=ElementType.PARAGRAPH,
+                    bbox=bbox,
+                    content=Content(text="source"),
+                )
+            ],
+        )
+        target = Page(
+            document_id="target",
+            page=1,
+            width=200,
+            height=200,
+            blocks=[
+                Block(
+                    id="target-text-block",
+                    page=1,
+                    type=ElementType.TEXT,
+                    bbox=bbox,
+                    content=Content(text="target"),
+                    metadata={"opacity": 1.0},
+                )
+            ],
+            regions=[
+                Region(
+                    id="target-text",
+                    page=1,
+                    type=ElementType.PARAGRAPH,
+                    bbox=bbox,
+                    content=Content(text="target"),
+                    children=["target-text-block"],
+                ),
+                Region(
+                    id="target-image",
+                    page=1,
+                    type=ElementType.IMAGE,
+                    bbox=bbox,
+                ),
+            ],
+        )
+        result = RegionMatcher().match_page(source, target)
+
+        issues = RuleDetector().detect(source, target, result)
+
+        self.assertNotIn(IssueType.TEXT_RASTERIZED, {issue.type for issue in issues})
+        self.assertIn(IssueType.ADDED_ELEMENT, {issue.type for issue in issues})
 
     def test_ignores_source_text_merged_into_target_text_box(self) -> None:
         """目标文本框覆盖多个源段落时，不应把额外源段落判为缺失。"""

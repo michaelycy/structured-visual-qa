@@ -46,6 +46,7 @@ export const WorkbenchPage = () => {
     page: search.page,
     issue: search.issue,
     severity: search.severity,
+    issueType: search.issueType,
     review: search.review,
     issuePage: search.issuePage,
   }
@@ -53,11 +54,13 @@ export const WorkbenchPage = () => {
   const updateViewState = (state: PageDetailsViewState) => {
     void navigate({
       replace: true,
+      resetScroll: false,
       search: (current) => ({
         ...current,
         page: state.page,
         issue: state.issue,
         severity: state.severity,
+        issueType: state.issueType,
         review: state.review,
         issuePage: state.issuePage,
       }),

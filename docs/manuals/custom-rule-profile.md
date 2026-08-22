@@ -109,7 +109,8 @@ cp profiles/translation-balanced.v1.json \
     "shift_margin": 0.01
   },
   "grouping": {
-    "heading_ratio": 1.25
+    "heading_ratio": 1.25,
+    "disconnected_span_gap_ratio": 3.0
   },
   "detectors": {
     "enabled": {
@@ -311,7 +312,8 @@ position + size + type + order = 1.0
   "content_out_of_page": true,
   "overlap": true,
   "number_mismatch": true,
-  "untranslated_text": true
+  "untranslated_text": true,
+  "text_rasterized": true
 }
 ```
 
@@ -328,6 +330,7 @@ position + size + type + order = 1.0
 | `text_fragmented` | 目标文字被竖排/拆散成字母碎片（窄列排版破坏） |
 | `font_grow` | 目标字号明显放大（换行爆炸前兆） |
 | `invisible_text` | 目标文字颜色与页面背景同色（视觉不可见） |
+| `text_rasterized` | 透明译文文本层与同位置图片组成的局部文字栅格化 |
 | `text_alignment_changed` | 段落水平对齐方式变化（如右对齐变左对齐） |
 
 关闭检测器意味着对应 Issue 不再产生，也不参与扣分和状态判定。建议只在明确不适用时关闭，不要通过关闭检测器掩盖阈值问题。
@@ -476,6 +479,17 @@ shift = max(abs(x_shift_ratio), abs(y_shift_ratio))
 
 命中对齐变化后，系统输出 `HIGH TEXT_ALIGNMENT_CHANGED`，并抑制同一段落内由换行和对齐变化产生的重复行级 `REGION_SHIFTED/REGION_RESIZED`。
 
+### 7.8 透明文字与图片栅格化
+
+```json
+"invisible_opacity_threshold": 0.01,
+"rasterized_image_overlap_ratio": 0.8
+```
+
+- `invisible_opacity_threshold`：PDF 文本 alpha 归一化后不高于该值，视为视觉不可见；
+- `rasterized_image_overlap_ratio`：已匹配透明译文文本与未匹配目标图片的重叠比例达到该值时，合并为 `text_rasterized`；
+- 命中后抑制同一图片的 `added_element`、同一透明文本的 `invisible_text` 以及两者的重叠问题。
+
 ## 8. Scoring 配置
 
 ### 8.1 状态分数线
@@ -559,6 +573,9 @@ High 存在或 Score < 90     → REVIEW
 | `number_mismatch` | 是 | 12 |
 | `untranslated_text` | 是 | 12 |
 | `glossary_violation` | 是 | 12 |
+| `invisible_text` | 是 | 25 |
+| `text_rasterized` | 是 | 10 |
+| `text_vectorized` | 是 | 0 |
 | `text_alignment_changed` | 是 | 10 |
 | `other` | 预留 | 10 |
 

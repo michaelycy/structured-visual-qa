@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Response
 
-from document_qa_server.services import CompareHistoryService
+from document_qa_server.services import CompareHistoryService, ImageEvidenceService
 
 router = APIRouter(prefix="/api/history", tags=["history"])
 
@@ -13,6 +13,12 @@ def _service(http: Request) -> CompareHistoryService:
     """从应用状态取历史服务实例。"""
 
     return http.app.state.history
+
+
+def _image_service(http: Request) -> ImageEvidenceService:
+    """从应用状态取图片证据服务实例。"""
+
+    return http.app.state.image_evidence
 
 
 @router.get("/list")
@@ -48,3 +54,23 @@ def get_history(record_id: str, http: Request) -> dict:
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return record.model_dump(mode="json")
+
+
+@router.get("/item/{record_id}/image/{side}/{region_id}")
+def get_history_image(
+    record_id: str,
+    side: str,
+    region_id: str,
+    http: Request,
+) -> Response:
+    """返回 Issue 对应 PDF 图片 Region 的内嵌原图。"""
+
+    try:
+        content, media_type = _image_service(http).get(record_id, side, region_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={"Cache-Control": "private, max-age=3600"},
+    )

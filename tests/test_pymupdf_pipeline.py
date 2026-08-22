@@ -45,6 +45,21 @@ class PyMuPDFPipelineTests(unittest.TestCase):
             self.assertEqual(len(document.pages), 1)
             self.assertGreater(len(document.pages[0].blocks), 0)
 
+    def test_parser_preserves_transparent_text_opacity(self) -> None:
+        """解析器应保留透明文本层的 alpha，供栅格化检测使用。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            pdf_path = Path(directory) / "transparent.pdf"
+            document = pymupdf.open()
+            page = document.new_page(width=200, height=200)
+            page.insert_text((20, 40), "hidden", fill_opacity=0)
+            document.save(pdf_path)
+            document.close()
+
+            parsed = PyMuPDFParser().parse(pdf_path)
+
+            self.assertEqual(parsed.pages[0].blocks[0].metadata["opacity"], 0.0)
+
     def test_pipeline_writes_schema_valid_report_and_renders_pages(self) -> None:
         """端到端结果应可重新校验，并生成源/目标页面图。"""
 

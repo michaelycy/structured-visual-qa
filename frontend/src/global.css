@@ -146,50 +146,96 @@ body {
   border-right: 1px solid rgb(255 255 255 / 8%);
 }
 
+/* antd Sider 的真实内容容器：改为纵向弹性布局，菜单占上部、
+ * 收起按钮 margin-top:auto 钉在底部并撑满整行。 */
+.app-shell__sider .ant-layout-sider-children {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+/* 收起/展开按钮：原生 button，块级撑满整行、图标水平居中，
+ * 与菜单项节奏一致（48px 高 + 顶部细分隔线）。 */
+.app-shell__collapse-trigger {
+  margin-top: auto;
+  display: block;
+  width: 100%;
+  height: 48px;
+  padding: 0;
+  font-size: 14px;
+  line-height: 1;
+  text-align: center;
+  color: rgb(255 255 255 / 55%);
+  background: transparent;
+  border: 0;
+  border-top: 1px solid rgb(255 255 255 / 8%);
+  cursor: pointer;
+}
+
+.app-shell__collapse-trigger:hover,
+.app-shell__collapse-trigger:focus-visible {
+  color: rgb(255 255 255 / 85%);
+  background: rgb(255 255 255 / 6%);
+}
+
 .app-shell__brand {
   display: flex;
   flex-direction: row;
   align-items: center;
   height: 72px;
   box-sizing: border-box;
-  gap: var(--qa-space-3);
+  gap: var(--qa-space-2);
   overflow: hidden;
-  padding-inline: var(--qa-space-5);
+  padding-inline: var(--qa-space-4);
   border-bottom: 1px solid rgb(255 255 255 / 10%);
 }
 
-.app-shell__brand-mark {
-  display: inline-grid;
+.app-shell__brand-logo {
+  display: block;
   flex: none;
-  width: 36px;
-  height: 36px;
+  object-fit: contain;
+}
+
+.app-shell__brand-logo--expanded {
+  width: 44px;
+  height: 44px;
+}
+
+/* 收起态品牌标记：窄栏里用一只居中、克制的质检勾替代完整彩色 logo，
+ * 避免 300px 的 logo 被 72px 边栏裁切成一团失真的色块。 */
+.app-shell__brand-tile {
+  display: grid;
   place-items: center;
-  border-radius: var(--qa-radius-md);
-  background: var(--qa-info);
-  color: var(--qa-surface);
-  font-size: 13px;
-  font-weight: 700;
-  letter-spacing: -0.02em;
+  width: 44px;
+  height: 44px;
+  border-radius: var(--qa-radius-lg);
+  background: rgb(255 255 255 / 8%);
+  color: var(--qa-success);
 }
 
-.app-shell__brand-copy {
-  display: flex;
+.app-shell__brand-tile__icon {
+  width: 24px;
+  height: 24px;
+}
+
+.app-brand-wordmark {
+  display: inline-flex;
   min-width: 0;
-  flex-direction: column;
+  align-items: baseline;
+  overflow: hidden;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.04em;
+  line-height: 26px;
+  white-space: nowrap;
 }
 
-.app-shell__brand-copy strong {
+.app-brand-wordmark__trans {
   color: var(--qa-surface);
-  font-size: 16px;
-  line-height: 22px;
-  white-space: nowrap;
 }
 
-.app-shell__brand-copy small {
-  color: var(--qa-text-muted);
-  font-size: 12px;
-  line-height: 18px;
-  white-space: nowrap;
+.app-brand-wordmark__lint {
+  color: var(--qa-success);
 }
 
 .app-shell__sider .ant-menu {
@@ -232,7 +278,7 @@ body {
   z-index: 20;
   top: 0;
   display: grid;
-  grid-template-columns: 44px auto 1fr;
+  grid-template-columns: 44px 44px 1fr;
   align-items: center;
   min-height: calc(56px + env(safe-area-inset-top));
   gap: var(--qa-space-2);
@@ -246,10 +292,11 @@ body {
   height: 44px;
 }
 
-.app-mobile-header strong {
-  color: var(--qa-text);
-  font-size: 16px;
-  line-height: 24px;
+.app-mobile-header__logo {
+  display: block;
+  width: 44px;
+  height: 44px;
+  object-fit: contain;
 }
 
 .app-mobile-header span {
@@ -271,6 +318,20 @@ body {
 .app-mobile-nav .ant-drawer-title,
 .app-mobile-nav .ant-drawer-close {
   color: var(--qa-surface);
+}
+
+.app-mobile-nav__logo {
+  display: block;
+  flex: none;
+  width: 40px;
+  height: 40px;
+  object-fit: contain;
+}
+
+.app-mobile-nav__brand {
+  display: flex;
+  align-items: center;
+  gap: var(--qa-space-2);
 }
 
 .app-mobile-nav .ant-drawer-body {

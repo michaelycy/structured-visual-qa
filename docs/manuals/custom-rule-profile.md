@@ -100,6 +100,15 @@ cp profiles/translation-balanced.v1.json \
       "size": 0.25,
       "type": 0.2,
       "order": 0.15
+    },
+    "logical_grouping": {
+      "enabled": true,
+      "max_regions": 8,
+      "line_gap_ratio": 0.6,
+      "horizontal_overlap_ratio": 0.3,
+      "font_size_tolerance_ratio": 0.15,
+      "edge_tolerance_ratio": 0.015,
+      "counterpart_overlap_ratio": 0.5
     }
   },
   "alignment": {
@@ -110,7 +119,9 @@ cp profiles/translation-balanced.v1.json \
   },
   "grouping": {
     "heading_ratio": 1.25,
-    "disconnected_span_gap_ratio": 3.0
+    "disconnected_span_gap_ratio": 3.0,
+    "style_font_size_tolerance_ratio": 0.03,
+    "style_font_size_tolerance_points": 0.25
   },
   "detectors": {
     "enabled": {
@@ -128,10 +139,15 @@ cp profiles/translation-balanced.v1.json \
       "font_shrink_ratio": -0.2,
       "overlap_ratio": 0.05,
       "overlap_increase_ratio": 0.05,
+      "text_overlap_axis_ratio": 0.1,
       "image_caption_area_ratio": 0.005,
       "untranslated_ratio": 0.7,
       "untranslated_min_letters": 8,
-      "conversion_noise_ratio": 0.03
+      "conversion_noise_ratio": 0.03,
+      "text_reflow_max_added_lines": 1,
+      "text_reflow_width_tolerance_ratio": 0.25,
+      "text_reflow_font_tolerance_ratio": 0.2,
+      "text_reflow_line_height_tolerance_ratio": 0.6
     },
     "layout_analog_weights": {
       "position": 0.7,
@@ -386,14 +402,18 @@ shift = max(abs(x_shift_ratio), abs(y_shift_ratio))
 
 ```json
 "overlap_ratio": 0.05,
-"overlap_increase_ratio": 0.05
+"overlap_increase_ratio": 0.05,
+"text_overlap_axis_ratio": 0.1
 ```
 
 `overlap_ratio` 是两个 Region 交集面积占较小 Region 面积的比例。低于该值的轻微接触被忽略。
 
 `overlap_increase_ratio` 比较 Target 与 Source 的重叠关系。只有 Target 重叠相对 Source 明显增加时才报告，避免把封面背景图叠字等原设计判为异常。
 
-两者取值范围均为 `0～1`。
+`text_overlap_axis_ratio` 要求两个文本 BBox 在水平和垂直方向的侵入比例都超过
+该值，排除相邻行或相邻列因字体上延、下延产生的轻微边界接触。
+
+三者取值范围均为 `0～1`。
 
 ### 7.6 严重度分档（bands）
 

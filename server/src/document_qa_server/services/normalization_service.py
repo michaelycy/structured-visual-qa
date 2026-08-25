@@ -14,6 +14,8 @@ import subprocess
 import uuid
 from pathlib import Path
 
+from document_qa_server.observability import log_event
+
 # 支持归一化的源格式（扩展名 → 魔数前缀，魔数可缺省表示仅查扩展名）。
 SUPPORTED_FORMATS: dict[str, bytes | None] = {
     ".docx": b"PK",
@@ -101,16 +103,19 @@ class NormalizationService:
         """
 
         if not self.is_supported(source.name):
+            log_event("normalize_failed", file=source.name, reason="unsupported_format")
             raise NormalizationError(
                 f"不支持归一化的格式: {source.suffix or '(无扩展名)'}"
             )
         if not source.is_file():
+            log_event("normalize_failed", file=source.name, reason="missing")
             raise NormalizationError(f"文件不存在: {source}")
         # 扩展名 + 魔数双重校验：文件内容必须与声明格式一致。
         extension = source.suffix.lower()
         with source.open("rb") as handle:
             head = handle.read(8)
         if not matches_magic(extension, head):
+            log_event("normalize_failed", file=source.name, reason="magic_mismatch")
             raise NormalizationError(f"文件内容与扩展名不符: {source.name}")
         engine_version = self.check_engine()
         if engine_version is None:

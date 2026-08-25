@@ -7,7 +7,7 @@ from typing import Literal
 from document_qa.detectors import ContentDetector, RuleDetector
 from document_qa.detectors.glossary import GlossaryDetector
 from document_qa.grouping import RegionGrouper
-from document_qa.matching import PageAligner, RegionMatcher
+from document_qa.matching import LogicalRegionComposer, PageAligner, RegionMatcher
 from document_qa.parsers import PyMuPDFParser
 from document_qa.glossary import Glossary
 from document_qa.profiles import RuleProfile, default_rule_profile
@@ -38,6 +38,7 @@ class DocumentQAPipeline:
         parser: PyMuPDFParser | None = None,
         renderer: PyMuPDFRenderer | None = None,
         grouper: RegionGrouper | None = None,
+        logical_region_composer: LogicalRegionComposer | None = None,
         page_aligner: PageAligner | None = None,
         matcher: RegionMatcher | None = None,
         detector: RuleDetector | None = None,
@@ -51,6 +52,9 @@ class DocumentQAPipeline:
         self.parser = parser or PyMuPDFParser()
         self.renderer = renderer or PyMuPDFRenderer()
         self.grouper = grouper or RegionGrouper(self.profile)
+        self.logical_region_composer = (
+            logical_region_composer or LogicalRegionComposer(self.profile)
+        )
         # 默认组件必须共享同一个 Profile，确保界面中一次配置修改贯穿全流程。
         self.page_aligner = page_aligner or PageAligner(self.profile)
         self.matcher = matcher or RegionMatcher(self.profile)
@@ -231,9 +235,16 @@ class DocumentQAPipeline:
         if source is None or target is None:
             raise RuntimeError("页面对齐进入不可达状态")
 
-        match_result = self.matcher.match_page(source, target)
-        issues = self.detector.detect(source, target, match_result)
-        if self._is_text_vectorized(source, target):
+        # 原始 Region 保留解析器结构供追溯；匹配视图将视觉连续文本规范化，
+        # 使两侧不同的 M↔N Block/Region 粒度都落到逻辑 1↔1 比较。
+        source_match_page, target_match_page = (
+            self.logical_region_composer.compose_pair(source, target)
+        )
+        match_result = self.matcher.match_page(source_match_page, target_match_page)
+        issues = self.detector.detect(
+            source_match_page, target_match_page, match_result
+        )
+        if self._is_text_vectorized(source_match_page, target_match_page):
             # 目标文字已矢量化（转曲）：文本层为空，内容级检测与
             # 文本缺失判定必然假阳性（内容其实在，只是提取不到）。
             # 抑制这些检测并显式提示，避免误导验收人。
@@ -255,12 +266,12 @@ class DocumentQAPipeline:
                     metrics={
                         "source_text_chars": sum(
                             len(r.content.text)
-                            for r in source.regions
+                            for r in source_match_page.regions
                             if r.content and r.content.text
                         ),
                         "target_text_chars": sum(
                             len(r.content.text)
-                            for r in target.regions
+                            for r in target_match_page.regions
                             if r.content and r.content.text
                         ),
                     },
@@ -270,12 +281,16 @@ class DocumentQAPipeline:
         else:
             # 内容级检测（数字/漏译）复用同一匹配结果，位于布局规则之后。
             issues.extend(
-                self.content_detector.detect(source, target, match_result)
+                self.content_detector.detect(
+                    source_match_page, target_match_page, match_result
+                )
             )
             # 术语合规检测同样复用匹配结果；未配置术语库时为空。
             if self.glossary_detector is not None:
                 issues.extend(
-                    self.glossary_detector.detect(source, target, match_result)
+                    self.glossary_detector.detect(
+                        source_match_page, target_match_page, match_result
+                    )
                 )
         score, status = self.scorer.score(issues)
         return PageQAResult(

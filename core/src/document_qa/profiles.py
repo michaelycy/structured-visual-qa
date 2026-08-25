@@ -38,6 +38,18 @@ class MatchingWeights(SchemaModel):
         return self
 
 
+class LogicalGroupingSettings(SchemaModel):
+    """控制匹配前的视觉文本流规范化。"""
+
+    enabled: bool = True
+    max_regions: int = Field(default=8, ge=2, le=50)
+    line_gap_ratio: float = Field(default=0.6, ge=0, le=3)
+    horizontal_overlap_ratio: float = Field(default=0.3, ge=0, le=1)
+    font_size_tolerance_ratio: float = Field(default=0.15, ge=0, le=1)
+    edge_tolerance_ratio: float = Field(default=0.015, ge=0, le=0.2)
+    counterpart_overlap_ratio: float = Field(default=0.5, ge=0, le=1)
+
+
 class MatchingSettings(SchemaModel):
     """控制 Region 候选匹配和文本合并容错。"""
 
@@ -46,6 +58,9 @@ class MatchingSettings(SchemaModel):
     # 文本类 Region 之间的类型相似度（标题/段落/列表可跨语言互配）。
     text_type_similarity: float = Field(default=0.80, ge=0, le=1)
     weights: MatchingWeights = Field(default_factory=MatchingWeights)
+    logical_grouping: LogicalGroupingSettings = Field(
+        default_factory=LogicalGroupingSettings
+    )
 
 
 class LayoutAnalogWeights(SchemaModel):
@@ -161,6 +176,9 @@ class DetectorThresholds(SchemaModel):
     font_shrink_ratio: float = Field(default=-0.20, ge=-1, le=0)
     overlap_ratio: float = Field(default=0.05, ge=0, le=1)
     overlap_increase_ratio: float = Field(default=0.05, ge=0, le=1)
+    # 文本 BBox 在两个轴向都达到该侵入比例才算真实重叠，排除相邻行/列
+    # 因字体上延、下延产生的亚点级边界接触。
+    text_overlap_axis_ratio: float = Field(default=0.1, ge=0, le=1)
     image_caption_area_ratio: float = Field(default=0.005, ge=0, le=1)
     # 目标文本区中仍保留源语言文字的字符占比达到该值即判为未翻译。
     untranslated_ratio: float = Field(default=0.7, ge=0, le=1)
@@ -220,6 +238,12 @@ class DetectorThresholds(SchemaModel):
     text_label_max_chars: int = Field(default=30, ge=1, le=200)
     text_resize_height_tolerance_ratio: float = Field(default=0.2, ge=0, le=1)
     text_resize_font_tolerance_ratio: float = Field(default=0.1, ge=0, le=1)
+    # 同一文本条目在翻译后自然增加一行时，按每行高度而非整体 BBox 高度
+    # 判断尺寸是否稳定，避免正常换行被误判为段落合并。
+    text_reflow_max_added_lines: int = Field(default=1, ge=0, le=10)
+    text_reflow_width_tolerance_ratio: float = Field(default=0.25, ge=0, le=1)
+    text_reflow_font_tolerance_ratio: float = Field(default=0.2, ge=0, le=1)
+    text_reflow_line_height_tolerance_ratio: float = Field(default=0.6, ge=0, le=2)
 
     def band_severity(
         self, bands: list[SeverityBand], value: float, default: Severity
@@ -338,6 +362,9 @@ class GroupingSettings(SchemaModel):
     # 同一 PDF 原始 Block 内，两个文本 Span 的水平/垂直间距超过
     # 行高倍数时视为不连通，避免流程图、表格标签被合并成超宽 Region。
     disconnected_span_gap_ratio: float = Field(default=3.0, ge=0.5, le=20.0)
+    # 跨行合并时允许的字号浮点误差；绝对值与相对值取较大者。
+    style_font_size_tolerance_ratio: float = Field(default=0.03, ge=0, le=0.5)
+    style_font_size_tolerance_points: float = Field(default=0.25, ge=0, le=5.0)
 
 
 class RuleProfile(SchemaModel):

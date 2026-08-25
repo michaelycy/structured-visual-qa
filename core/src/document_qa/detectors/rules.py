@@ -423,11 +423,15 @@ class RuleDetector:
             expected_text_width_change = self._is_expected_text_width_change(
                 source_region, target_region, diff
             )
+            expected_text_reflow = self._is_expected_text_reflow(
+                source_region, target_region, diff
+            )
             if (
                 enabled.region_resized
                 and diff.target_region_id
                 not in alignment_result.suppressed_resize_target_ids
                 and not expected_text_width_change
+                and not expected_text_reflow
                 and resize > thresholds.region_resize_ratio
             ):
                 issues.append(
@@ -484,6 +488,44 @@ class RuleDetector:
             return False
         # 只豁免宽度驱动的变化；高度剧变仍由 Region resize 规则报告。
         return abs(diff.width_change_ratio) > abs(diff.height_change_ratio)
+
+    def _is_expected_text_reflow(
+        self, source: Region, target: Region, diff: StructuredDiff
+    ) -> bool:
+        """识别翻译后自然增加少量行数、但每行尺度仍稳定的文本回流。"""
+
+        if source.type not in self._TEXT_TYPES or target.type not in self._TEXT_TYPES:
+            return False
+        source_text = source.content.text if source.content else None
+        target_text = target.content.text if target.content else None
+        if not source_text or not target_text:
+            return False
+        source_lines = [line for line in source_text.splitlines() if line.strip()]
+        target_lines = [line for line in target_text.splitlines() if line.strip()]
+        added_lines = len(target_lines) - len(source_lines)
+        thresholds = self.profile.detectors.thresholds
+        if added_lines <= 0 or added_lines > thresholds.text_reflow_max_added_lines:
+            return False
+        if (
+            abs(diff.width_change_ratio)
+            > thresholds.text_reflow_width_tolerance_ratio
+        ):
+            return False
+        font_change = diff.font_size_change_ratio
+        if (
+            font_change is not None
+            and abs(font_change) > thresholds.text_reflow_font_tolerance_ratio
+        ):
+            return False
+        source_line_height = source.bbox.height / len(source_lines)
+        target_line_height = target.bbox.height / len(target_lines)
+        line_height_change = (
+            target_line_height - source_line_height
+        ) / source_line_height
+        return (
+            abs(line_height_change)
+            <= thresholds.text_reflow_line_height_tolerance_ratio
+        )
 
     def _detect_fragmented(
         self, target: Page, source: Page, result: PageMatchResult
@@ -728,6 +770,11 @@ class RuleDetector:
         suppressed_pairs = suppressed_pairs or set()
         # 每个 Region 的源版面类比只需计算一次；两两组合会重复请求同一 Region。
         analog_cache: dict[str, Region | None] = {}
+        source_by_id = {region.id: region for region in source.regions}
+        matched_source_by_target = {
+            match.target_region_id: source_by_id.get(match.source_region_id)
+            for match in result.matches
+        }
         regions = target.regions
         # 先按 y 轴扫描筛出 y 方向可能相交的候选对，避免 O(n²) 全量两两组合；
         # 候选对按原始索引顺序返回，报告输出顺序与全量两两组合一致。
@@ -736,6 +783,15 @@ class RuleDetector:
             first = regions[first_index]
             second = regions[second_index]
             if frozenset((first.id, second.id)) in suppressed_pairs:
+                continue
+            if (
+                first.metadata.get("source_block_index")
+                == second.metadata.get("source_block_index")
+                and first.metadata.get("source_component_index")
+                != second.metadata.get("source_component_index")
+            ):
+                # 同一 PDF 原始 Block 的相邻视觉行会因字体上/下延伸导致
+                # BBox 轻微相交；样式边界拆分后仍属于原生排版，不是新增重叠。
                 continue
             ratio = intersection_ratio(first.bbox, second.bbox)
             if ratio <= thresholds.overlap_ratio:
@@ -748,11 +804,37 @@ class RuleDetector:
             if not is_text_image and not (first_is_text and second_is_text):
                 continue
 
+            overlap_width = max(
+                0.0, min(first.bbox.right, second.bbox.right)
+                - max(first.bbox.x, second.bbox.x)
+            )
+            overlap_height = max(
+                0.0, min(first.bbox.bottom, second.bbox.bottom)
+                - max(first.bbox.y, second.bbox.y)
+            )
+            horizontal_intrusion_ratio = overlap_width / min(
+                first.bbox.width, second.bbox.width
+            )
+            vertical_intrusion_ratio = overlap_height / min(
+                first.bbox.height, second.bbox.height
+            )
+            if (
+                first_is_text
+                and second_is_text
+                and min(horizontal_intrusion_ratio, vertical_intrusion_ratio)
+                <= thresholds.text_overlap_axis_ratio
+            ):
+                continue
+
             source_ratio = 0.0
-            source_first = self._find_layout_analog(
+            source_first = matched_source_by_target.get(
+                first.id
+            ) or self._find_layout_analog(
                 first, source, target, analog_cache
             )
-            source_second = self._find_layout_analog(
+            source_second = matched_source_by_target.get(
+                second.id
+            ) or self._find_layout_analog(
                 second, source, target, analog_cache
             )
             if source_first is not None and source_second is not None:
@@ -799,10 +881,13 @@ class RuleDetector:
                     page=target.page,
                     type=issue_type,
                     severity=Severity.CRITICAL if is_text_image else Severity.HIGH,
+                    source_region=source_first.id if source_first is not None else None,
                     target_region=first.id,
                     bbox=first.bbox,
                     metrics={
                         "overlap_ratio": ratio,
+                        "horizontal_intrusion_ratio": horizontal_intrusion_ratio,
+                        "vertical_intrusion_ratio": vertical_intrusion_ratio,
                         "source_overlap_ratio": source_ratio,
                         "overlap_increase_ratio": ratio - source_ratio,
                         "other_region": second.id,
@@ -811,7 +896,19 @@ class RuleDetector:
                         "primary_region_type": first.type.value,
                         "other_region_type": second.type.value,
                         "other_bbox": second.bbox.model_dump(mode="json"),
-                        **region_evidence(target=first),
+                        "source_other_region": source_second.id
+                        if source_second is not None
+                        else None,
+                        "source_other_text": source_second.content.text
+                        if source_second is not None and source_second.content
+                        else None,
+                        "source_other_bbox": source_second.bbox.model_dump(mode="json")
+                        if source_second is not None
+                        else None,
+                        "source_other_region_type": source_second.type.value
+                        if source_second is not None
+                        else None,
+                        **region_evidence(source=source_first, target=first),
                     },
                     description="目标文本与图片发生明显重叠。"
                     if is_text_image

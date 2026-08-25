@@ -19,6 +19,8 @@ from document_qa.glossary import Glossary
 from document_qa.profiles import RuleProfile
 from document_qa.schemas import QAReport
 
+from document_qa_server.observability import log_event
+from document_qa_server.persistence import Database
 from document_qa_server.services.normalization_service import (
     NormalizationError,
     NormalizationService,
@@ -54,16 +56,19 @@ class CompareService:
         *,
         artifacts_dir: Path,
         normalizer: NormalizationService | None = None,
+        database: Database | None = None,
     ) -> None:
-        """注入产物根目录与可选归一化服务；渲染页写入 pages/ 子目录。"""
+        """注入产物根目录与可选归一化/持久化服务；渲染页写入 pages/ 子目录。"""
 
         self._artifacts_dir = artifacts_dir
         self._render_dir = artifacts_dir / "pages"
         self._normalizer = normalizer or NormalizationService(
             artifacts_dir=artifacts_dir
         )
+        self._database = database
         self._tasks: dict[str, TaskState] = {}
         self._tasks_lock = threading.Lock()
+        self._recover_interrupted_tasks()
 
     # 终态任务保留时长：结果已被前端取走或超时弃取后释放内存。
     _TERMINAL_TTL_SECONDS = 3600
@@ -81,6 +86,15 @@ class CompareService:
                 source_display=displays[0],
                 target_display=displays[1],
             )
+        # 任务生命周期同步落库：服务重启后 /api/tasks 仍可查到历史任务，
+        # 进行中的任务会被标记为重启中断而不是凭空消失。
+        self._persist_task(task_id, "queued")
+        log_event(
+            "task_submitted",
+            task_id=task_id,
+            source=displays[0],
+            target=displays[1],
+        )
         return task_id
 
     def execute(
@@ -154,10 +168,13 @@ class CompareService:
         )
 
     def get_task(self, task_id: str) -> TaskState | None:
-        """查询任务状态；不存在返回 None。"""
+        """查询任务状态；内存未命中时回落数据库（重启后可查）。"""
 
         with self._tasks_lock:
-            return self._tasks.get(task_id)
+            state = self._tasks.get(task_id)
+        if state is not None:
+            return state
+        return self._load_task_from_db(task_id)
 
     def run(
         self,
@@ -252,7 +269,7 @@ class CompareService:
         return normalized, origin
 
     def _update(self, task_id: str, **fields) -> None:
-        """合并更新任务状态字段。"""
+        """合并更新任务状态字段，并把生命周期变化同步落库。"""
 
         with self._tasks_lock:
             task = self._tasks.get(task_id)
@@ -260,6 +277,125 @@ class CompareService:
                 return
             for key, value in fields.items():
                 setattr(task, key, value)
+        # 状态迁移与关键锚点（错误信息、历史记录 ID）落库；
+        # 内存中的报告大对象不入库（由 history/comparison_reports 承载）。
+        if "status" in fields or "error" in fields or "history_record_id" in fields:
+            self._persist_task(
+                task_id,
+                fields.get("status") or task.status,
+                error=fields.get("error", task.error),
+                history_record_id=fields.get(
+                    "history_record_id", task.history_record_id
+                ),
+            )
+            # 状态转换打点：事后排障的任务时间线来源。
+            log_event(
+                "task_state",
+                task_id=task_id,
+                status=fields.get("status") or task.status,
+                error=(fields.get("error") or "")[:200] or None,
+                history_record_id=fields.get("history_record_id"),
+            )
+
+    # ---- 任务生命周期持久化 -------------------------------------------------
+
+    def _persist_task(
+        self,
+        task_id: str,
+        status: str,
+        *,
+        error: str | None = None,
+        history_record_id: str | None = None,
+    ) -> None:
+        """把任务状态 UPSERT 到 async_tasks；数据库不可用时静默降级为纯内存。"""
+
+        if self._database is None:
+            return
+        state = self._peek(task_id)
+        now = Database.now()
+        try:
+            with self._database.transaction() as connection:
+                connection.execute(
+                    "INSERT INTO async_tasks("
+                    "task_id, status, source_display, target_display, "
+                    "history_record_id, error, created_at, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                    "ON CONFLICT(task_id) DO UPDATE SET "
+                    "status = excluded.status, "
+                    "history_record_id = excluded.history_record_id, "
+                    "error = excluded.error, "
+                    "updated_at = excluded.updated_at",
+                    (
+                        task_id,
+                        status,
+                        (state.source_display if state else ""),
+                        (state.target_display if state else ""),
+                        history_record_id,
+                        error,
+                        now,
+                        now,
+                    ),
+                )
+        except Exception:
+            # 持久化失败不应阻断比较主流程；此时任务退化为重启不可恢复。
+            return
+
+    def _load_task_from_db(self, task_id: str) -> TaskState | None:
+        """重启后按 task_id 读回终态任务（不含报告大对象）。"""
+
+        if self._database is None:
+            return None
+        try:
+            with self._database.connect() as connection:
+                row = connection.execute(
+                    "SELECT task_id, status, source_display, target_display, "
+                    "history_record_id, error FROM async_tasks WHERE task_id = ?",
+                    (task_id,),
+                ).fetchone()
+        except Exception:
+            return None
+        if row is None:
+            return None
+        log_event(
+            "task_recovered",
+            task_id=task_id,
+            status=row["status"],
+        )
+        return TaskState(
+            status=row["status"],
+            source_path="",
+            target_path="",
+            source_display=row["source_display"],
+            target_display=row["target_display"],
+            report=None,
+            rendered=None,
+            error=row["error"],
+            history_record_id=row["history_record_id"],
+            created_at=0.0,
+        )
+
+    def _recover_interrupted_tasks(self) -> None:
+        """服务启动时把上次运行遗留的 queued/running 任务标记为中断。
+
+        后台线程随进程消亡，这些任务不可能再推进；明确标记错误比
+        让前端轮询 404 更诚实（报告若已落历史仍可从对比记录回查）。
+        """
+
+        if self._database is None:
+            return
+        try:
+            with self._database.transaction() as connection:
+                cursor = connection.execute(
+                    "UPDATE async_tasks SET status = 'error', "
+                    "error = '服务重启，任务中断；已完成的结果请从对比记录查看', "
+                    "updated_at = ? "
+                    "WHERE status IN ('queued', 'running')",
+                    (Database.now(),),
+                )
+            if cursor.rowcount:
+                log_event("task_interrupted", count=cursor.rowcount)
+        except Exception:
+            return
 
     def _peek(self, task_id: str) -> TaskState | None:
         """持锁读取任务快照。"""

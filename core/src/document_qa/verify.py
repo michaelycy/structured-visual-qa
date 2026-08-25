@@ -124,6 +124,26 @@ class StagedVerifier:
                 f"目标新增 {len(alignment.extra_target_pages)} 页"
             )
         elif stage == Stage.MATCH:
+            source_pages = {
+                page.page: page for page in self._documents["source"].pages
+            }
+            target_pages = {
+                page.page: page for page in self._documents["target"].pages
+            }
+            for source_number, target_number in self._documents["alignment"].pairs:
+                source_page, target_page = (
+                    self.pipeline.logical_region_composer.compose_pair(
+                        source_pages[source_number], target_pages[target_number]
+                    )
+                )
+                source_pages[source_number] = source_page
+                target_pages[target_number] = target_page
+            self._documents["source"] = self._documents["source"].model_copy(
+                update={"pages": list(source_pages.values())}
+            )
+            self._documents["target"] = self._documents["target"].model_copy(
+                update={"pages": list(target_pages.values())}
+            )
             results = []
             for source_number, target_number in self._documents["alignment"].pairs:
                 source_page = next(

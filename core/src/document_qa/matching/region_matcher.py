@@ -57,7 +57,16 @@ class RegionMatcher:
                     target,
                 )
                 metric_row.append(metrics)
-                matrix[source_index, target_index] = 1.0 - self._score(metrics)
+                source_pair_key = source_region.metadata.get("_logical_pair_key")
+                target_pair_key = target_region.metadata.get("_logical_pair_key")
+                if (source_pair_key or target_pair_key) and (
+                    source_pair_key != target_pair_key
+                ):
+                    # 逻辑 M↔N 分组已由双侧几何图确认；禁止匈牙利分配把其中
+                    # 一侧改配到远端 Region，避免局部修复引发全页连锁重排。
+                    matrix[source_index, target_index] = 2.0
+                else:
+                    matrix[source_index, target_index] = 1.0 - self._score(metrics)
             metric_matrix.append(metric_row)
 
         source_indexes, target_indexes = linear_sum_assignment(matrix)

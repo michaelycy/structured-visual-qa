@@ -5,8 +5,9 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 
-from document_qa.profiles import RuleProfile, default_rule_profile
 from document_qa.detectors.evidence import region_evidence
+from document_qa.matching.text_flow import TextFlowBuilder
+from document_qa.profiles import RuleProfile, default_rule_profile
 from document_qa.schemas import (
     BoundingBox,
     HorizontalAlignment,
@@ -16,13 +17,12 @@ from document_qa.schemas import (
     PageMatchResult,
     Region,
     Severity,
-    TEXT_TYPES,
 )
 
 
 @dataclass(frozen=True)
-class TextFlowGroup:
-    """同一栏中垂直相邻的文本行组，仅用于检测器内部推断。"""
+class AlignmentTextFlowGroup:
+    """带水平对齐推断结果的临时文本流。"""
 
     regions: tuple[Region, ...]
     bbox: BoundingBox
@@ -54,8 +54,8 @@ class TextAlignmentDetector:
 
         source_groups = self._build_groups(source)
         target_groups = self._build_groups(target)
-        source_by_region = self._group_index(source_groups)
-        target_by_region = self._group_index(target_groups)
+        source_by_region = self._group_index(source_groups, source)
+        target_by_region = self._group_index(target_groups, target)
 
         pair_counts: Counter[tuple[int, int]] = Counter()
         source_match_totals: Counter[int] = Counter()
@@ -151,72 +151,40 @@ class TextAlignmentDetector:
         detection.issues.sort(key=lambda issue: (issue.bbox.y if issue.bbox else 0, issue.id))
         return detection
 
-    def _build_groups(self, page: Page) -> list[TextFlowGroup]:
+    def _build_groups(self, page: Page) -> list[AlignmentTextFlowGroup]:
         """按栏位、行距和字号把文本 Region 聚成临时段落流。"""
 
-        regions = sorted(
-            (region for region in page.regions if region.type in TEXT_TYPES),
-            key=lambda region: (region.bbox.y, region.bbox.x),
+        expanded_regions: list[Region] = []
+        for region in page.regions:
+            atomic_payloads = region.metadata.get("_logical_atomic_regions")
+            if isinstance(atomic_payloads, list) and atomic_payloads:
+                expanded_regions.extend(
+                    Region.model_validate(payload) for payload in atomic_payloads
+                )
+            else:
+                expanded_regions.append(region)
+        expanded_page = page.model_copy(update={"regions": expanded_regions})
+        thresholds = self.profile.detectors.thresholds
+        builder = TextFlowBuilder(
+            line_gap_ratio=thresholds.alignment_line_gap_ratio,
+            horizontal_overlap_ratio=thresholds.alignment_horizontal_overlap_ratio,
+            font_size_tolerance_ratio=(
+                thresholds.alignment_font_size_tolerance_ratio
+            ),
         )
-        mutable_groups: list[list[Region]] = []
-        for region in regions:
-            candidates: list[tuple[float, int]] = []
-            for index, group in enumerate(mutable_groups):
-                previous = group[-1]
-                if self._can_follow(previous, region):
-                    candidates.append((region.bbox.y - previous.bbox.bottom, index))
-            if not candidates:
-                mutable_groups.append([region])
-                continue
-            # 多栏交错时选择垂直距离最近的同栏文本流，避免跨栏串组。
-            _, best_index = min(candidates, key=lambda item: (abs(item[0]), item[1]))
-            mutable_groups[best_index].append(region)
-
-        groups = []
-        for regions_in_group in mutable_groups:
-            bbox = self._union_bbox(regions_in_group)
+        groups: list[AlignmentTextFlowGroup] = []
+        for group in builder.build(expanded_page):
+            regions_in_group = list(group.regions)
             alignment, spreads = self._infer_alignment(regions_in_group, page.width)
             groups.append(
-                TextFlowGroup(
+                AlignmentTextFlowGroup(
                     regions=tuple(regions_in_group),
-                    bbox=bbox,
+                    bbox=group.bbox,
                     alignment=alignment,
                     spreads=spreads,
                 )
             )
         return groups
-
-    def _can_follow(self, previous: Region, current: Region) -> bool:
-        """判断两行是否可按阅读方向连接到同一文本流。"""
-
-        if previous.type != current.type or current.bbox.y < previous.bbox.y:
-            return False
-        thresholds = self.profile.detectors.thresholds
-        line_height = max(previous.bbox.height, current.bbox.height)
-        gap = current.bbox.y - previous.bbox.bottom
-        if gap < -line_height * 0.25:
-            return False
-        if gap > line_height * thresholds.alignment_line_gap_ratio:
-            return False
-        overlap = max(
-            0.0,
-            min(previous.bbox.right, current.bbox.right)
-            - max(previous.bbox.x, current.bbox.x),
-        )
-        if (
-            overlap / min(previous.bbox.width, current.bbox.width)
-            < thresholds.alignment_horizontal_overlap_ratio
-        ):
-            return False
-        previous_size = previous.style.font_size if previous.style else None
-        current_size = current.style.font_size if current.style else None
-        if previous_size and current_size:
-            size_change = abs(previous_size - current_size) / max(
-                previous_size, current_size
-            )
-            if size_change > thresholds.alignment_font_size_tolerance_ratio:
-                return False
-        return True
 
     def _infer_alignment(
         self, regions: list[Region], page_width: float
@@ -254,21 +222,25 @@ class TextAlignmentDetector:
         return best_alignment, spreads
 
     @staticmethod
-    def _group_index(groups: list[TextFlowGroup]) -> dict[str, int]:
+    def _group_index(
+        groups: list[AlignmentTextFlowGroup], page: Page
+    ) -> dict[str, int]:
         """建立 Region ID 到临时文本流索引的映射。"""
 
-        return {
+        indexes = {
             region.id: index
             for index, group in enumerate(groups)
             for region in group.regions
         }
-
-    @staticmethod
-    def _union_bbox(regions: list[Region]) -> BoundingBox:
-        """计算临时文本流全部行的最小外接矩形。"""
-
-        x0 = min(region.bbox.x for region in regions)
-        y0 = min(region.bbox.y for region in regions)
-        x1 = max(region.bbox.right for region in regions)
-        y1 = max(region.bbox.bottom for region in regions)
-        return BoundingBox(x=x0, y=y0, width=x1 - x0, height=y1 - y0)
+        for region in page.regions:
+            atomic_ids = region.metadata.get("atomic_region_ids")
+            if not isinstance(atomic_ids, list) or not atomic_ids:
+                continue
+            member_indexes = {
+                indexes[atomic_id]
+                for atomic_id in atomic_ids
+                if isinstance(atomic_id, str) and atomic_id in indexes
+            }
+            if len(member_indexes) == 1:
+                indexes[region.id] = next(iter(member_indexes))
+        return indexes

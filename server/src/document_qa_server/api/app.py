@@ -37,7 +37,7 @@ def create_app(
     database = Database(artifacts_dir=root)
 
     # 服务实例在应用级创建一次；互斥锁因此对全部请求生效。
-    compare_service = CompareService(artifacts_dir=root)
+    compare_service = CompareService(artifacts_dir=root, database=database)
     verify_service = VerifyService(artifacts_dir=root)
     profile_service = ProfileService(artifacts_dir=root, database=database)
     file_service = FileService(

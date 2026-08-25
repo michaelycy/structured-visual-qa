@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 import uuid
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,7 @@ from pydantic import BaseModel, Field
 
 from document_qa.profiles import RuleProfile, default_rule_profile
 from document_qa.schemas import QAReport
+from document_qa_server.observability import log_event
 from document_qa_server.persistence import Database
 
 
@@ -44,12 +46,18 @@ class CompareHistoryService:
         max_records: int = 100,
         database: Database | None = None,
     ) -> None:
-        """注入 SQLite；首次启动幂等导入旧 history/*.json。"""
+        """注入 SQLite；首次启动幂等导入旧 history/*.json。
 
+        启动即清扫孤儿渲染目录：渲染失败的中间产物没有任何记录
+        引用，是 pages/ 无界增长的主要来源。
+        """
+
+        self._artifacts_dir = artifacts_dir
         self._database = database or Database(artifacts_dir=artifacts_dir)
         self._legacy_dir = artifacts_dir / "history"
         self._max_records = max_records
         self._import_legacy()
+        self._collect_orphan_render_dirs()
 
     def add(
         self,
@@ -279,18 +287,78 @@ class CompareHistoryService:
         self._evict_expired()
 
     def _evict_expired(self) -> None:
-        """超过上限时删除最旧数据库记录；完整报告通过外键级联删除。"""
+        """超过上限时删除最旧数据库记录；完整报告通过外键级联删除。
 
+        被淘汰记录独占引用的渲染任务目录（pages/task-*）一并回收——
+        渲染 PNG 动辄数百 MB，是产物目录膨胀的主因（P1 GC）。
+        """
+
+        evicted_rendered: list[str] = []
         with self._database.transaction() as connection:
             rows = connection.execute(
-                "SELECT record_id FROM comparison_records "
+                "SELECT record_id, rendered_json FROM comparison_records "
                 "ORDER BY created_at DESC, record_id DESC LIMIT -1 OFFSET ?",
                 (self._max_records,),
             ).fetchall()
+            if not rows:
+                return
+            # 淘汰前收集这些记录引用的任务目录，供删除后回收判定。
+            for row in rows:
+                evicted_rendered.append(row["rendered_json"] or "")
             connection.executemany(
                 "DELETE FROM comparison_records WHERE record_id = ?",
                 [(row["record_id"],) for row in rows],
             )
+        self._collect_orphan_render_dirs()
+
+    def _collect_orphan_render_dirs(self) -> None:
+        """删除不再被任何对比记录引用的渲染任务目录。
+
+        rendered_json 中的路径形如 task-{id}/source/page-0001.png，
+        任务目录前缀即引用锚点；同一目录可能被多条记录引用（缓存
+        命中场景），必须全量查存活引用后才能删除。
+        """
+
+        pages_dir = self._artifacts_dir / "pages"
+        if not pages_dir.is_dir():
+            return
+        # 存活记录引用的任务目录前缀集合。
+        referenced: set[str] = set()
+        with self._database.connect() as connection:
+            for row in connection.execute(
+                "SELECT rendered_json FROM comparison_records "
+                "WHERE rendered_json IS NOT NULL"
+            ):
+                for name in self._task_dir_names(row["rendered_json"] or ""):
+                    referenced.add(name)
+        removed = 0
+        for task_dir in pages_dir.glob("task-*"):
+            if task_dir.name not in referenced:
+                shutil.rmtree(task_dir, ignore_errors=True)
+                removed += 1
+        if removed:
+            log_event("render_garbage", removed_dirs=removed, kept=len(referenced))
+
+    @staticmethod
+    def _task_dir_names(rendered_json: str) -> set[str]:
+        """从 rendered_json 提取任务目录名（task- 前缀，去重）。"""
+
+        try:
+            rendered = json.loads(rendered_json) if rendered_json else {}
+        except json.JSONDecodeError:
+            return set()
+        if not isinstance(rendered, dict):
+            return set()
+        names: set[str] = set()
+        for paths in rendered.values():
+            if not isinstance(paths, list):
+                continue
+            for entry in paths:
+                if isinstance(entry, str) and "/" in entry:
+                    head = entry.split("/", 1)[0]
+                    if head.startswith("task-"):
+                        names.add(head)
+        return names
 
     @staticmethod
     def _register_file(connection, path: Path, display: str, *, origin: str) -> str:

@@ -23,6 +23,14 @@ def region_evidence(
                 "source_region_type": source.type.value,
             }
         )
+        source_atomic_ids = source.metadata.get("atomic_region_ids")
+        if isinstance(source_atomic_ids, list) and source_atomic_ids:
+            evidence.update(
+                {
+                    "source_region_ids": source_atomic_ids,
+                    "source_logical_region_count": len(source_atomic_ids),
+                }
+            )
     if target is not None:
         evidence.update(
             {
@@ -31,6 +39,14 @@ def region_evidence(
                 "target_region_type": target.type.value,
             }
         )
+        target_atomic_ids = target.metadata.get("atomic_region_ids")
+        if isinstance(target_atomic_ids, list) and target_atomic_ids:
+            evidence.update(
+                {
+                    "target_region_ids": target_atomic_ids,
+                    "target_logical_region_count": len(target_atomic_ids),
+                }
+            )
     if match is not None:
         evidence.update(
             {

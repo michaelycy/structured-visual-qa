@@ -490,6 +490,10 @@
   min-width: 180px;
 }
 
+.issue-list-number-filter.ant-input-affix-wrapper {
+  width: 180px;
+}
+
 .issue-table .ant-table-container {
   overflow: hidden;
   border: 1px solid var(--qa-border);
@@ -599,7 +603,16 @@
   }
 
   .page-review__page-select.ant-select,
+  .issue-list-number-filter.ant-input-affix-wrapper,
   .issue-list-filter.ant-select {
+    width: 100%;
+  }
+
+  .issue-list-filters {
+    width: 100%;
+  }
+
+  .issue-list-filters > .ant-space-item:first-child {
     width: 100%;
   }
 

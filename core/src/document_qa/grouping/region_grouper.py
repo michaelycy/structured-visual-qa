@@ -1,6 +1,7 @@
 """使用确定性规则把解析 Block 组合为语义 Region。"""
 
 from collections import defaultdict
+import re
 from statistics import median
 
 from document_qa.profiles import RuleProfile, default_rule_profile
@@ -17,6 +18,10 @@ from document_qa.schemas import (
 
 class RegionGrouper:
     """按原始 PDF Block 分组，并补充基础类型和邻接关系。"""
+
+    _TEXT_ITEM_PREFIX = re.compile(
+        r"^\s*(?:[•·◦▪▫‣⁃○●□■※〮]|[:：]|\(?\d{1,3}\)?[.)、．])"
+    )
 
     def __init__(self, profile: RuleProfile | None = None) -> None:
         """允许注入版本化分组配置（标题判定阈值）；缺省使用内置 Profile。"""
@@ -55,6 +60,7 @@ class RegionGrouper:
                         median_font_size,
                         region_id,
                         component_index,
+                        len(components),
                     )
                 )
         regions.sort(key=lambda region: (region.bbox.y, region.bbox.x))
@@ -69,6 +75,7 @@ class RegionGrouper:
         median_font_size: float | None,
         region_id: str,
         component_index: int,
+        component_count: int,
     ) -> Region:
         """合并同一原始 Block 的几何范围、文本和代表样式。"""
 
@@ -123,6 +130,7 @@ class RegionGrouper:
             metadata={
                 "source_block_index": source_index,
                 "source_component_index": component_index,
+                "_source_block_component_count": component_count,
             },
         )
 
@@ -137,6 +145,82 @@ class RegionGrouper:
 
         if len(blocks) < 2 or any(block.type != ElementType.TEXT for block in blocks):
             return [blocks]
+
+        ordered_blocks = sorted(
+            blocks, key=lambda block: (block.bbox.y, block.bbox.x, block.id)
+        )
+        components: list[list[Block]] = []
+        for run in self._split_cross_line_runs(ordered_blocks):
+            components.extend(self._connected_components(run))
+        components.sort(
+            key=lambda component: (
+                min(block.bbox.y for block in component),
+                min(block.bbox.x for block in component),
+            )
+        )
+        return components
+
+    def _split_cross_line_runs(self, blocks: list[Block]) -> list[list[Block]]:
+        """先按跨行样式和条目边界切段，禁止连通图绕过边界回连。"""
+
+        lines: list[list[Block]] = []
+        for block in blocks:
+            line_index = block.metadata.get("source_line_index")
+            if (
+                lines
+                and line_index is not None
+                and line_index
+                == lines[-1][0].metadata.get("source_line_index")
+            ):
+                lines[-1].append(block)
+            else:
+                lines.append([block])
+
+        runs: list[list[Block]] = []
+        for line in lines:
+            if not runs:
+                runs.append(list(line))
+                continue
+            previous_line = self._last_visual_line(runs[-1])
+            previous_style_block = max(
+                previous_line, key=lambda block: (block.bbox.width, block.id)
+            )
+            current_style_block = max(
+                line, key=lambda block: (block.bbox.width, block.id)
+            )
+            if not self._styles_are_compatible(
+                previous_style_block, current_style_block
+            ) or self._line_starts_new_text_item(line):
+                runs.append(list(line))
+            else:
+                runs[-1].extend(line)
+        return runs
+
+    @staticmethod
+    def _last_visual_line(blocks: list[Block]) -> list[Block]:
+        """返回分段中的最后一个视觉行，供下一行做样式比较。"""
+
+        line_index = blocks[-1].metadata.get("source_line_index")
+        if line_index is None:
+            return [blocks[-1]]
+        return [
+            block
+            for block in blocks
+            if block.metadata.get("source_line_index") == line_index
+        ]
+
+    def _line_starts_new_text_item(self, blocks: list[Block]) -> bool:
+        """按行内阅读顺序识别编号、项目符号或冒号明细。"""
+
+        text = "".join(
+            block.content.text
+            for block in sorted(blocks, key=lambda block: (block.bbox.x, block.id))
+            if block.content and block.content.text
+        )
+        return bool(self._TEXT_ITEM_PREFIX.match(text))
+
+    def _connected_components(self, blocks: list[Block]) -> list[list[Block]]:
+        """在不含硬样式边界的分段内部计算空间连通分量。"""
 
         remaining = set(range(len(blocks)))
         components: list[list[Block]] = []
@@ -160,16 +244,21 @@ class RegionGrouper:
             component.sort(key=lambda block: (block.bbox.y, block.bbox.x, block.id))
             components.append(component)
 
-        components.sort(
-            key=lambda component: (
-                min(block.bbox.y for block in component),
-                min(block.bbox.x for block in component),
-            )
-        )
         return components
 
     def _blocks_are_connected(self, first: Block, second: Block) -> bool:
         """按行高归一化间距判断两个文本 Span 是否属于同一视觉文本块。"""
+
+        first, second = sorted(
+            (first, second), key=lambda block: (block.bbox.y, block.bbox.x, block.id)
+        )
+        if not self._same_source_line(first, second):
+            # 行内强调色、加粗词等仍可属于同一 Region；跨行则必须保持
+            # 颜色、字号、字重和斜体兼容，避免标题吞并后续正文。
+            if not self._styles_are_compatible(first, second):
+                return False
+            if self._starts_new_text_item(second):
+                return False
 
         gap_limit = (
             max(first.bbox.height, second.bbox.height)
@@ -193,6 +282,69 @@ class RegionGrouper:
         ) or (
             vertical_gap <= gap_limit and (horizontal_overlap or same_left_edge)
         )
+
+    @staticmethod
+    def _same_source_line(first: Block, second: Block) -> bool:
+        """判断两个 Span 是否来自同一 PDF 视觉行。"""
+
+        first_line = first.metadata.get("source_line_index")
+        second_line = second.metadata.get("source_line_index")
+        return first_line is not None and first_line == second_line
+
+    def _styles_are_compatible(self, first: Block, second: Block) -> bool:
+        """判断跨行文字样式是否足够一致，可以继续组成同一 Region。"""
+
+        first_style = first.style
+        second_style = second.style
+        if first_style is None or second_style is None:
+            return True
+
+        first_color = self._normalized_color(first_style.color)
+        second_color = self._normalized_color(second_style.color)
+        if first_color and second_color and first_color != second_color:
+            return False
+        if (
+            first_style.font_weight is not None
+            and second_style.font_weight is not None
+            and first_style.font_weight != second_style.font_weight
+        ):
+            return False
+        if (
+            first_style.italic is not None
+            and second_style.italic is not None
+            and first_style.italic != second_style.italic
+        ):
+            return False
+
+        first_size = first_style.font_size
+        second_size = second_style.font_size
+        if first_size and second_size:
+            settings = self.profile.grouping
+            tolerance = max(
+                settings.style_font_size_tolerance_points,
+                max(first_size, second_size)
+                * settings.style_font_size_tolerance_ratio,
+            )
+            if abs(first_size - second_size) > tolerance:
+                return False
+        return True
+
+    @staticmethod
+    def _normalized_color(color: str | None) -> str | None:
+        """归一化颜色文本，避免大小写或首尾空白造成伪差异。"""
+
+        if color is None:
+            return None
+        normalized = color.strip().upper()
+        if re.fullmatch(r"#[0-9A-F]{3}", normalized):
+            normalized = "#" + "".join(character * 2 for character in normalized[1:])
+        return normalized or None
+
+    def _starts_new_text_item(self, block: Block) -> bool:
+        """识别新编号、项目符号或冒号明细行，阻止跨条目串组。"""
+
+        text = block.content.text if block.content else None
+        return bool(text and self._TEXT_ITEM_PREFIX.match(text))
 
     @staticmethod
     def _union_bbox(blocks: list[Block]) -> BoundingBox:

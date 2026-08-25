@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Iterator
 
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 # 表名、字段名（空串代表表）与中文用途。该数据同时是可查询的数据字典。
@@ -77,6 +77,15 @@ SCHEMA_DESCRIPTIONS: tuple[tuple[str, str, str], ...] = (
     ("glossary_versions", "payload_sha256", "完整术语库 JSON 的内容摘要。"),
     ("glossary_versions", "created_at", "版本首次保存的 UTC ISO 时间。"),
     ("glossary_versions", "updated_at", "版本最近保存的 UTC ISO 时间。"),
+    ("async_tasks", "", "异步比较任务的生命周期状态；服务重启后据此恢复或标记中断。"),
+    ("async_tasks", "task_id", "服务端生成的任务标识。"),
+    ("async_tasks", "status", "任务状态：queued、running、done 或 error。"),
+    ("async_tasks", "source_display", "源文档展示名，重启恢复提示用。"),
+    ("async_tasks", "target_display", "目标文档展示名，重启恢复提示用。"),
+    ("async_tasks", "history_record_id", "完成后关联的质检记录 ID；失败时为空。"),
+    ("async_tasks", "error", "失败时的用户可读错误信息。"),
+    ("async_tasks", "created_at", "任务创建的 UTC ISO 时间。"),
+    ("async_tasks", "updated_at", "任务状态最近变更的 UTC ISO 时间。"),
     ("comparison_records", "", "一次文档质检的可查询摘要及输入、配置关联。"),
     ("comparison_records", "record_id", "对比记录稳定标识，兼容现有历史 ID。"),
     ("comparison_records", "source_file_id", "本次对比使用的源文档文件标识。"),
@@ -191,6 +200,12 @@ class Database:
                 connection.execute(
                     "INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)",
                     (4, "sample_language_pair", self.now()),
+                )
+            if 5 not in applied:
+                self._migration_5(connection)
+                connection.execute(
+                    "INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)",
+                    (5, "async_task_lifecycle", self.now()),
                 )
             connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
@@ -411,6 +426,42 @@ class Database:
                 for item in SCHEMA_DESCRIPTIONS
                 if item[0] == "samples"
                 and item[1] in {"source_language", "target_language"}
+            ],
+        )
+
+    def _migration_5(self, connection: sqlite3.Connection) -> None:
+        """新增异步任务生命周期表：任务状态落库，服务重启后可恢复。"""
+
+        connection.execute(
+            """
+            CREATE TABLE async_tasks (
+                -- 服务端生成的任务 ID（uuid hex 前 12 位）。
+                task_id TEXT PRIMARY KEY,
+                -- 任务状态：排队/执行中/完成/失败；失败原因记录在 error。
+                status TEXT NOT NULL
+                    CHECK(status IN ('queued', 'running', 'done', 'error')),
+                source_display TEXT NOT NULL DEFAULT '',
+                target_display TEXT NOT NULL DEFAULT '',
+                -- 完成后关联的质检记录 ID；失败或未生成时为空。
+                history_record_id TEXT,
+                -- 失败时的用户可读错误信息。
+                error TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        # 状态+时间索引：服务启动清扫与终态淘汰都按状态过滤。
+        connection.execute(
+            "CREATE INDEX async_tasks_status_idx ON async_tasks(status, updated_at)"
+        )
+        connection.executemany(
+            "INSERT OR REPLACE INTO schema_descriptions("
+            "table_name, column_name, description) VALUES (?, ?, ?)",
+            [
+                item
+                for item in SCHEMA_DESCRIPTIONS
+                if item[0] == "async_tasks"
             ],
         )
 

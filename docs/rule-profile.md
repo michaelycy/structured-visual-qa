@@ -14,13 +14,19 @@ RuleProfile
 │   ├── minimum_score
 │   ├── merged_text_coverage_ratio
 │   ├── text_type_similarity
-│   └── weights
+│   ├── weights
+│   └── logical_grouping
+│       ├── enabled / max_regions
+│       ├── line_gap_ratio / horizontal_overlap_ratio
+│       ├── font_size_tolerance_ratio / edge_tolerance_ratio
+│       └── counterpart_overlap_ratio
 ├── alignment
 │   ├── enabled
 │   └── max_shift / skip_penalty / shift_margin
 ├── grouping
 │   ├── heading_ratio
-│   └── disconnected_span_gap_ratio
+│   ├── disconnected_span_gap_ratio
+│   └── style_font_size_tolerance_ratio / style_font_size_tolerance_points
 ├── detectors
 │   ├── enabled
 │   ├── thresholds

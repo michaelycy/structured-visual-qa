@@ -45,6 +45,7 @@ export const WorkbenchPage = () => {
   const viewState: PageDetailsViewState = {
     page: search.page,
     issue: search.issue,
+    issueNumber: search.issueNumber,
     severity: search.severity,
     issueType: search.issueType,
     review: search.review,
@@ -59,6 +60,7 @@ export const WorkbenchPage = () => {
         ...current,
         page: state.page,
         issue: state.issue,
+        issueNumber: state.issueNumber,
         severity: state.severity,
         issueType: state.issueType,
         review: state.review,

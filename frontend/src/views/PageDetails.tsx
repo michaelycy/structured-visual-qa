@@ -12,6 +12,7 @@ import {
   Button,
   Col,
   Empty,
+  Input,
   Modal,
   Row,
   Segmented,
@@ -33,6 +34,16 @@ const MAX_PAGE_ZOOM = 2.5
 const PAGE_ZOOM_STEP = 0.25
 const PDF_RENDER_SCALE = 2
 const IMAGE_PREVIEW_PADDING_PT = 12
+
+/** 将逗号、中文逗号或空白分隔的问题编号输入规范化为模糊查询词。 */
+function parseIssueNumberQueries(value: string): string[] {
+  return [...new Set(
+    value
+      .split(/[,，\s]+/)
+      .map((item) => item.trim().replace(/^#+/, ""))
+      .filter(Boolean),
+  )]
+}
 
 function pageImage(
   side: "source" | "target",
@@ -316,6 +327,7 @@ export type ReviewFilter = "all" | "pending" | "done"
 export interface PageDetailsViewState {
   page?: number
   issue?: string
+  issueNumber?: string
   severity?: string[]
   issueType?: string[]
   review?: ReviewFilter
@@ -337,6 +349,8 @@ const METRIC_LABELS: Record<string, string> = {
   height_change_ratio: "高度变化",
   font_size_change_ratio: "字号变化",
   overlap_ratio: "译文重叠比例",
+  horizontal_intrusion_ratio: "水平侵入比例",
+  vertical_intrusion_ratio: "垂直侵入比例",
   source_overlap_ratio: "原文重叠比例",
   overlap_increase_ratio: "新增重叠比例",
   source_language_ratio: "源语言保留比例",
@@ -380,6 +394,10 @@ const EVIDENCE_ONLY_KEYS = new Set([
   "source_bbox",
   "target_bbox",
   "other_bbox",
+  "source_other_region",
+  "source_other_text",
+  "source_other_bbox",
+  "source_other_region_type",
   "source_numbers",
   "target_numbers",
   "missing_numbers",
@@ -391,6 +409,8 @@ const EVIDENCE_ONLY_KEYS = new Set([
   "source_spreads",
   "target_spreads",
   "other_region",
+  "primary_text",
+  "other_text",
 ])
 
 const RATIO_METRICS = new Set([
@@ -400,6 +420,8 @@ const RATIO_METRICS = new Set([
   "height_change_ratio",
   "font_size_change_ratio",
   "overlap_ratio",
+  "horizontal_intrusion_ratio",
+  "vertical_intrusion_ratio",
   "source_overlap_ratio",
   "overlap_increase_ratio",
   "source_language_ratio",
@@ -438,6 +460,29 @@ function formatPercent(value: number): string {
 function formatDimensionChange(value: number, dimension: string): string {
   const direction = value < 0 ? "缩小" : "增加"
   return `${dimension}${direction} ${formatPercent(Math.abs(value))}`
+}
+
+/** 单条原文或译文证据，统一展示文本与可选坐标。 */
+function EvidenceTextLine({
+  label,
+  text,
+  bbox,
+  danger = false,
+}: {
+  label: string
+  text: string
+  bbox: string | null
+  danger?: boolean
+}) {
+  return (
+    <div>
+      <Typography.Text type="secondary">{label}：</Typography.Text>
+      <Typography.Text type={danger ? "danger" : undefined}>{text}</Typography.Text>
+      {bbox && (
+        <Typography.Text type="secondary">（BBox：{bbox}）</Typography.Text>
+      )}
+    </div>
+  )
 }
 
 /** 根据 Issue 类型把机器指标转成列表中可直接理解的一句话。 */
@@ -861,6 +906,13 @@ function IssueDetails({
   const targetText = typeof metrics.target_text === "string" ? metrics.target_text : null
   const sourceBbox = formatEvidenceBbox(metrics.source_bbox)
   const targetBbox = formatEvidenceBbox(metrics.target_bbox)
+  const sourceOtherText = typeof metrics.source_other_text === "string"
+    ? metrics.source_other_text
+    : null
+  const sourceOtherBbox = formatEvidenceBbox(metrics.source_other_bbox)
+  const targetOtherText = typeof metrics.other_text === "string" ? metrics.other_text : null
+  const targetOtherBbox = formatEvidenceBbox(metrics.other_bbox)
+  const isTextOverlap = issue.type === "text_overlap"
   const metricRows = issueMetricRows(issue)
   const isMatchedGeometry = [
     "region_shifted",
@@ -910,7 +962,37 @@ function IssueDetails({
       )}
       {/* 原文 → 译文对照：文本类问题（漏译/碎片化/隐形）必须能看到
           两侧内容，否则无法判断是翻译错还是渲染错。 */}
-      {(sourceText || targetText) && (
+      {isTextOverlap && (sourceText || sourceOtherText || targetText || targetOtherText) && (
+        <Space orientation="vertical" size={2} style={{ fontSize: 12 }}>
+          {sourceText && (
+            <EvidenceTextLine label="原文区域 1" text={sourceText} bbox={sourceBbox} />
+          )}
+          {sourceOtherText && (
+            <EvidenceTextLine
+              label="原文区域 2"
+              text={sourceOtherText}
+              bbox={sourceOtherBbox}
+            />
+          )}
+          {targetText && (
+            <EvidenceTextLine
+              label="译文区域 1"
+              text={targetText}
+              bbox={targetBbox}
+              danger
+            />
+          )}
+          {targetOtherText && (
+            <EvidenceTextLine
+              label="译文区域 2"
+              text={targetOtherText}
+              bbox={targetOtherBbox}
+              danger
+            />
+          )}
+        </Space>
+      )}
+      {!isTextOverlap && (sourceText || targetText) && (
         <Space orientation="vertical" size={2} style={{ fontSize: 12 }}>
           {sourceText && (
             <div>
@@ -1001,12 +1083,16 @@ export function PageDetails({
   const [localSelected, setLocalSelected] = useState<number | null>(defaultPage)
   const [localActiveIssueId, setLocalActiveIssueId] = useState<string | null>(null)
   // 复核工作流筛选：只看某种严重度 / 只看未复核，处理上百条 Issue 时定位更快。
+  const [localIssueNumberFilter, setLocalIssueNumberFilter] = useState("")
   const [localSeverityFilter, setLocalSeverityFilter] = useState<string[]>([])
   const [localIssueTypeFilter, setLocalIssueTypeFilter] = useState<string[]>([])
   const [localReviewFilter, setLocalReviewFilter] = useState<ReviewFilter>("all")
   const [localIssuePage, setLocalIssuePage] = useState(1)
   const selected = viewState ? viewState.page ?? defaultPage : localSelected
   const activeIssueId = viewState ? viewState.issue ?? null : localActiveIssueId
+  const issueNumberFilter = viewState
+    ? viewState.issueNumber ?? ""
+    : localIssueNumberFilter
   const severityFilter = viewState ? viewState.severity ?? EMPTY_SEVERITIES : localSeverityFilter
   const issueTypeFilter = viewState
     ? viewState.issueType ?? EMPTY_ISSUE_TYPES
@@ -1059,6 +1145,14 @@ export function PageDetails({
   // 问题列表覆盖整份文档；点击行会同步切换双栏页码并高亮目标区域。
   const visibleIssues = useMemo(() => {
     let list = allIssues
+    const issueNumberQueries = parseIssueNumberQueries(issueNumberFilter)
+    if (issueNumberQueries.length) {
+      // 用户看到的是全报告连续编号，因此筛选必须基于展示编号而不是内部 Issue ID。
+      list = list.filter((issue) => {
+        const issueNumber = String((issueNumberById.get(issue.id) ?? 0) + 1)
+        return issueNumberQueries.some((query) => issueNumber.includes(query))
+      })
+    }
     if (severityFilter.length) {
       list = list.filter((issue) => severityFilter.includes(issue.severity))
     }
@@ -1071,7 +1165,15 @@ export function PageDetails({
       list = list.filter((issue) => decisions[issue.id])
     }
     return list
-  }, [allIssues, severityFilter, issueTypeFilter, reviewFilter, decisions])
+  }, [
+    allIssues,
+    issueNumberById,
+    issueNumberFilter,
+    severityFilter,
+    issueTypeFilter,
+    reviewFilter,
+    decisions,
+  ])
   const pageVisibleIssues = visibleIssues.filter((issue) => issue.page === selected)
 
   return (
@@ -1123,7 +1225,20 @@ export function PageDetails({
           <Typography.Title level={5}>问题列表</Typography.Title>
           <Tag variant="filled" className="issue-list-count">{allIssues.length}</Tag>
         </Space>
-        <Space wrap size={8}>
+        <Space wrap size={8} className="issue-list-filters">
+          <Input
+            aria-label="按问题编号筛选问题"
+            allowClear
+            placeholder="例如：83,84,130"
+            className="issue-list-number-filter"
+            value={issueNumberFilter}
+            onChange={(event) => {
+              const value = event.target.value
+              setLocalIssueNumberFilter(value)
+              setLocalIssuePage(1)
+              updateViewState({ issueNumber: value || undefined, issuePage: undefined })
+            }}
+          />
           <Select
             aria-label="按严重度筛选问题"
             mode="multiple"

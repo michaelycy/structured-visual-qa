@@ -53,9 +53,10 @@ FRONTEND_PID=""
 if port_alive $BACKEND_PORT; then
   echo "后端 $BACKEND_PORT 端口已有服务在运行，跳过启动"
 else
-  "$ROOT/.venv/bin/document-qa-server" --port $BACKEND_PORT &
+  # --reload：开发模式热更新（server/core 源码变更自动重启进程）。
+  "$ROOT/.venv/bin/document-qa-server" --port $BACKEND_PORT --reload &
   BACKEND_PID=$!
-  echo "后端已启动 (pid $BACKEND_PID, http://127.0.0.1:$BACKEND_PORT)"
+  echo "后端已启动 (pid $BACKEND_PID, http://127.0.0.1:$BACKEND_PORT, 热更新开启)"
 fi
 
 if port_alive $FRONTEND_PORT; then

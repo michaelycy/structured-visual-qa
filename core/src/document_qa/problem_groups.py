@@ -1,6 +1,7 @@
 """把细粒度规则命中汇总为面向用户的问题组。"""
 
 from document_qa.schemas import Issue, IssueType, PageQAResult
+from document_qa.text_visibility import has_visible_text
 
 
 _RASTER_LAYER_DUPLICATE_TYPES = frozenset(
@@ -65,4 +66,4 @@ def _is_noise_issue(issue: Issue, rasterized_text_ids: set[str]) -> bool:
 def _blank_metric_text(value: object) -> bool:
     """只把明确存在且全为空白的文本判为噪声，缺失证据不作推断。"""
 
-    return isinstance(value, str) and not value.strip()
+    return isinstance(value, str) and not has_visible_text(value)

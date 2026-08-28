@@ -6,6 +6,7 @@ from document_qa.detectors import ContentDetector
 from document_qa.matching import RegionMatcher
 from document_qa.profiles import RuleProfile
 from document_qa.schemas import (
+    Block,
     BoundingBox,
     Content,
     ElementType,
@@ -45,6 +46,61 @@ def detect_for(source_texts: list[str], target_texts: list[str]):
     return target, result, ContentDetector().detect(source, target, result)
 
 
+def make_raster_page(
+    document_id: str,
+    text: str,
+    *,
+    image_count: int = 8,
+) -> Page:
+    """构造含大面积未变化图像字形簇的跨语言页面。"""
+
+    text_region = Region(
+        id=f"{document_id}-text",
+        page=1,
+        type=ElementType.PARAGRAPH,
+        bbox=BoundingBox(x=20, y=20, width=460, height=40),
+        content=Content(text=text),
+    )
+    blocks = []
+    regions = [text_region]
+    for index in range(image_count):
+        column = index % 4
+        row = index // 4
+        bbox = BoundingBox(
+            x=50 + column * 100,
+            y=200 + row * 40,
+            width=40,
+            height=40,
+        )
+        block_id = f"{document_id}-image-block-{index}"
+        blocks.append(
+            Block(
+                id=block_id,
+                page=1,
+                type=ElementType.IMAGE,
+                bbox=bbox,
+                metadata={"content_sha256": f"glyph-{index}"},
+            )
+        )
+        regions.append(
+            Region(
+                id=f"{document_id}-image-{index}",
+                page=1,
+                type=ElementType.IMAGE,
+                bbox=bbox,
+                children=[block_id],
+            )
+        )
+    return Page(
+        document_id=document_id,
+        page=1,
+        width=500,
+        height=800,
+        blocks=blocks,
+        regions=regions,
+    )
+
+
 class NumberMismatchTests(unittest.TestCase):
     """验证页面级数字守恒检测。"""
 
@@ -78,6 +134,51 @@ class NumberMismatchTests(unittest.TestCase):
         self.assertNotIn(
             IssueType.NUMBER_MISMATCH, [i.type for i in issues]
         )
+
+    def test_chinese_month_name_matches_english_month(self) -> None:
+        """中文数字月份与英文月份名称应归一为同一日期语义。"""
+
+        _, _, issues = detect_for(
+            ["报告日期：2024年一月5日。"],
+            ["Report date: January 5, 2024."],
+        )
+        self.assertNotIn(IssueType.NUMBER_MISMATCH, [i.type for i in issues])
+
+    def test_scaled_currency_equivalence(self) -> None:
+        """亿与 billion 的倍率换算后金额相等，不应报告裸数字差异。"""
+
+        _, _, issues = detect_for(
+            ["积压订单达到310亿欧元。"],
+            ["The backlog reached 31 billion euros."],
+        )
+        self.assertNotIn(IssueType.NUMBER_MISMATCH, [i.type for i in issues])
+
+    def test_verbal_ratio_equivalence(self) -> None:
+        """成数与英文比例表达应保留比较关系后再判断一致性。"""
+
+        _, _, issues = detect_for(
+            ["超过五成订单来自汽车产品。"],
+            ["More than half of the orders were automotive products."],
+        )
+        self.assertNotIn(IssueType.NUMBER_MISMATCH, [i.type for i in issues])
+
+    def test_scaled_range_equivalence(self) -> None:
+        """带倍率的数量范围应分别换算上下界。"""
+
+        _, _, issues = detect_for(
+            ["预计市场规模为10至20亿元。"],
+            ["The estimated market size is 1 to 2 billion yuan."],
+        )
+        self.assertNotIn(IssueType.NUMBER_MISMATCH, [i.type for i in issues])
+
+    def test_ordinary_may_is_not_a_month(self) -> None:
+        """普通情态动词 may 不得被误识别为五月。"""
+
+        _, _, issues = detect_for(
+            ["结果可能继续改善。"],
+            ["Results may continue to improve."],
+        )
+        self.assertNotIn(IssueType.NUMBER_MISMATCH, [i.type for i in issues])
 
 
 class UntranslatedTextTests(unittest.TestCase):
@@ -130,6 +231,44 @@ class UntranslatedTextTests(unittest.TestCase):
         )
         self.assertNotIn(
             IssueType.UNTRANSLATED_TEXT, [i.type for i in issues]
+        )
+
+    def test_detects_large_unchanged_raster_text_cluster(self) -> None:
+        """跨语言页面的大面积未变化图像字形簇应聚合为一条漏译问题。"""
+
+        source = make_raster_page("src", "这是需要翻译的中文页面内容。")
+        target = make_raster_page(
+            "tgt", "This page has otherwise been translated into English."
+        )
+        result = RegionMatcher().match_page(source, target)
+
+        issues = ContentDetector().detect(source, target, result)
+        raster_issues = [
+            issue
+            for issue in issues
+            if issue.type == IssueType.UNTRANSLATED_RASTER
+        ]
+
+        self.assertEqual(len(raster_issues), 1)
+        self.assertEqual(raster_issues[0].metrics["unchanged_image_count"], 8)
+
+    def test_single_unchanged_image_is_not_raster_untranslated(self) -> None:
+        """单张未变化照片或 Logo 不应被当作图像化文字漏译。"""
+
+        source = make_raster_page(
+            "src", "这是需要翻译的中文页面内容。", image_count=1
+        )
+        target = make_raster_page(
+            "tgt",
+            "This page has otherwise been translated into English.",
+            image_count=1,
+        )
+        result = RegionMatcher().match_page(source, target)
+
+        issues = ContentDetector().detect(source, target, result)
+
+        self.assertNotIn(
+            IssueType.UNTRANSLATED_RASTER, [issue.type for issue in issues]
         )
 
 

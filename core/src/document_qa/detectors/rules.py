@@ -11,6 +11,7 @@ from document_qa.matching.geometry import (
     size_similarity,
 )
 from document_qa.profiles import RuleProfile, default_rule_profile
+from document_qa.text_visibility import has_visible_text
 from document_qa.schemas import (
     Block,
     BoundingBox,
@@ -140,6 +141,8 @@ class RuleDetector:
         suppressed_target_ids = suppressed_target_ids or set()
         for region_id in result.unmatched_source_region_ids:
             region = source_regions[region_id]
+            if self._is_blank_text_region(region):
+                continue
             is_image = region.type == ElementType.IMAGE
             # 不同语言的 PDF 导出器经常把多个英文段落合并为一个中文文本框。
             # 只要目标文本在同一版面范围内充分覆盖该源文本，就不能判为内容缺失。
@@ -216,6 +219,7 @@ class RuleDetector:
                 or target_text is None
                 or source_region.type not in self._TEXT_TYPES
                 or target_text.type not in self._TEXT_TYPES
+                or self._is_blank_text_region(target_text)
             ):
                 continue
             opacities = self._region_opacities(target_text, blocks_by_id)
@@ -341,6 +345,13 @@ class RuleDetector:
                 continue
             source_region = source_regions[diff.source_region_id]
             target_region = target_regions[diff.target_region_id]
+            if (
+                source_region.type in self._TEXT_TYPES
+            ) != (target_region.type in self._TEXT_TYPES):
+                # 全局分配在两侧 Region 数量相等、译文合并多个标题时，
+                # 可能用一个额外图片占住剩余文本。跨内容类别的几何量
+                # 没有可比性，不能据此生成位移、尺寸或字号问题。
+                continue
             evidence = region_evidence(
                 source_region,
                 target_region,
@@ -388,29 +399,36 @@ class RuleDetector:
                 # 严重度按缩小幅度分档：轻微缩小（如 25%）是排版适配，
                 # 严重缩小（如 50%）才是明显的交付风险。
                 shrink_magnitude = abs(font_change)
-                issues.append(
-                    Issue(
-                        id=f"p{target.page}-font-{diff.target_region_id}",
-                        page=target.page,
-                        type=IssueType.FONT_SHRINK,
-                        # 字号缩小本身需要人工复核；只有同时出现裁切、越界等
-                        # 可见内容损失时，才由相应规则升级为 Critical。
-                        severity=thresholds.band_severity(
-                            thresholds.font_shrink_bands,
-                            shrink_magnitude,
-                            Severity.HIGH,
-                        ),
-                        source_region=diff.source_region_id,
-                        target_region=diff.target_region_id,
-                        bbox=target_region.bbox,
-                        metrics={
-                            "font_size_change_ratio": font_change,
-                            **evidence,
-                        },
-                        description="目标区域字号为适应版面而明显缩小。",
-                        detector="typography",
-                    )
+                shrink_severity = thresholds.band_severity(
+                    thresholds.font_shrink_bands,
+                    shrink_magnitude,
+                    Severity.HIGH,
                 )
+                if not (
+                    shrink_severity == Severity.MEDIUM
+                    and self._is_expected_translation_expansion(
+                        source_region, target_region
+                    )
+                ):
+                    issues.append(
+                        Issue(
+                            id=f"p{target.page}-font-{diff.target_region_id}",
+                            page=target.page,
+                            type=IssueType.FONT_SHRINK,
+                            # 字号缩小本身需要人工复核；只有同时出现裁切、越界等
+                            # 可见内容损失时，才由相应规则升级为 Critical。
+                            severity=shrink_severity,
+                            source_region=diff.source_region_id,
+                            target_region=diff.target_region_id,
+                            bbox=target_region.bbox,
+                            metrics={
+                                "font_size_change_ratio": font_change,
+                                **evidence,
+                            },
+                            description="目标区域字号为适应版面而明显缩小。",
+                            detector="typography",
+                        )
+                    )
 
             # 字号放大：翻译后文字变长常触发字号膨胀，是换行爆炸的前兆。
             # 放大本身不丢失内容，严重度固定 MEDIUM（低于缩小的档位）。
@@ -448,12 +466,18 @@ class RuleDetector:
             expected_text_reflow = self._is_expected_text_reflow(
                 source_region, target_region, diff
             )
+            expected_translation_expansion = (
+                self._is_expected_translation_expansion(
+                    source_region, target_region
+                )
+            )
             if (
                 enabled.region_resized
                 and diff.target_region_id
                 not in alignment_result.suppressed_resize_target_ids
                 and not expected_text_width_change
                 and not expected_text_reflow
+                and not expected_translation_expansion
                 and resize > thresholds.region_resize_ratio
             ):
                 issues.append(
@@ -480,6 +504,26 @@ class RuleDetector:
                     )
                 )
         return issues
+
+    @classmethod
+    def _is_expected_translation_expansion(
+        cls, source: Region, target: Region
+    ) -> bool:
+        """识别译文变长且文本框未收缩的正常跨语言排版适配。"""
+
+        if source.type not in cls._TEXT_TYPES or target.type not in cls._TEXT_TYPES:
+            return False
+        source_text = source.content.text if source.content else None
+        target_text = target.content.text if target.content else None
+        if not source_text or not target_text:
+            return False
+        source_chars = len("".join(source_text.split()))
+        target_chars = len("".join(target_text.split()))
+        if target_chars <= source_chars:
+            return False
+        source_area = source.bbox.width * source.bbox.height
+        target_area = target.bbox.width * target.bbox.height
+        return target_area >= source_area
 
     def _is_expected_text_width_change(
         self, source: Region, target: Region, diff: StructuredDiff
@@ -578,6 +622,7 @@ class RuleDetector:
             if (
                 region.type not in self._TEXT_TYPES
                 or region.id in suppressed_target_ids
+                or self._is_blank_text_region(region)
             ):
                 continue
             text = region.content.text if region.content else None
@@ -654,6 +699,7 @@ class RuleDetector:
             if (
                 region.type not in self._TEXT_TYPES
                 or region.id in suppressed_target_ids
+                or self._is_blank_text_region(region)
             ):
                 continue
             opacities = self._region_opacities(region, blocks_by_id)
@@ -963,7 +1009,7 @@ class RuleDetector:
         if region.type not in cls._TEXT_TYPES:
             return False
         text = region.content.text if region.content else None
-        return not text or not text.strip()
+        return not has_visible_text(text)
 
     @staticmethod
     def _overlap_candidate_pairs(regions: list[Region]) -> list[tuple[int, int]]:

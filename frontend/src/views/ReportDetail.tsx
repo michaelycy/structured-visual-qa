@@ -9,6 +9,7 @@ import { useCallback, useEffect, useState } from "react"
 import { message } from "antd"
 import type { QAReport, ReviewDecision } from "../api"
 import { api } from "../services/queryClient"
+import { DECISION_META } from "../uiTokens"
 import { ReportOverview } from "./ReportOverview"
 import { PageDetails } from "./PageDetails"
 import type { PageDetailsViewState } from "./PageDetails"
@@ -70,6 +71,50 @@ export function ReportDetail({
     [taskId, report, decisions, messageApi],
   )
 
+  const decideMany = useCallback(
+    async (issueIds: string[], decision: ReviewDecision) => {
+      const previousDecisions = Object.fromEntries(
+        issueIds.map((issueId) => [issueId, decisions[issueId]]),
+      )
+      setDecisions((current) => ({
+        ...current,
+        ...Object.fromEntries(issueIds.map((issueId) => [issueId, decision])),
+      }))
+
+      // SQLite 复核记录按条保存；顺序提交避免大批量操作时并发写入互相争用。
+      const failedIssueIds: string[] = []
+      for (const issueId of issueIds) {
+        try {
+          await api.reviewDecision(taskId, report, issueId, decision)
+        } catch {
+          failedIssueIds.push(issueId)
+        }
+      }
+
+      if (failedIssueIds.length) {
+        setDecisions((current) => {
+          const next = { ...current }
+          for (const issueId of failedIssueIds) {
+            if (current[issueId] !== decision) continue
+            const previousDecision = previousDecisions[issueId]
+            if (previousDecision) next[issueId] = previousDecision
+            else delete next[issueId]
+          }
+          return next
+        })
+        messageApi.warning(
+          `已保存 ${issueIds.length - failedIssueIds.length} 项，${failedIssueIds.length} 项失败，请重试。`,
+        )
+      } else {
+        messageApi.success(
+          `已批量标记 ${issueIds.length} 项为“${DECISION_META[decision].label}”。`,
+        )
+      }
+      return failedIssueIds
+    },
+    [taskId, report, decisions, messageApi],
+  )
+
   return (
     <>
       {contextHolder}
@@ -86,6 +131,7 @@ export function ReportDetail({
           historyRecordId={historyRecordId}
           decisions={decisions}
           onDecide={decide}
+          onDecideMany={decideMany}
           viewState={viewState}
           onViewStateChange={onViewStateChange}
         />

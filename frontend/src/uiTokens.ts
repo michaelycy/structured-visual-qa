@@ -140,6 +140,7 @@ export const ISSUE_TYPE_META: Record<string, string> = {
   page_missing: "页面缺失",
   number_mismatch: "数字不一致",
   untranslated_text: "疑似漏译",
+  untranslated_raster: "图像化文字疑似漏译",
   glossary_violation: "术语译法不符",
   invisible_text: "文字不可见",
   text_rasterized: "文本改为图片显示",

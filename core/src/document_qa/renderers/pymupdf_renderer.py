@@ -5,6 +5,7 @@ from pathlib import Path
 import pymupdf
 
 from document_qa.parsers.base import DocumentParsingError
+from document_qa.schemas import BoundingBox
 
 
 class PyMuPDFRenderer:
@@ -68,3 +69,51 @@ class PyMuPDFRenderer:
 
         return rendered_paths
 
+    def render_crop_png(
+        self,
+        pdf_path: Path,
+        *,
+        page: int,
+        bbox: BoundingBox,
+        dpi: int,
+        padding_points: float = 0.0,
+        password: str | None = None,
+    ) -> bytes:
+        """把一个 PDF 页面区域渲染为内存 PNG，供可选 OCR 使用。
+
+        返回值仅在当前检测调用中传递，不写入 Block metadata、报告或磁盘。
+        """
+
+        source_path = pdf_path.expanduser().resolve()
+        if not source_path.is_file() or source_path.suffix.lower() != ".pdf":
+            raise DocumentParsingError(f"无效 PDF 路径: {source_path}")
+        if page < 1 or dpi <= 0 or padding_points < 0:
+            raise ValueError("OCR 裁剪页码、DPI 与边距必须有效")
+
+        try:
+            with pymupdf.open(source_path) as pdf:
+                if pdf.needs_pass:
+                    if password is None:
+                        raise DocumentParsingError(
+                            "PDF 受打开密码保护，OCR 渲染需要提供密码"
+                        )
+                    if not pdf.authenticate(password):
+                        raise DocumentParsingError("PDF 打开密码错误")
+                if page > pdf.page_count:
+                    raise DocumentParsingError(f"PDF 不存在第 {page} 页")
+                pdf_page = pdf[page - 1]
+                page_rect = pdf_page.rect
+                clip = pymupdf.Rect(
+                    bbox.x - padding_points,
+                    bbox.y - padding_points,
+                    bbox.right + padding_points,
+                    bbox.bottom + padding_points,
+                ) & page_rect
+                if clip.is_empty or clip.width <= 0 or clip.height <= 0:
+                    raise DocumentParsingError("OCR 候选区域不在页面可见范围内")
+                pixmap = pdf_page.get_pixmap(dpi=dpi, alpha=False, clip=clip)
+                return pixmap.tobytes("png")
+        except DocumentParsingError:
+            raise
+        except Exception as exc:
+            raise DocumentParsingError(f"OCR 区域渲染失败: {exc}") from exc

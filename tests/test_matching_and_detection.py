@@ -109,7 +109,7 @@ class MatchingAndDetectionTests(unittest.TestCase):
                     page=1,
                     type=ElementType.PARAGRAPH,
                     bbox=BoundingBox(x=10, y=10, width=20, height=10),
-                    content=Content(text=" \u00a0 "),
+                    content=Content(text=" \u00a0\u200b\ufeff\u00ad\u202e "),
                 )
             ],
         )
@@ -121,6 +121,87 @@ class MatchingAndDetectionTests(unittest.TestCase):
         )
 
         self.assertNotIn(IssueType.ADDED_ELEMENT, {issue.type for issue in issues})
+
+    def test_ignores_control_only_invisible_text(self) -> None:
+        """只有 Unicode 控制字符的透明文本框不应被判为隐形文字。"""
+
+        bbox = BoundingBox(x=10, y=10, width=20, height=10)
+        source = Page(document_id="source", page=1, width=200, height=200)
+        target = Page(
+            document_id="target",
+            page=1,
+            width=200,
+            height=200,
+            metadata={"background_color": "#FFFFFF"},
+            blocks=[
+                Block(
+                    id="target-control-block",
+                    page=1,
+                    type=ElementType.TEXT,
+                    bbox=bbox,
+                    content=Content(text="\u200b\ufeff\u00ad"),
+                    metadata={"opacity": 0.0},
+                )
+            ],
+            regions=[
+                Region(
+                    id="target-control",
+                    page=1,
+                    type=ElementType.PARAGRAPH,
+                    bbox=bbox,
+                    content=Content(text="\u200b\ufeff\u00ad"),
+                    children=["target-control-block"],
+                )
+            ],
+        )
+
+        issues = RuleDetector().detect(
+            source,
+            target,
+            RegionMatcher().match_page(source, target),
+        )
+
+        self.assertNotIn(IssueType.INVISIBLE_TEXT, {issue.type for issue in issues})
+
+    def test_ignores_geometry_diff_between_text_and_image(self) -> None:
+        """文字被全局分配到图片时不得产生无意义的几何问题。"""
+
+        source = Page(
+            document_id="source",
+            page=1,
+            width=960,
+            height=540,
+            regions=[
+                Region(
+                    id="source-heading",
+                    page=1,
+                    type=ElementType.HEADING,
+                    bbox=BoundingBox(x=608, y=242, width=201, height=16),
+                    content=Content(text="标题"),
+                )
+            ],
+        )
+        target = Page(
+            document_id="target",
+            page=1,
+            width=960,
+            height=540,
+            regions=[
+                Region(
+                    id="target-image",
+                    page=1,
+                    type=ElementType.IMAGE,
+                    bbox=BoundingBox(x=893, y=5, width=47, height=46),
+                )
+            ],
+        )
+
+        result = RegionMatcher().match_page(source, target)
+        issues = RuleDetector().detect(source, target, result)
+
+        issue_types = {issue.type for issue in issues}
+        self.assertNotIn(IssueType.REGION_SHIFTED, issue_types)
+        self.assertNotIn(IssueType.REGION_RESIZED, issue_types)
 
     def test_detects_text_rasterized_without_duplicate_added_image(self) -> None:
         """透明译文层与同位置图片应合并为一个文字栅格化问题。"""

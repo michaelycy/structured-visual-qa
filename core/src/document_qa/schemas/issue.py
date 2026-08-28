@@ -40,6 +40,7 @@ class IssueType(StrEnum):
     PAGE_MISSING = "page_missing"
     NUMBER_MISMATCH = "number_mismatch"
     UNTRANSLATED_TEXT = "untranslated_text"
+    UNTRANSLATED_RASTER = "untranslated_raster"
     GLOSSARY_VIOLATION = "glossary_violation"
     INVISIBLE_TEXT = "invisible_text"
     TEXT_RASTERIZED = "text_rasterized"

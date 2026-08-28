@@ -32,7 +32,7 @@ class ProblemGroupTests(unittest.TestCase):
                 type=IssueType.ADDED_ELEMENT,
                 severity=Severity.LOW,
                 target_region="blank",
-                metrics={"target_text": "   "},
+                metrics={"target_text": " \u200b\ufeff\u00ad "},
                 description="新增区域。",
             )
         )

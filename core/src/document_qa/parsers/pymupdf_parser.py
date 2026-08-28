@@ -336,6 +336,7 @@ class PyMuPDFParser:
         if bbox is None:
             return None
         extension = raw_block.get("ext")
+        image_digest = self._image_content_digest(raw_block.get("image"))
         return Block(
             id=f"p{page_number}-b{block_index}-image",
             page=page_number,
@@ -347,8 +348,28 @@ class PyMuPDFParser:
                 "width": raw_block.get("width"),
                 "height": raw_block.get("height"),
                 "extension": extension,
+                # 对解码后的像素采样计算摘要，忽略 PNG/JPEG 重新编码差异；
+                # Detector 只消费摘要，不把图片二进制泄漏到 Schema。
+                "content_sha256": image_digest,
             },
         )
+
+    @staticmethod
+    def _image_content_digest(value: Any) -> str | None:
+        """计算内嵌图片的稳定像素摘要，异常编码退回原始字节摘要。"""
+
+        if not isinstance(value, bytes) or not value:
+            return None
+        try:
+            pixmap = pymupdf.Pixmap(value)
+            digest = sha256()
+            digest.update(
+                f"{pixmap.width}:{pixmap.height}:{pixmap.n}:{int(pixmap.alpha)}".encode()
+            )
+            digest.update(pixmap.samples)
+            return digest.hexdigest()
+        except Exception:
+            return sha256(value).hexdigest()
 
     @staticmethod
     def _build_bbox(raw_bbox: Any) -> BoundingBox | None:

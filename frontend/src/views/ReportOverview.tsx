@@ -44,6 +44,9 @@ export function ReportOverview({
   const severeTotal = (summary.issue_counts.critical ?? 0) + (summary.issue_counts.high ?? 0)
   const generalTotal = Math.max(issueTotal - severeTotal, 0)
   const reviewedPercent = issueTotal ? Math.round((reviewedCount / issueTotal) * 100) : 100
+  const ocr = (report.metadata as Record<string, unknown> | undefined)?.ocr as
+    | Record<string, unknown>
+    | undefined
 
   const doExport = async (format: "xlsx" | "html") => {
     if (!historyRecordId) {
@@ -178,6 +181,14 @@ export function ReportOverview({
       {(report.metadata as Record<string, unknown> | undefined)?.normalized_from ? (
         <div className="report-normalized-note">
           <DownloadOutlined aria-hidden="true" /> 输入含 Office 文档归一化转换，版面结论已叠加转换容差。
+        </div>
+      ) : null}
+      {ocr ? (
+        <div className="report-normalized-note">
+          <WarningFilled aria-hidden="true" />
+          {ocr.status === "completed"
+            ? `图片文字 OCR 已完成：处理 ${String(ocr.processed_count ?? 0)} / ${String(ocr.candidate_count ?? 0)} 个候选区域。`
+            : `图片文字 OCR 未完整执行（${String(ocr.error ?? ocr.status ?? "unknown")}），请勿将未检查的图片视为正常。`}
         </div>
       ) : null}
     </section>

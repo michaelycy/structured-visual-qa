@@ -9,9 +9,21 @@ from __future__ import annotations
 import re
 from collections import Counter
 
-from document_qa.profiles import RuleProfile, default_rule_profile
 from document_qa.detectors.evidence import region_evidence
-from document_qa.schemas import Issue, IssueType, Page, PageMatchResult, Region, Severity, TEXT_TYPES
+from document_qa.detectors.quantities import QuantityMention, extract_quantity_mentions
+from document_qa.profiles import RuleProfile, default_rule_profile
+from document_qa.schemas import (
+    BoundingBox,
+    ElementType,
+    Issue,
+    IssueType,
+    Page,
+    PageMatchResult,
+    Region,
+    Severity,
+    TEXT_TYPES,
+)
+from document_qa.text_visibility import has_visible_text, normalize_extracted_text
 
 # 数字抽取：整数、千分位、小数的完整组合。千分位必须恰好 3 位且后随
 # 数字边界（1,137.5 抽为单个 1137.5），避免把小数点后的部分切成独立 token。
@@ -47,8 +59,6 @@ _ANY_SCRIPT_PATTERN = re.compile(
 )
 # 全大写字母词（机构缩写：UNICEF、WHO、CSAM）通常保留原文不翻译。
 _ACRONYM_PATTERN = re.compile(r"\b[A-Z]{2,}\b")
-
-
 def _normalize_number(token: str) -> str:
     """归一化数字 token：去千分位逗号 + 去前导零（日期/页码场景）。"""
 
@@ -86,7 +96,194 @@ class ContentDetector:
             issues.extend(
                 self._detect_untranslated(source, target, result, settings)
             )
+            issues.extend(
+                self._detect_untranslated_raster(source, target, result, settings)
+            )
         return issues
+
+    def _detect_untranslated_raster(
+        self,
+        source: Page,
+        target: Page,
+        result: PageMatchResult,
+        settings,
+    ) -> list[Issue]:
+        """检测跨语言页面中原样保留的大面积图像化文字区域。
+
+        该规则不猜测图片语义：只在页面主导脚本已发生变化时，聚合源目标
+        内容指纹、位置和尺寸均稳定的图片 Region。单张照片、Logo 和零散
+        装饰图因数量或面积不足不会命中；具体文字内容留给可选 OCR 适配层。
+        """
+
+        # 表格内大量 IGBT/SiC 等短缩写会在 Region 投票中压过正文。
+        # 图像化漏译需要判断整页翻译方向，因此按可提取字符总量判断；
+        # 普通文本漏译仍使用 Region 投票，保持既有混排豁免行为。
+        source_script = self._dominant_script_by_characters(source.regions)
+        target_script = self._dominant_script_by_characters(target.regions)
+        if (
+            source_script in {None, "mixed"}
+            or target_script in {None, "mixed"}
+            or source_script == target_script
+        ):
+            return []
+
+        source_regions = {region.id: region for region in source.regions}
+        target_regions = {region.id: region for region in target.regions}
+        source_blocks = {block.id: block for block in source.blocks}
+        target_blocks = {block.id: block for block in target.blocks}
+        thresholds = settings.thresholds
+        unchanged_pairs: list[tuple[Region, Region]] = []
+        for match in result.matches:
+            source_region = source_regions.get(match.source_region_id)
+            target_region = target_regions.get(match.target_region_id)
+            if (
+                source_region is None
+                or target_region is None
+                or source_region.type != ElementType.IMAGE
+                or target_region.type != ElementType.IMAGE
+                or match.metrics.position_similarity
+                < thresholds.untranslated_raster_position_similarity
+                or match.metrics.size_similarity
+                < thresholds.untranslated_raster_size_similarity
+            ):
+                continue
+            source_hashes = self._region_image_hashes(source_region, source_blocks)
+            target_hashes = self._region_image_hashes(target_region, target_blocks)
+            if source_hashes and source_hashes == target_hashes:
+                unchanged_pairs.append((source_region, target_region))
+
+        components = self._cluster_unchanged_images(
+            unchanged_pairs,
+            target.width * thresholds.untranslated_raster_cluster_x_gap_ratio,
+            target.height * thresholds.untranslated_raster_cluster_y_gap_ratio,
+        )
+        page_area = target.width * target.height
+        issues: list[Issue] = []
+        for component in components:
+            if len(component) < thresholds.untranslated_raster_min_images:
+                continue
+            source_members = [pair[0] for pair in component]
+            target_members = [pair[1] for pair in component]
+            source_bbox = self._union_bbox(source_members)
+            target_bbox = self._union_bbox(target_members)
+            bbox_area_ratio = target_bbox.width * target_bbox.height / page_area
+            image_area_ratio = sum(
+                region.bbox.width * region.bbox.height
+                for region in target_members
+            ) / page_area
+            if (
+                bbox_area_ratio
+                < thresholds.untranslated_raster_min_bbox_area_ratio
+                or image_area_ratio
+                < thresholds.untranslated_raster_min_image_area_ratio
+            ):
+                continue
+            ordered = sorted(
+                component,
+                key=lambda pair: (
+                    pair[1].bbox.y,
+                    pair[1].bbox.x,
+                    pair[1].id,
+                ),
+            )
+            anchor_source, anchor_target = ordered[0]
+            index = len(issues) + 1
+            issues.append(
+                Issue(
+                    id=f"p{target.page}-untranslated-raster-{index}",
+                    page=target.page,
+                    type=IssueType.UNTRANSLATED_RASTER,
+                    severity=Severity.HIGH,
+                    source_region=anchor_source.id,
+                    target_region=anchor_target.id,
+                    bbox=target_bbox,
+                    metrics={
+                        "source_script": source_script,
+                        "target_script": target_script,
+                        "unchanged_image_count": len(component),
+                        "unchanged_image_bbox_area_ratio": round(
+                            bbox_area_ratio, 4
+                        ),
+                        "unchanged_image_area_ratio": round(image_area_ratio, 4),
+                        "source_bbox": source_bbox.model_dump(mode="json"),
+                        "target_bbox": target_bbox.model_dump(mode="json"),
+                        "source_region_ids": [pair[0].id for pair in ordered],
+                        "target_region_ids": [pair[1].id for pair in ordered],
+                        "ocr_status": "not_run",
+                    },
+                    description=(
+                        "目标页面存在大面积图像化文字区域与源页面原样一致，"
+                        "疑似未翻译；建议结合 OCR 或人工复核图片内文字。"
+                    ),
+                    detector="content-untranslated-raster",
+                )
+            )
+        return issues
+
+    @staticmethod
+    def _region_image_hashes(
+        region: Region, blocks_by_id: dict[str, object]
+    ) -> tuple[str, ...]:
+        """返回 Region 子图片 Block 的有序内容摘要。"""
+
+        hashes = []
+        for block_id in region.children:
+            block = blocks_by_id.get(block_id)
+            metadata = getattr(block, "metadata", None)
+            digest = metadata.get("content_sha256") if metadata else None
+            if isinstance(digest, str) and digest:
+                hashes.append(digest)
+        return tuple(hashes)
+
+    @staticmethod
+    def _cluster_unchanged_images(
+        pairs: list[tuple[Region, Region]],
+        horizontal_gap: float,
+        vertical_gap: float,
+    ) -> list[list[tuple[Region, Region]]]:
+        """按目标侧几何邻近关系聚合未变化图片，避免把整页零散图标合并。"""
+
+        remaining = set(range(len(pairs)))
+        components: list[list[tuple[Region, Region]]] = []
+        while remaining:
+            seed = min(remaining)
+            remaining.remove(seed)
+            indexes = [seed]
+            queue = [seed]
+            while queue:
+                current = queue.pop()
+                current_bbox = pairs[current][1].bbox
+                neighbors = []
+                for candidate in sorted(remaining):
+                    candidate_bbox = pairs[candidate][1].bbox
+                    x_gap = max(
+                        0.0,
+                        max(current_bbox.x, candidate_bbox.x)
+                        - min(current_bbox.right, candidate_bbox.right),
+                    )
+                    y_gap = max(
+                        0.0,
+                        max(current_bbox.y, candidate_bbox.y)
+                        - min(current_bbox.bottom, candidate_bbox.bottom),
+                    )
+                    if x_gap <= horizontal_gap and y_gap <= vertical_gap:
+                        neighbors.append(candidate)
+                for candidate in neighbors:
+                    remaining.remove(candidate)
+                    indexes.append(candidate)
+                    queue.append(candidate)
+            components.append([pairs[index] for index in sorted(indexes)])
+        return components
+
+    @staticmethod
+    def _union_bbox(regions: list[Region]) -> BoundingBox:
+        """计算一组 Region 的最小外接框。"""
+
+        x0 = min(region.bbox.x for region in regions)
+        y0 = min(region.bbox.y for region in regions)
+        x1 = max(region.bbox.right for region in regions)
+        y1 = max(region.bbox.bottom for region in regions)
+        return BoundingBox(x=x0, y=y0, width=x1 - x0, height=y1 - y0)
 
     def _resolve_language(self, source: Page, target: Page) -> str:
         """解析当前比较的语言场景标识（源脚本-目标脚本）。
@@ -113,12 +310,8 @@ class ContentDetector:
         逐对比较会误报互换；页面级守恒只捕获真实的错漏译。
         """
 
-        source_numbers = Counter()
-        target_numbers = Counter()
-        for region in source.regions:
-            source_numbers += self._extract_numbers(region)
-        for region in target.regions:
-            target_numbers += self._extract_numbers(region)
+        source_numbers, source_labels = self._collect_numbers(source)
+        target_numbers, target_labels = self._collect_numbers(target)
         if not source_numbers and not target_numbers:
             return []
         missing = source_numbers - target_numbers
@@ -144,13 +337,15 @@ class ContentDetector:
         )
         # 差异明细直接写进描述，界面列表不展开也能看到具体数字。
         detail_parts = []
+        missing_display = self._display_numbers(missing, source_labels)
+        extra_display = self._display_numbers(extra, target_labels)
         if missing:
             detail_parts.append(
-                "缺失数字：" + "、".join(sorted(missing.elements()))
+                "缺失数字：" + "、".join(missing_display)
             )
         if extra:
             detail_parts.append(
-                "多余数字：" + "、".join(sorted(extra.elements()))
+                "多余数字：" + "、".join(extra_display)
             )
         return [
             Issue(
@@ -162,10 +357,16 @@ class ContentDetector:
                 target_region=target_region.id if target_region else None,
                 bbox=target_region.bbox if target_region else None,
                 metrics={
-                    "source_numbers": sorted(source_numbers.elements()),
-                    "target_numbers": sorted(target_numbers.elements()),
-                    "missing_numbers": sorted(missing.elements()),
-                    "extra_numbers": sorted(extra.elements()),
+                    "source_numbers": self._display_numbers(
+                        source_numbers, source_labels
+                    ),
+                    "target_numbers": self._display_numbers(
+                        target_numbers, target_labels
+                    ),
+                    "missing_numbers": missing_display,
+                    "extra_numbers": extra_display,
+                    "normalized_source_numbers": sorted(source_numbers.elements()),
+                    "normalized_target_numbers": sorted(target_numbers.elements()),
                     "diff_count": diff_count,
                     **region_evidence(source_anchor, target_region),
                 },
@@ -187,6 +388,34 @@ class ContentDetector:
             if ContentDetector._extract_numbers(region) & numbers:
                 return region
         return None
+
+    @classmethod
+    def _collect_numbers(
+        cls, page: Page
+    ) -> tuple[Counter, dict[str, list[str]]]:
+        """汇总页面数量键，并保留每个规范值对应的原文表达。"""
+
+        numbers: Counter = Counter()
+        labels: dict[str, list[str]] = {}
+        for region in page.regions:
+            for mention in cls._extract_number_mentions(region):
+                numbers[mention.key] += 1
+                labels.setdefault(mention.key, []).append(mention.display)
+        return numbers, labels
+
+    @staticmethod
+    def _display_numbers(
+        numbers: Counter, labels: dict[str, list[str]]
+    ) -> list[str]:
+        """把规范数量键还原为报告中可读的原文表达。"""
+
+        values: list[str] = []
+        for key in sorted(numbers):
+            available = labels.get(key, [])
+            count = numbers[key]
+            values.extend(available[:count])
+            values.extend([key] * max(0, count - len(available)))
+        return values
 
     @staticmethod
     def _map_to_target(
@@ -255,7 +484,7 @@ class ContentDetector:
             if target_region.type not in TEXT_TYPES:
                 continue
             text = target_region.content.text if target_region.content else None
-            if not text:
+            if not has_visible_text(text):
                 continue
             # 机构名、版权行（© WHO、© UNFPA）本来就保留原文；
             # 字母字符过少或全由大写缩写构成的短文本不参与漏译判定。
@@ -309,12 +538,32 @@ class ContentDetector:
         """
 
         text = region.content.text if region.content else None
-        if not text:
+        if not has_visible_text(text):
             return Counter()
-        normalized = text.translate(_DIGIT_TRANSLATION)
         return Counter(
-            _normalize_number(token) for token in _NUMBER_PATTERN.findall(normalized)
+            mention.key for mention in ContentDetector._extract_number_mentions(region)
         )
+
+    @staticmethod
+    def _extract_number_mentions(region: Region) -> list[QuantityMention]:
+        """提取语义数量；已归一的表达不再重复进入裸数字集合。"""
+
+        text = region.content.text if region.content else None
+        if not has_visible_text(text):
+            return []
+        normalized = normalize_extracted_text(text).translate(_DIGIT_TRANSLATION)
+        mentions = extract_quantity_mentions(normalized)
+        masked = list(normalized)
+        for mention in mentions:
+            for index in range(*mention.span):
+                masked[index] = " "
+        plain_text = "".join(masked)
+        for match in _NUMBER_PATTERN.finditer(plain_text):
+            value = _normalize_number(match.group(0))
+            mentions.append(
+                QuantityMention(key=value, display=value, span=match.span())
+            )
+        return sorted(mentions, key=lambda item: item.span)
 
     @staticmethod
     def _dominant_script(regions: list[Region]) -> str | None:
@@ -328,7 +577,7 @@ class ContentDetector:
         for region in regions:
             # 图片等 Region 的 content.text 可能为 None，需先判空。
             text = region.content.text if region.content else ""
-            if not text:
+            if not has_visible_text(text):
                 continue
             counts = {
                 name: len(pattern.findall(text))
@@ -346,5 +595,24 @@ class ContentDetector:
         top = votes.most_common(2)
         # 平票视为混排，无法定义"源语言"，漏译判定跳过。
         if len(top) == 2 and top[0][1] == top[1][1]:
+            return "mixed"
+        return top[0][0]
+
+    @staticmethod
+    def _dominant_script_by_characters(regions: list[Region]) -> str | None:
+        """按全页字符总量判断主脚本，供图像化区域翻译方向识别。"""
+
+        counts: Counter = Counter()
+        for region in regions:
+            text = region.content.text if region.content else None
+            if not has_visible_text(text):
+                continue
+            for name, pattern in _SCRIPT_PATTERNS.items():
+                counts[name] += len(pattern.findall(text or ""))
+        positive = [(name, count) for name, count in counts.items() if count > 0]
+        if not positive:
+            return None
+        top = sorted(positive, key=lambda item: (-item[1], item[0]))
+        if len(top) > 1 and top[0][1] == top[1][1]:
             return "mixed"
         return top[0][0]

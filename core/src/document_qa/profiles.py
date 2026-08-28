@@ -104,6 +104,8 @@ class DetectorToggles(SchemaModel):
     overlap: bool = True
     number_mismatch: bool = True
     untranslated_text: bool = True
+    # 对位置尺寸稳定的大图片运行可选 OCR，确认图片内部的局部漏译。
+    untranslated_raster_ocr: bool = True
     # 匹配 Region 的宽/高剧变（翻译后段落被合并或拆散）。
     region_resized: bool = True
     # 目标文字被竖排/拆散成单字母碎片（窄列翻译溢出的典型破坏）。
@@ -168,6 +170,39 @@ def _default_resize_bands() -> list[SeverityBand]:
     ]
 
 
+def _default_issue_type_deduction_caps() -> dict[IssueType, float]:
+    """返回完整 Issue 类型扣分上限，并作为旧配置升级基线。"""
+
+    return {
+        IssueType.REGION_SHIFTED: 12.0,
+        IssueType.REGION_RESIZED: 10.0,
+        IssueType.TEXT_FRAGMENTED: 10.0,
+        IssueType.TEXT_OVERFLOW: 25.0,
+        IssueType.TEXT_CLIPPED: 25.0,
+        IssueType.ABNORMAL_WRAP: 10.0,
+        IssueType.LINE_COUNT_EXPLOSION: 10.0,
+        IssueType.FONT_SHRINK: 10.0,
+        IssueType.TEXT_OVERLAP: 10.0,
+        IssueType.TEXT_IMAGE_OVERLAP: 25.0,
+        IssueType.CONTENT_OUT_OF_PAGE: 25.0,
+        IssueType.MISSING_ELEMENT: 10.0,
+        IssueType.ADDED_ELEMENT: 3.0,
+        IssueType.MISSING_IMAGE: 25.0,
+        IssueType.TYPOGRAPHY_CHANGED: 10.0,
+        IssueType.TABLE_STRUCTURE_CHANGED: 25.0,
+        IssueType.PAGE_MISSING: 25.0,
+        IssueType.NUMBER_MISMATCH: 12.0,
+        IssueType.UNTRANSLATED_TEXT: 12.0,
+        IssueType.UNTRANSLATED_RASTER: 12.0,
+        IssueType.GLOSSARY_VIOLATION: 12.0,
+        IssueType.INVISIBLE_TEXT: 25.0,
+        IssueType.TEXT_RASTERIZED: 10.0,
+        IssueType.TEXT_VECTORIZED: 0.0,
+        IssueType.TEXT_ALIGNMENT_CHANGED: 10.0,
+        IssueType.OTHER: 10.0,
+    }
+
+
 class DetectorThresholds(SchemaModel):
     """保存确定性检测器的数值阈值。"""
 
@@ -184,6 +219,55 @@ class DetectorThresholds(SchemaModel):
     untranslated_ratio: float = Field(default=0.7, ge=0, le=1)
     # 漏译判定要求目标文本的最少字母数，短版权行/机构缩写不参与判定。
     untranslated_min_letters: int = Field(default=8, ge=1, le=100)
+    # 图像化漏译：多个内容指纹未变化的小图片在译文页聚成大区域时，
+    # 视为疑似把源语言字形原样保留。阈值同时限制数量、面积和聚类间距，
+    # 避免单张照片、Logo 或零散装饰图被误报。
+    untranslated_raster_min_images: int = Field(default=8, ge=2, le=1000)
+    untranslated_raster_min_bbox_area_ratio: float = Field(
+        default=0.05, ge=0, le=1
+    )
+    untranslated_raster_min_image_area_ratio: float = Field(
+        default=0.01, ge=0, le=1
+    )
+    untranslated_raster_cluster_x_gap_ratio: float = Field(
+        default=0.15, ge=0, le=1
+    )
+    untranslated_raster_cluster_y_gap_ratio: float = Field(
+        default=0.04, ge=0, le=1
+    )
+    untranslated_raster_position_similarity: float = Field(
+        default=0.995, ge=0, le=1
+    )
+    untranslated_raster_size_similarity: float = Field(
+        default=0.995, ge=0, le=1
+    )
+    # OCR 只处理位置尺寸稳定的大图片；候选、置信度与源语言残留阈值
+    # 集中在 Profile，保证同一报告能够复现当时的判定行为。
+    untranslated_raster_ocr_min_area_ratio: float = Field(
+        default=0.05, ge=0, le=1
+    )
+    untranslated_raster_ocr_max_candidates: int = Field(
+        default=4, ge=1, le=20
+    )
+    untranslated_raster_ocr_dpi: int = Field(default=216, ge=72, le=600)
+    untranslated_raster_ocr_padding_points: float = Field(
+        default=1.0, ge=0, le=20
+    )
+    untranslated_raster_ocr_min_confidence: float = Field(
+        default=0.65, ge=0, le=1
+    )
+    untranslated_raster_ocr_min_source_chars: int = Field(
+        default=4, ge=1, le=10000
+    )
+    untranslated_raster_ocr_min_target_chars: int = Field(
+        default=4, ge=1, le=10000
+    )
+    untranslated_raster_ocr_high_source_chars: int = Field(
+        default=30, ge=1, le=10000
+    )
+    untranslated_raster_ocr_source_ratio: float = Field(
+        default=0.15, ge=0, le=1
+    )
     # LibreOffice 归一化带来的版面转换噪声容差；偏移类检测阈值自动
     # 叠加该值，纯 PDF 流水线（未归一化）不受影响。
     conversion_noise_ratio: float = Field(default=0.03, ge=0, le=0.2)
@@ -306,34 +390,27 @@ class ScoringSettings(SchemaModel):
         }
     )
     issue_type_deduction_caps: dict[IssueType, float] = Field(
-        default_factory=lambda: {
-            IssueType.REGION_SHIFTED: 12.0,
-            IssueType.REGION_RESIZED: 10.0,
-            IssueType.TEXT_FRAGMENTED: 10.0,
-            IssueType.TEXT_OVERFLOW: 25.0,
-            IssueType.TEXT_CLIPPED: 25.0,
-            IssueType.ABNORMAL_WRAP: 10.0,
-            IssueType.LINE_COUNT_EXPLOSION: 10.0,
-            IssueType.FONT_SHRINK: 10.0,
-            IssueType.TEXT_OVERLAP: 10.0,
-            IssueType.TEXT_IMAGE_OVERLAP: 25.0,
-            IssueType.CONTENT_OUT_OF_PAGE: 25.0,
-            IssueType.MISSING_ELEMENT: 10.0,
-            IssueType.ADDED_ELEMENT: 3.0,
-            IssueType.MISSING_IMAGE: 25.0,
-            IssueType.TYPOGRAPHY_CHANGED: 10.0,
-            IssueType.TABLE_STRUCTURE_CHANGED: 25.0,
-            IssueType.PAGE_MISSING: 25.0,
-            IssueType.NUMBER_MISMATCH: 12.0,
-            IssueType.UNTRANSLATED_TEXT: 12.0,
-            IssueType.GLOSSARY_VIOLATION: 12.0,
-            IssueType.INVISIBLE_TEXT: 25.0,
-            IssueType.TEXT_RASTERIZED: 10.0,
-            IssueType.TEXT_VECTORIZED: 0.0,
-            IssueType.TEXT_ALIGNMENT_CHANGED: 10.0,
-            IssueType.OTHER: 10.0,
-        }
+        default_factory=_default_issue_type_deduction_caps
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def upgrade_issue_type_caps(cls, value: object) -> object:
+        """旧配置缺少新增 Issue 类型时补默认上限，保持可重新质检。"""
+
+        if not isinstance(value, dict):
+            return value
+        existing = value.get("issue_type_deduction_caps")
+        if not isinstance(existing, dict):
+            return value
+        defaults = {
+            issue_type.value: cap
+            for issue_type, cap in _default_issue_type_deduction_caps().items()
+        }
+        return {
+            **value,
+            "issue_type_deduction_caps": {**defaults, **existing},
+        }
 
     @model_validator(mode="after")
     def validate_scores_and_maps(self) -> "ScoringSettings":

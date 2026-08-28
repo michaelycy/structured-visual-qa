@@ -49,6 +49,7 @@ type ProfileForm = {
   "detectors.enabled.overlap": boolean
   "detectors.enabled.number_mismatch": boolean
   "detectors.enabled.untranslated_text": boolean
+  "detectors.enabled.untranslated_raster_ocr": boolean
   "detectors.enabled.region_resized": boolean
   "detectors.enabled.text_fragmented": boolean
   "detectors.enabled.font_grow": boolean
@@ -156,6 +157,9 @@ export function ProfileEditor(props: ProfileEditorProps) {
       "detectors.enabled.overlap": Boolean(get(profile, "detectors.enabled.overlap")),
       "detectors.enabled.number_mismatch": Boolean(get(profile, "detectors.enabled.number_mismatch")),
       "detectors.enabled.untranslated_text": Boolean(get(profile, "detectors.enabled.untranslated_text")),
+      "detectors.enabled.untranslated_raster_ocr": Boolean(
+        get(profile, "detectors.enabled.untranslated_raster_ocr"),
+      ),
       "detectors.enabled.region_resized": Boolean(get(profile, "detectors.enabled.region_resized")),
       "detectors.enabled.text_fragmented": Boolean(get(profile, "detectors.enabled.text_fragmented")),
       "detectors.enabled.font_grow": Boolean(get(profile, "detectors.enabled.font_grow")),
@@ -310,7 +314,12 @@ export function ProfileEditor(props: ProfileEditorProps) {
         <RuleToggle
           name="detectors.enabled.untranslated_text"
           label="疑似未翻译"
-          description="检查目标文字中是否仍大量保留原语言内容。"
+          description="检查目标文字或大面积图像化文字中是否仍保留原语言内容。"
+        />
+        <RuleToggle
+          name="detectors.enabled.untranslated_raster_ocr"
+          label="图片内文字 OCR"
+          description="服务端启用 OCR 后，检查大图片内部是否仍残留源语言文字。"
         />
       </Card>
 

@@ -498,6 +498,19 @@
   width: 200px;
 }
 
+.issue-batch-bar {
+  display: flex;
+  min-height: 48px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+  padding: 8px 12px;
+  border: 1px solid color-mix(in srgb, var(--qa-info) 30%, var(--qa-border));
+  border-radius: 10px;
+  background: var(--qa-info-soft);
+}
+
 .issue-table .ant-table-container {
   overflow: hidden;
   border: 1px solid var(--qa-border);

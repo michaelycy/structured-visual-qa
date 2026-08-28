@@ -369,6 +369,25 @@ const METRIC_LABELS: Record<string, string> = {
   source_overlap_ratio: "原文重叠比例",
   overlap_increase_ratio: "新增重叠比例",
   source_language_ratio: "源语言保留比例",
+  source_script: "原文主导文字体系",
+  target_script: "译文主导文字体系",
+  unchanged_image_count: "未变化图片数量",
+  unchanged_image_bbox_area_ratio: "疑似漏译区域占页面比例",
+  unchanged_image_area_ratio: "未变化图片占页面比例",
+  ocr_status: "OCR 状态",
+  detection_mode: "检测方式",
+  ocr_provider: "OCR 引擎",
+  ocr_model: "OCR 模型",
+  source_ocr_script_chars: "原图源语言字符数",
+  target_ocr_source_script_chars: "译图残留源语言字符数",
+  target_ocr_target_script_chars: "译图目标语言字符数",
+  ocr_high_source_chars_threshold: "高危残留字符阈值",
+  target_source_script_ratio: "译图源语言残留比例",
+  ocr_confidence: "OCR 平均置信度",
+  ocr_line_count: "OCR 文字行数",
+  ocr_residue_line_count: "源语言残留行数",
+  ocr_text_snippet: "识别到的残留文字",
+  candidate_bbox_area_ratio: "OCR 候选区域占页面比例",
   threshold: "触发阈值",
   bbox_width: "区域宽度",
   letter_count: "字母数量",
@@ -415,6 +434,8 @@ const EVIDENCE_ONLY_KEYS = new Set([
   "source_other_region_type",
   "source_numbers",
   "target_numbers",
+  "normalized_source_numbers",
+  "normalized_target_numbers",
   "missing_numbers",
   "extra_numbers",
   "resize_magnitude",
@@ -426,6 +447,8 @@ const EVIDENCE_ONLY_KEYS = new Set([
   "other_region",
   "primary_text",
   "other_text",
+  "source_region_ids",
+  "target_region_ids",
 ])
 
 const RATIO_METRICS = new Set([
@@ -440,6 +463,11 @@ const RATIO_METRICS = new Set([
   "source_overlap_ratio",
   "overlap_increase_ratio",
   "source_language_ratio",
+  "unchanged_image_bbox_area_ratio",
+  "unchanged_image_area_ratio",
+  "target_source_script_ratio",
+  "ocr_confidence",
+  "candidate_bbox_area_ratio",
   "threshold",
   "group_match_ratio",
   "match_score",
@@ -543,6 +571,12 @@ function issueDisplayDescription(issue: Issue): string {
   if (issue.type === "text_vectorized") {
     return "目标页面把文字改成了图形，系统无法继续检查数字、漏译和术语。请人工核对页面文字内容是否正确。"
   }
+  if (issue.type === "untranslated_raster") {
+    if (metrics.detection_mode === "ocr_partial") {
+      return "目标图片内部仍识别到较多源语言文字，疑似图片标签只翻译了一部分。系统已按 OCR 文字位置标出残留区域，请逐项核对。"
+    }
+    return "目标页面有一大片图像化文字与原文完全一致，疑似没有翻译。系统已标出整片区域，建议结合 OCR 或人工核对图片中的文字。"
+  }
   if (issue.type === "text_fragmented") {
     return "目标文字被拆成窄列、竖排或零散字符，阅读顺序可能异常。请核对文字是否完整且排列正确。"
   }
@@ -581,6 +615,11 @@ function issueDisplayDescription(issue: Issue): string {
 }
 
 function formatMetricValue(key: string, value: unknown): string {
+  if (key === "ocr_status" && value === "not_run") {
+    return "未运行（当前使用图像指纹判断）"
+  }
+  if (key === "ocr_status" && value === "confirmed") return "已确认"
+  if (key === "detection_mode" && value === "ocr_partial") return "图片局部 OCR"
   if (typeof value === "number") {
     if (RATIO_METRICS.has(key)) return formatPercent(value)
     return Number.isInteger(value) ? String(value) : value.toFixed(2)
@@ -1081,6 +1120,7 @@ export function PageDetails({
   historyRecordId,
   decisions,
   onDecide,
+  onDecideMany,
   viewState,
   onViewStateChange,
 }: {
@@ -1090,6 +1130,7 @@ export function PageDetails({
   historyRecordId: string | null
   decisions: Record<string, ReviewDecision>
   onDecide: (issueId: string, decision: ReviewDecision) => void
+  onDecideMany: (issueIds: string[], decision: ReviewDecision) => Promise<string[]>
   viewState?: PageDetailsViewState
   onViewStateChange?: (state: PageDetailsViewState) => void
 }) {
@@ -1104,6 +1145,8 @@ export function PageDetails({
   const [localIssueTypeFilter, setLocalIssueTypeFilter] = useState<string[]>([])
   const [localReviewFilter, setLocalReviewFilter] = useState<ReviewFilter>("all")
   const [localIssuePage, setLocalIssuePage] = useState(1)
+  const [selectedIssueIds, setSelectedIssueIds] = useState<string[]>([])
+  const [batchDecision, setBatchDecision] = useState<ReviewDecision | null>(null)
   const selected = viewState ? viewState.page ?? defaultPage : localSelected
   const activeIssueId = viewState ? viewState.issue ?? null : localActiveIssueId
   const issueNumberFilter = viewState
@@ -1205,6 +1248,27 @@ export function PageDetails({
     decisions,
   ])
   const pageVisibleIssues = visibleIssues.filter((issue) => issue.page === selected)
+
+  useEffect(() => {
+    const visibleIssueIds = new Set(visibleIssues.map((issue) => issue.id))
+    setSelectedIssueIds((current) => current.filter((issueId) => visibleIssueIds.has(issueId)))
+  }, [visibleIssues])
+
+  useEffect(() => {
+    setSelectedIssueIds([])
+  }, [taskId])
+
+  const applyBatchDecision = async (decision: ReviewDecision) => {
+    if (!selectedIssueIds.length || batchDecision) return
+    const submittedIssueIds = [...selectedIssueIds]
+    setBatchDecision(decision)
+    try {
+      const failedIssueIds = await onDecideMany(submittedIssueIds, decision)
+      setSelectedIssueIds(failedIssueIds)
+    } finally {
+      setBatchDecision(null)
+    }
+  }
 
   return (
     <section className="page-review">
@@ -1340,11 +1404,52 @@ export function PageDetails({
         </Space>
       </div>
 
+      {selectedIssueIds.length > 0 && (
+        <div className="issue-batch-bar" aria-live="polite">
+          <Typography.Text strong>
+            已选择 {selectedIssueIds.length} 项，共 {visibleIssues.length} 项
+          </Typography.Text>
+          <Space wrap size={8}>
+            {(Object.keys(DECISION_META) as ReviewDecision[]).map((decision) => (
+              <Button
+                key={decision}
+                size="small"
+                type={decision === "confirmed" ? "primary" : "default"}
+                loading={batchDecision === decision}
+                disabled={batchDecision !== null && batchDecision !== decision}
+                onClick={() => void applyBatchDecision(decision)}
+              >
+                批量{DECISION_META[decision].label}
+              </Button>
+            ))}
+            <Button
+              size="small"
+              type="text"
+              disabled={batchDecision !== null}
+              onClick={() => setSelectedIssueIds([])}
+            >
+              取消选择
+            </Button>
+          </Space>
+        </div>
+      )}
+
       <Table<Issue>
         className="issue-table"
         rowKey="id"
         size="middle"
         dataSource={visibleIssues}
+        rowSelection={{
+          selectedRowKeys: selectedIssueIds,
+          preserveSelectedRowKeys: true,
+          columnWidth: 48,
+          onChange: (selectedRowKeys) => {
+            setSelectedIssueIds(selectedRowKeys.map(String))
+          },
+          getCheckboxProps: (issue) => ({
+            "aria-label": `选择问题 #${(issueNumberById.get(issue.id) ?? 0) + 1}`,
+          }),
+        }}
         pagination={{
           current: issuePage,
           pageSize: 8,

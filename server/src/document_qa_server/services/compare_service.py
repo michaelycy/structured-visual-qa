@@ -16,6 +16,7 @@ from typing import Callable, Literal
 from document_qa.parsers import DocumentParsingError
 from document_qa.pipeline import DocumentQAPipeline, RenderScope
 from document_qa.glossary import Glossary
+from document_qa.ocr import OCRProvider
 from document_qa.profiles import RuleProfile
 from document_qa.schemas import QAReport
 
@@ -74,6 +75,7 @@ class CompareService:
         artifacts_dir: Path,
         normalizer: NormalizationService | None = None,
         database: Database | None = None,
+        ocr_provider: OCRProvider | None = None,
     ) -> None:
         """注入产物根目录与可选归一化/持久化服务；渲染页写入 pages/ 子目录。"""
 
@@ -83,6 +85,7 @@ class CompareService:
             artifacts_dir=artifacts_dir
         )
         self._database = database
+        self._ocr_provider = ocr_provider
         self._tasks: dict[str, TaskState] = {}
         self._tasks_lock = threading.Lock()
         self._recover_interrupted_tasks()
@@ -263,7 +266,9 @@ class CompareService:
             if render:
                 render_dir = self._render_dir / f"task-{uuid.uuid4().hex[:10]}"
             report = DocumentQAPipeline(
-                profile=effective_profile, glossary=glossary
+                profile=effective_profile,
+                glossary=glossary,
+                ocr_provider=self._ocr_provider,
             ).compare(
                 source_pdf,
                 target_pdf,

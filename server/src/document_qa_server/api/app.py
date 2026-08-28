@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 
 from document_qa_server.api.middleware import RequestIdMiddleware
 from document_qa_server.observability import configure_file_logging, log_event
+from document_qa_server.adapters.ocr import build_ocr_provider
 from document_qa_server.persistence import Database
 from document_qa_server.services import (
     CompareHistoryService,
@@ -71,7 +72,11 @@ def create_app(
     database = Database(artifacts_dir=root)
 
     # 服务实例在应用级创建一次；互斥锁因此对全部请求生效。
-    compare_service = CompareService(artifacts_dir=root, database=database)
+    compare_service = CompareService(
+        artifacts_dir=root,
+        database=database,
+        ocr_provider=build_ocr_provider(config, artifacts_dir=root),
+    )
     verify_service = VerifyService(artifacts_dir=root)
     profile_service = ProfileService(artifacts_dir=root, database=database)
     file_service = FileService(

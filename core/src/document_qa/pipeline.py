@@ -6,8 +6,10 @@ from typing import Literal
 
 from document_qa.detectors import ContentDetector, RuleDetector
 from document_qa.detectors.glossary import GlossaryDetector
+from document_qa.detectors.raster_ocr import RasterOCRDetector
 from document_qa.grouping import RegionGrouper
 from document_qa.matching import LogicalRegionComposer, PageAligner, RegionMatcher
+from document_qa.ocr import OCRProvider
 from document_qa.parsers import PyMuPDFParser
 from document_qa.glossary import Glossary
 from document_qa.profiles import RuleProfile, default_rule_profile
@@ -46,6 +48,7 @@ class DocumentQAPipeline:
         content_detector: ContentDetector | None = None,
         scorer: QAScorer | None = None,
         glossary: Glossary | None = None,
+        ocr_provider: OCRProvider | None = None,
     ) -> None:
         """支持注入 Profile 与组件，便于界面配置、测试和替换 PDF 引擎。"""
 
@@ -64,6 +67,10 @@ class DocumentQAPipeline:
         self.scorer = scorer or QAScorer(self.profile)
         # 术语库可选；缺省不启用术语检测（行为与历史版本一致）。
         self.glossary_detector = GlossaryDetector(glossary) if glossary else None
+        self.raster_ocr_detector = (
+            RasterOCRDetector(ocr_provider, self.profile) if ocr_provider else None
+        )
+        self._ocr_run: dict[str, object] | None = None
 
     def compare(
         self,
@@ -104,8 +111,27 @@ class DocumentQAPipeline:
             entries.append((number, None, target_pages[number]))
         entries.sort(key=lambda entry: entry[0])
 
+        if self.raster_ocr_detector is not None:
+            self._ocr_run = {
+                "status": "ready",
+                "provider": self.raster_ocr_detector.provider.provider_name,
+                "model": self.raster_ocr_detector.provider.model_fingerprint,
+                "candidate_count": 0,
+                "processed_count": 0,
+            }
+        else:
+            self._ocr_run = None
+
         page_results = [
-            self._compare_page(number, source_page, target_page)
+            self._compare_page(
+                number,
+                source_page,
+                target_page,
+                source_path=source_path,
+                target_path=target_path,
+                source_password=source_password,
+                target_password=target_password,
+            )
             for number, source_page, target_page in entries
         ]
         report = self._build_report(source, target, page_results)
@@ -199,7 +225,15 @@ class DocumentQAPipeline:
         return document.model_copy(update={"pages": pages})
 
     def _compare_page(
-        self, page_number: int, source: Page | None, target: Page | None
+        self,
+        page_number: int,
+        source: Page | None,
+        target: Page | None,
+        *,
+        source_path: Path | None = None,
+        target_path: Path | None = None,
+        source_password: str | None = None,
+        target_password: str | None = None,
     ) -> PageQAResult:
         """处理正常页面、源页面缺失和目标额外页面三种情况。"""
 
@@ -293,6 +327,46 @@ class DocumentQAPipeline:
                         source_match_page, target_match_page, match_result
                     )
                 )
+            if self.raster_ocr_detector is not None:
+                if source_path is None or target_path is None:
+                    raise RuntimeError("OCR 检测需要源文档与目标文档路径")
+                thresholds = self.profile.detector_settings_for(
+                    self.raster_ocr_detector.resolve_language(
+                        source_match_page, target_match_page
+                    )
+                ).thresholds
+                ocr_result = self.raster_ocr_detector.detect(
+                    source_match_page,
+                    target_match_page,
+                    match_result,
+                    lambda page, bbox: self.renderer.render_crop_png(
+                        source_path,
+                        page=page.page,
+                        bbox=bbox,
+                        dpi=thresholds.untranslated_raster_ocr_dpi,
+                        padding_points=thresholds.untranslated_raster_ocr_padding_points,
+                        password=source_password,
+                    ),
+                    lambda page, bbox: self.renderer.render_crop_png(
+                        target_path,
+                        page=page.page,
+                        bbox=bbox,
+                        dpi=thresholds.untranslated_raster_ocr_dpi,
+                        padding_points=thresholds.untranslated_raster_ocr_padding_points,
+                        password=target_password,
+                    ),
+                )
+                issues.extend(ocr_result.issues)
+                if self._ocr_run is not None:
+                    self._ocr_run["candidate_count"] = int(
+                        self._ocr_run["candidate_count"]
+                    ) + ocr_result.candidate_count
+                    self._ocr_run["processed_count"] = int(
+                        self._ocr_run["processed_count"]
+                    ) + ocr_result.processed_count
+                    if ocr_result.error:
+                        self._ocr_run["status"] = "error"
+                        self._ocr_run["error"] = ocr_result.error
         score, status = self.scorer.score(issues)
         return PageQAResult(
             page=page_number,
@@ -342,6 +416,9 @@ class DocumentQAPipeline:
             },
             problem_total=count_problem_groups(page_results),
         )
+        if self._ocr_run is not None and self._ocr_run.get("status") == "ready":
+            self._ocr_run["status"] = "completed"
+        metadata = {"ocr": self._ocr_run} if self._ocr_run is not None else {}
         return QAReport(
             source_document_id=source.document_id,
             target_document_id=target.document_id,
@@ -351,4 +428,5 @@ class DocumentQAPipeline:
             status=status,
             summary=summary,
             pages=page_results,
+            metadata=metadata,
         )

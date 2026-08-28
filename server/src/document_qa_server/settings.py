@@ -47,6 +47,16 @@ class ServerSettings(BaseSettings):
     log_dir: Path | None = None
     # 按天轮转后保留的历史文件数；超出自动删除，给磁盘占用一个上界。
     log_retention_days: int = 14
+    # OCR 为可选增强能力；关闭时不加载 PaddleOCR 或模型依赖。
+    ocr_enabled: bool = False
+    ocr_provider: str = "paddle"
+    ocr_device: str = "cpu"
+    ocr_language: str = "ch"
+    ocr_version: str = "PP-OCRv6"
+    # None 时使用 artifacts_dir/ocr-cache，避免模型写进用户主目录。
+    ocr_cache_dir: Path | None = None
+    ocr_detection_model_dir: Path | None = None
+    ocr_recognition_model_dir: Path | None = None
 
 
 def load_settings() -> ServerSettings:

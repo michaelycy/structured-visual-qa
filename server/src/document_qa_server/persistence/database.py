@@ -17,6 +17,24 @@ from typing import Iterator
 SCHEMA_VERSION = 6
 
 
+class _MigrationConnection(sqlite3.Connection):
+    """让迁移脚本服从调用方事务，不触发 executescript 的隐式提交。"""
+
+    def executescript(self, sql_script: str) -> sqlite3.Cursor:
+        """逐条执行完整 SQL，使任一失败都能由外层事务整体回滚。"""
+
+        cursor = self.cursor()
+        statement = ""
+        for character in sql_script:
+            statement += character
+            if character == ";" and sqlite3.complete_statement(statement):
+                cursor.execute(statement)
+                statement = ""
+        if statement.strip() and not statement.lstrip().startswith("--"):
+            raise sqlite3.ProgrammingError("迁移脚本包含未结束的 SQL 语句")
+        return cursor
+
+
 # 表名、字段名（空串代表表）与中文用途。该数据同时是可查询的数据字典。
 SCHEMA_DESCRIPTIONS: tuple[tuple[str, str, str], ...] = (
     ("schema_migrations", "", "记录已应用的数据库结构迁移，保证升级幂等可审计。"),
@@ -148,7 +166,11 @@ class Database:
     def connect(self) -> sqlite3.Connection:
         """创建短生命周期连接并统一开启完整性与并发参数。"""
 
-        connection = sqlite3.connect(self.path, timeout=10.0)
+        connection = sqlite3.connect(
+            self.path,
+            timeout=10.0,
+            factory=_MigrationConnection,
+        )
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
         connection.execute("PRAGMA busy_timeout = 10000")
@@ -172,53 +194,53 @@ class Database:
     def _initialize(self) -> None:
         """串行执行未应用迁移，并写入数据库内数据字典。"""
 
-        with self.connect() as connection:
+        connection = self.connect()
+        try:
             connection.execute("PRAGMA journal_mode = WAL")
-            connection.execute(
-                "CREATE TABLE IF NOT EXISTS schema_migrations ("
-                "version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)"
-            )
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                connection.execute(
+                    "CREATE TABLE IF NOT EXISTS schema_migrations ("
+                    "version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)"
+                )
+                connection.commit()
+            except BaseException:
+                connection.rollback()
+                raise
             applied = {
                 row[0]
                 for row in connection.execute("SELECT version FROM schema_migrations")
             }
-            if 1 not in applied:
-                self._migration_1(connection)
-                connection.execute(
-                    "INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)",
-                    (1, "initial_business_schema", self.now()),
-                )
-            if 2 not in applied:
-                self._migration_2(connection)
-                connection.execute(
-                    "INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)",
-                    (2, "legacy_import_audit", self.now()),
-                )
-            if 3 not in applied:
-                self._migration_3(connection)
-                connection.execute(
-                    "INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)",
-                    (3, "comparison_glossary_relation", self.now()),
-                )
-            if 4 not in applied:
-                self._migration_4(connection)
-                connection.execute(
-                    "INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)",
-                    (4, "sample_language_pair", self.now()),
-                )
-            if 5 not in applied:
-                self._migration_5(connection)
-                connection.execute(
-                    "INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)",
-                    (5, "async_task_lifecycle", self.now()),
-                )
-            if 6 not in applied:
-                self._migration_6(connection)
-                connection.execute(
-                    "INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)",
-                    (6, "comparison_problem_total", self.now()),
-                )
-            connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            migrations = (
+                (1, "initial_business_schema", self._migration_1),
+                (2, "legacy_import_audit", self._migration_2),
+                (3, "comparison_glossary_relation", self._migration_3),
+                (4, "sample_language_pair", self._migration_4),
+                (5, "async_task_lifecycle", self._migration_5),
+                (6, "comparison_problem_total", self._migration_6),
+            )
+            for version, name, migration in migrations:
+                if version in applied:
+                    continue
+                self._apply_migration(connection, version, name, migration)
+        finally:
+            connection.close()
+
+    def _apply_migration(self, connection, version, name, migration) -> None:
+        """原子应用单个已发布迁移及其审计版本，失败时不留半成品。"""
+
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            migration(connection)
+            connection.execute(
+                "INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)",
+                (version, name, self.now()),
+            )
+            connection.execute(f"PRAGMA user_version = {version}")
+            connection.commit()
+        except BaseException:
+            connection.rollback()
+            raise
 
     def _migration_1(self, connection: sqlite3.Connection) -> None:
         """建立首版完整业务 Schema、约束、索引和字段说明。"""

@@ -7,7 +7,7 @@
 
 ```bash
 cd /path/to/structured-visual-qa
-.venv/bin/python -m pip install -e core -e "server[mcp]"
+uv sync --locked --all-packages --extra mcp --group dev
 ```
 
 ## 客户端配置
@@ -80,4 +80,4 @@ CLI ─────────────────────────�
 ```
 
 MCP 进程是 services 的库消费者，不经过 HTTP；历史记录与 Web 界面互通
-（同一 `webapp-artifacts/history/`）。
+（共同使用 `webapp-artifacts/metadata.sqlite3` 和关联的文件系统产物目录）。

@@ -1,4 +1,4 @@
-# 需求待办：技术采纳方案（T1–T21）
+# 需求待办：技术采纳方案（T1–T22）
 
 > 来源：2025-08 架构对标梳理（T1–T5）与多格式/像素层讨论（T9–T10）。
 > 每项含目标、方案、验收。通用约束：遵循 docs/project-contract.md；
@@ -27,6 +27,7 @@
 | T19 | 问题编号多条件过滤 | ✅ 已落地 | P2 | 0.25 天 |
 | T20 | 服务端持久化日志（按天轮转 + request_id 关联） | ✅ 已落地 | P1 | 0.5 天 |
 | T21 | 复核反馈自学习回路（误报归因 → AI 修复报告 / 规则调优 → 定期闭环） | 🟡 P0+P1+AI 修复报告已落地；P2 待办 | P2 | P2 1–2 天 |
+| T22 | Python 工程治理与可复现构建 | 🟡 实施中 | P0 | 1–2 天 |
 
 ### 落地记录
 
@@ -71,7 +72,7 @@
   且生态未跟上，锁定 1.x）。验证：MCP 客户端 stdio 协议级冒烟——12 工具
   列举 ✅、真实比较 86.80/119 摘要 top10 ✅、单页报告 ✅、XLSX 导出 ✅。
   客户端配置示例见 docs/manuals/mcp-server.md（Claude Desktop/Cursor/通用）。
-- **T13 第一阶段（2026-08）**：新增 `docs/ui-guidelines.md` 与六个页面基础组件，
+- **T13 第一阶段（2026-08）**：新增 `frontend/docs/design/ui-guidelines.md` 与六个页面基础组件，
   「质检记录」已迁移为参考页。验证：前端构建 ✅、Python compileall ✅、搜索
   9/28 与状态筛选 13/28 ✅、详情抽屉与工作台回跳 ✅、800 px 窄屏页头/工具栏
   自动纵排 ✅、浏览器控制台 0 错误 ✅。静态检查仅保留既有 `PageDetails.tsx`
@@ -159,7 +160,7 @@
 
 **方案**：
 
-1. 新增 `docs/ui-guidelines.md` 作为可验收 UI 契约，量化色彩、字体、间距、
+1. 新增 `frontend/docs/design/ui-guidelines.md` 作为可验收 UI 契约，量化色彩、字体、间距、
    圆角、页面结构、表格、状态、表单、响应式规则及允许误差。
 2. 色彩语义继续以 `frontend/src/uiTokens.ts` 为 TypeScript 唯一来源；布局节奏
    统一为 `frontend/src/global.css` 的 `--qa-*` CSS 变量，业务页面禁止新增裸色值。
@@ -651,6 +652,34 @@ BBox 和 Region ID 写入 metrics；详情页以“原文区域 1/2、译文区�
   建议”明确改名为“规则调优”，继续作为代码诊断后的可选分支。
 - 验证：当前真实库生成 6 组误报诊断任务；接口、Markdown 下载、
   compileall、frontend build/lint 与 1280 px 桌面布局检查通过。
+
+---
+
+## T22 Python 工程治理与可复现构建
+
+**问题**：双发行包缺少仓库级依赖解析和锁文件，README 的根目录安装与验证命令
+已失效；Python 质量检查、类型边界、发行包构建和多版本兼容没有自动门禁。API
+层仍直接导入部分 core 能力，SQLite 首版迁移使用 `executescript` 时可能在失败后
+留下半成品 Schema，少量检测阈值也未进入 `RuleProfile`。
+
+**方案**：建立 uv workspace 与统一 `uv.lock`，把 Ruff、mypy、coverage、build 和
+HTTP 测试依赖放入开发依赖组；CI 覆盖 Python 3.11/3.12/3.14，并执行编译、静态
+检查、边界类型检查、测试及双 wheel 构建。报告导出、解析异常和验证枚举收敛到
+Service；SQLite 在不改写已发布迁移内容的前提下逐条执行脚本，并将单个迁移、
+审计记录和 `user_version` 放入同一事务；剩余几何阈值进入 `RuleProfile`。
+上述工程治理同时固化到 `docs/project-contract.md` §4.1、§9、§11、§12，作为后续
+实现、评审和验收的强制基线。
+
+**验收**：`uv lock --check` 通过；CI 三版本可从锁文件构建；API 源码不直接导入
+`document_qa`；迁移注入失败后仅保留空的迁移审计表且可重新初始化；Ruff、渐进
+mypy、`compileall` 和双发行包构建通过；检测默认值迁移前后真实样例各阶段摘要
+及最终报告保持一致。
+
+**当前证据（2026-08-28）**：锁文件、Ruff、mypy、compileall、11 项定向测试、
+API 健康检查以及 core/server 的 sdist 和 wheel 构建已通过；真实样例 parse 阶段为
+源文档 46 页/1360 Block、目标文档 46 页/15284 Block。完整测试当前 83 项中 4 项
+失败（历史并发载荷兼容、数字展示值、Golden Sample 分数、文字图片重叠），后续
+阶段和失败归因尚未完成，因此 T22 保持“实施中”。
 
 ---
 

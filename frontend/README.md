@@ -41,4 +41,4 @@ import { cn } from "./lib/cn"
 禁止在组件中重复使用数组 `join` 或字符串拼接实现相同能力。
 
 禁止使用 Tailwind 默认色板、任意值绕过契约，或用工具类重写 Ant Design 内部结构。
-完整规则见 `docs/ui-guidelines.md` §15.1。
+完整规则见 [UI 契约](./docs/design/ui-guidelines.md) §15.1。

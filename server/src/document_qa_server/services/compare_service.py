@@ -23,7 +23,6 @@ from document_qa.schemas import QAReport
 from document_qa_server.observability import log_event
 from document_qa_server.persistence import Database
 from document_qa_server.services.normalization_service import (
-    NormalizationError,
     NormalizationService,
 )
 
@@ -31,6 +30,10 @@ from document_qa_server.services.normalization_service import (
 _run_lock = threading.Lock()
 
 TaskStatus = Literal["queued", "running", "done", "error"]
+
+
+class CompareParsingError(Exception):
+    """比较输入无法被核心解析，供协议层映射为校验失败。"""
 
 
 def _sanitize_error(exc: Exception) -> str:
@@ -229,7 +232,7 @@ class CompareService:
         """同步执行比较并返回报告与渲染页文件名索引。
 
         非 PDF 输入先经 LibreOffice 归一化；报告 metadata 记录
-        normalized_from。可能抛出 DocumentParsingError / NormalizationError。
+        normalized_from。可能抛出 CompareParsingError / NormalizationError。
         密码仅用于打开密码 PDF 的解析与渲染，不落入任何产物。
         """
 
@@ -265,18 +268,21 @@ class CompareService:
         with _run_lock:
             if render:
                 render_dir = self._render_dir / f"task-{uuid.uuid4().hex[:10]}"
-            report = DocumentQAPipeline(
-                profile=effective_profile,
-                glossary=glossary,
-                ocr_provider=self._ocr_provider,
-            ).compare(
-                source_pdf,
-                target_pdf,
-                render_dir=render_dir,
-                render_scope=render_scope,
-                source_password=source_password,
-                target_password=target_password,
-            )
+            try:
+                report = DocumentQAPipeline(
+                    profile=effective_profile,
+                    glossary=glossary,
+                    ocr_provider=self._ocr_provider,
+                ).compare(
+                    source_pdf,
+                    target_pdf,
+                    render_dir=render_dir,
+                    render_scope=render_scope,
+                    source_password=source_password,
+                    target_password=target_password,
+                )
+            except DocumentParsingError as exc:
+                raise CompareParsingError(str(exc)) from exc
             rendered = (
                 self._index_rendered(render_dir) if render else {"source": [], "target": []}
             )

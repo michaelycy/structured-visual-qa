@@ -37,9 +37,6 @@ class PageAligner:
         settings = self.profile.alignment
         source_pages = sorted(source.pages, key=lambda page: page.page)
         target_pages = sorted(target.pages, key=lambda page: page.page)
-        source_by_number = {page.page: page for page in source_pages}
-        target_by_number = {page.page: page for page in target_pages}
-
         identity = self._identity_alignment(source_pages, target_pages)
         if not settings.enabled:
             return identity

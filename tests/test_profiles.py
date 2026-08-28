@@ -67,6 +67,22 @@ class RuleProfileTests(unittest.TestCase):
         self.assertIn('"profile_id"', payload)
         self.assertIn('"MatchingWeights"', payload)
 
+    def test_layout_suppression_thresholds_are_profile_owned(self) -> None:
+        """文本流负重叠和深色背景阈值必须随 Profile 序列化。"""
+
+        payload = default_rule_profile().model_dump(mode="json")
+
+        self.assertEqual(
+            payload["matching"]["logical_grouping"]["negative_overlap_ratio"],
+            0.25,
+        )
+        self.assertEqual(
+            payload["detectors"]["thresholds"][
+                "invisible_dark_background_overlap_ratio"
+            ],
+            0.3,
+        )
+
     def test_detector_toggle_changes_runtime_result(self) -> None:
         """关闭偏移检测器后，同一匹配结果不再产生偏移 Issue。"""
 

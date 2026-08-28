@@ -47,6 +47,7 @@ class LogicalGroupingSettings(SchemaModel):
     horizontal_overlap_ratio: float = Field(default=0.3, ge=0, le=1)
     font_size_tolerance_ratio: float = Field(default=0.15, ge=0, le=1)
     edge_tolerance_ratio: float = Field(default=0.015, ge=0, le=0.2)
+    negative_overlap_ratio: float = Field(default=0.25, ge=0, le=1)
     counterpart_overlap_ratio: float = Field(default=0.5, ge=0, le=1)
 
 
@@ -133,7 +134,7 @@ class SeverityBand(SchemaModel):
 
 
 # 各检测器的缺省分档：轻微幅度 MEDIUM、严重幅度 HIGH。
-# 数值经过真实中英文 PDF 校准（见 docs/manuals/custom-rule-profile.md §7.6）。
+# 数值经过真实中英文 PDF 校准（见 docs/manuals/custom-rule-profile.md §7.4）。
 def _default_number_bands() -> list[SeverityBand]:
     """数字不一致：差异数 ≥5 为 HIGH，1～4 为 MEDIUM。"""
 
@@ -301,6 +302,10 @@ class DetectorThresholds(SchemaModel):
     invisible_color_threshold: int = Field(default=235, ge=200, le=255)
     # 文本透明度低于该值视为不可见；透明度由 PDF alpha/255 得到。
     invisible_opacity_threshold: float = Field(default=0.01, ge=0, le=1)
+    # 浅色文字与深色背景块重叠达到该比例时属于正常反白设计，不判隐形。
+    invisible_dark_background_overlap_ratio: float = Field(
+        default=0.3, ge=0, le=1
+    )
     # 透明目标文本与未匹配图片的重叠达到该比例时，判为局部文字栅格化。
     rasterized_image_overlap_ratio: float = Field(default=0.8, ge=0, le=1)
     # 转曲判定：源页文本字符数达到下限、且目标页文本字符数降到源的
@@ -312,6 +317,7 @@ class DetectorThresholds(SchemaModel):
     # 推断 LEFT/RIGHT/CENTER。所有比例均相对页面或行高归一化。
     alignment_min_lines: int = Field(default=3, ge=2, le=20)
     alignment_line_gap_ratio: float = Field(default=0.6, ge=0, le=3)
+    alignment_negative_overlap_ratio: float = Field(default=0.25, ge=0, le=1)
     alignment_horizontal_overlap_ratio: float = Field(default=0.3, ge=0, le=1)
     alignment_font_size_tolerance_ratio: float = Field(default=0.15, ge=0, le=1)
     alignment_edge_tolerance_ratio: float = Field(default=0.015, ge=0, le=0.2)

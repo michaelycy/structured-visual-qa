@@ -2,33 +2,29 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 
-from document_qa.parsers import DocumentParsingError
-from document_qa.profiles import default_rule_profile
 from document_qa_server.api.dto import CompareRequest
 from document_qa_server.services import (
+    CompareParsingError,
     CompareService,
+    FileService,
     GlossaryService,
     NormalizationError,
     ProfileService,
 )
-from document_qa_server.services.file_service import ACCEPTED_SUFFIXES
 
 router = APIRouter(prefix="/api", tags=["compare"])
 
 
-def _resolve_document(value: str, label: str) -> Path:
+def _resolve_document(value: str, label: str, http: Request):
     """校验输入是存在的本地文档（PDF 或可归一化 Office 格式）。"""
 
-    path = Path(value).expanduser().resolve()
-    if not path.is_file() or path.suffix.lower() not in ACCEPTED_SUFFIXES:
-        raise HTTPException(
-            status_code=400, detail=f"无效{label}文档路径: {path}"
-        )
-    return path
+    service: FileService = http.app.state.files
+    try:
+        return service.resolve_document(value)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"无效{label}文档路径") from exc
 
 
 def _load_glossary(request: CompareRequest, http: Request):
@@ -50,13 +46,13 @@ def _load_profile(request: CompareRequest, http: Request):
     profiles/ 子目录；带路径的值仍按服务器本地文件处理。
     """
 
-    if not request.profile_path:
-        return default_rule_profile()
     profile_service: ProfileService = http.app.state.profiles
+    if not request.profile_path:
+        return profile_service.default()
     try:
         if "/" not in request.profile_path and "\\" not in request.profile_path:
             return profile_service.get(request.profile_path)
-        return profile_service.load(Path(request.profile_path))
+        return profile_service.load(profile_service.resolve_path(request.profile_path))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -92,8 +88,8 @@ def compare(request: CompareRequest, http: Request, background: BackgroundTasks)
     """
 
     service: CompareService = http.app.state.compare
-    source = _resolve_document(request.source, "源")
-    target = _resolve_document(request.target, "目标")
+    source = _resolve_document(request.source, "源", http)
+    target = _resolve_document(request.target, "目标", http)
     profile = _load_profile(request, http)
     glossary = _load_glossary(request, http)
 
@@ -110,7 +106,7 @@ def compare(request: CompareRequest, http: Request, background: BackgroundTasks)
                 source_password=request.source_password,
                 target_password=request.target_password,
             )
-        except DocumentParsingError as exc:
+        except CompareParsingError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except NormalizationError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc

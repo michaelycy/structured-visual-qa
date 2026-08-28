@@ -171,6 +171,7 @@ class TextAlignmentDetector:
             font_size_tolerance_ratio=(
                 thresholds.alignment_font_size_tolerance_ratio
             ),
+            negative_overlap_ratio=thresholds.alignment_negative_overlap_ratio,
         )
         groups: list[AlignmentTextFlowGroup] = []
         for group in builder.build(expanded_page):

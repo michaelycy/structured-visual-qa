@@ -51,17 +51,19 @@ QA Report
 
 ```text
 源 PDF ─┐
-        ├─ ①解析 → ②分组 → ③匹配 → ④检测 → ⑤评分 → ⑥JSON 报告
-目标 PDF┘  PyMuPDF  Region   全局最优   规则引擎   扣分制     + 可选 PNG 渲染
-                            一对一分配
+        ├─ ①解析 → ②分组 → ③页对齐 → ④Region 匹配 → ⑤检测 → ⑥报告
+目标 PDF┘  PyMuPDF  Region    动态规划      全局最优分配       规则引擎   评分+JSON
 ```
 
-1. **解析（`parsers/pymupdf_parser.py`）**：提取每个文本 Span 的字体、字号、颜色、BBox 以及图片块；以 SHA256 作为稳定文档 ID；限制输入不超过 100MB / 500 页，拒绝受密码保护的 PDF。输出纯数据模型，不携带任何 PyMuPDF 运行时对象。
+这是 `--verify-stage` 对外暴露的六个阶段：`parse / group / alignment / match /
+detect / report`。评分在报告组装阶段执行，不单独形成可暂停的验证阶段。
+
+1. **解析（`parsers/pymupdf_parser.py`）**：提取每个文本 Span 的字体、字号、颜色、透明度、BBox 以及图片块；以 SHA256 作为稳定文档 ID；限制输入不超过 100MB / 500 页。带打开密码的 PDF 可由 CLI/API 显式提供密码，密码只用于解析与渲染，不进入报告或持久化。输出纯数据模型，不携带任何 PyMuPDF 运行时对象。
 2. **分组（`grouping/region_grouper.py`）**：把零散 Span 按原始 PDF Block 聚合成可比较的 Region；同行允许保留强调色等混合样式，跨行合并则要求规范化颜色、字号、字重和斜体兼容，并在编号、项目符号或冒号明细处建立不可跨越的条目边界；字号达到全页文本中位数 1.25 倍以上的 Region 标记为标题，其余为段落；按 `(y, x)` 排序并写入上下邻接关系。
-3. **匹配（`matching/`）**：先通过双侧几何对应图，把同栏、连续、同类型且样式相近的原始 Region 组合为逻辑文本流，使两侧 M↔N 的 PDF Block 差异规范化为逻辑 1↔1；已确认逻辑组使用内部配对键锁定，避免全局分配拆散后牵连远端 Region。随后构建代价矩阵，相似度由四项加权组成——位置（0.40，按页面对角线归一化中心距）、尺寸（0.25，宽高比例均值）、类型（0.20，文本类型间跨语言互通、文本与图片禁止互配）、顺序（0.15，归一化序号差）；通过 SciPy 匈牙利算法（`linear_sum_assignment`）求全局最优分配；低于 `minimum_score`（默认 0.45）的分配会被丢弃，交给缺失检测处理而不是伪装成匹配。页与页之间先经 `PageAligner` 做跨页对齐，容忍翻译导致的整体移页。
-4. **检测（`detectors/rules.py`）**：产出布局与对象问题——缺图片（Critical）、缺文本（High，含多对一合并文本的覆盖判据容错）、新增区域（Low）、区域偏移（MEDIUM/High，按偏移比例）、字号缩小（High）、内容越界（Critical）、文本互叠（High，面积与双轴侵入同时达标，排除相邻行字形框接触）与文字压图（Critical，用面积比例 + 文字中心拓扑判据排除署名、背景图叠字等有意叠放）。重叠证据同时保存两组源文与译文区域，供详情页成对复核。内容级检测（`detectors/content.py` / `detectors/glossary.py`）复用同一匹配结果，产出数字不一致（`NUMBER_MISMATCH`）、漏译（`UNTRANSLATED_TEXT`）与术语违规（`GLOSSARY_VIOLATION`，术语库可选注入）。
-5. **评分（`scoring/scorer.py`）**：按严重度扣分（INFO 0 / LOW 1 / MEDIUM 4 / HIGH 10 / CRITICAL 25），每种问题类型设扣分上限，避免同一视觉缺陷因解析粒度不同被重复扣到 0；存在 Critical 强制 FAIL，存在 High 强制 REVIEW，独立于分数。
-6. **报告（`reporting/json_reporter.py`）**：输出经 Pydantic 校验的 JSON 报告，内嵌 `RuleProfile` 版本引用与完整快照，保证旧任务可复现；可选渲染源/目标页面 PNG（支持仅渲染有问题的页面）。
+3. **页对齐（`matching/page_aligner.py`）**：使用页面版面相似度和动态规划做跨页单调对齐，在 Profile 的移页窗口内恢复对应页，并显式标记缺失页和新增页。
+4. **Region 匹配（`matching/`）**：先通过双侧几何对应图，把同栏、连续、同类型且样式相近的原始 Region 组合为逻辑文本流，使两侧 M↔N 的 PDF Block 差异规范化为逻辑 1↔1；已确认逻辑组使用内部配对键锁定。随后按位置、尺寸、类型和顺序加权构建代价矩阵，通过 SciPy 匈牙利算法求全局最优分配；低于 `minimum_score`（默认 0.45）的分配进入缺失/新增判定。
+5. **检测（`detectors/`）**：产出页面与元素完整性、几何、排版、可见性、重叠、数字、文本漏译、图像化文字和术语问题。server 可选注入本地 OCR Provider，只对位置尺寸稳定的大图片候选区识别；未启用或失败时不阻断原有确定性流水线。
+6. **报告（`scoring/`、`reporting/`）**：先按严重度与 Issue 类型页内上限评分，再输出经 Pydantic 校验的 JSON 报告；报告内嵌 `RuleProfile` 版本引用、完整快照及可选 OCR 运行元数据，并可渲染源/目标页面 PNG。
 
 ## 4. 四个核心 Schema
 
@@ -106,10 +108,11 @@ QA Report
 | --- | --- | --- | --- |
 | Layout QA | 位置、尺寸、间距、对齐、重叠、越界 | `REGION_SHIFTED`、`CONTENT_OUT_OF_PAGE` | ✅ 已实现 |
 | Typography QA | 字号、字重、颜色、对齐、行高、字体兼容性 | `FONT_SHRINK` | ✅ 已实现（字号缩小） |
-| Typography QA | 字体族、颜色、对齐变化 | `TYPOGRAPHY_CHANGED` | 🔒 规划中（Schema/评分已预留） |
+| Typography QA | 字号放大、对齐方式变化、隐形文字 | `TYPOGRAPHY_CHANGED`、`TEXT_ALIGNMENT_CHANGED`、`INVISIBLE_TEXT` | ✅ 已实现；字体族/字重专项仍未实现 |
 | Text Flow QA | 换行、行数、溢出、裁切 | `ABNORMAL_WRAP`、`LINE_COUNT_EXPLOSION`、`TEXT_OVERFLOW`、`TEXT_CLIPPED` | 🔒 规划中（Schema/评分已预留） |
 | Text Overlap QA | 文本互叠、文字压图 | `TEXT_OVERLAP`、`TEXT_IMAGE_OVERLAP` | ✅ 已实现 |
 | Content QA | 数字一致性、漏译、术语合规 | `NUMBER_MISMATCH`、`UNTRANSLATED_TEXT`、`GLOSSARY_VIOLATION` | ✅ 已实现 |
+| Raster Text QA | 图像字形簇、候选区 OCR、转曲/栅格化 | `UNTRANSLATED_RASTER`、`TEXT_VECTORIZED`、`TEXT_RASTERIZED` | ✅ 已实现；OCR 为 server 可选能力 |
 | Object QA | 图片、Logo 等对象的数量与位置 | `MISSING_IMAGE`、`MISSING_ELEMENT`、`ADDED_ELEMENT` | ✅ 已实现 |
 | Table QA | 行列、合并单元格、边框、单元格布局 | `TABLE_STRUCTURE_CHANGED` | 🔒 规划中（Schema/评分已预留） |
 
@@ -146,9 +149,9 @@ position_similarity
 
 该规则应配置化。即使总体平均分较高，文字截断、图片丢失、表格损坏或页面丢失等 Critical 问题仍可直接导致失败。
 
-## 8. MVP 建议
+## 8. MVP 演进记录
 
-第一阶段只支持 PDF，形成最短闭环：
+项目初始阶段只支持 PDF，并以以下路径形成最短闭环：
 
 ```text
 PDF 解析
@@ -158,6 +161,8 @@ PDF 解析
 → JSON 报告
 ```
 
-后续再增加 DOCX、PPTX、表格专项检测、图片 Embedding、多模态复核和可视化报告。
+后续重点是复杂表格专项检测、通用像素差分、图片 Embedding 和多模态复核。
 
-> 现状：DOCX/PPTX/XLSX 已通过 LibreOffice 归一化支持（见 `docs/todo/tech-adoption-plan.md` T9）；表格专项检测、图片 Embedding、多模态复核仍为规划项。
+> 现状：DOCX/PPTX/XLSX 已通过 LibreOffice 归一化支持；Web 可视化、XLSX/HTML
+> 导出、图像指纹和候选区 OCR 已落地。表格专项检测、通用像素差分、图片
+> Embedding 与多模态复核仍为规划项。

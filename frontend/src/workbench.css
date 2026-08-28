@@ -158,12 +158,17 @@
   padding: 10px 0 2px !important;
 }
 
-.workbench-progress {
+.workbench-progress.ant-alert {
   grid-column: 2;
-  display: block;
   margin-top: -6px;
-  font-size: 14px;
-  line-height: 22px;
+  border: 1px solid var(--qa-info);
+  border-radius: var(--qa-radius-md);
+  background: var(--qa-info-soft);
+}
+
+.workbench-progress .ant-alert-message {
+  color: var(--qa-info-text);
+  font-weight: 600;
 }
 
 .workbench-detail-nav {

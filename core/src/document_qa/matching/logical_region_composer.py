@@ -28,6 +28,7 @@ class LogicalRegionComposer:
             line_gap_ratio=settings.line_gap_ratio,
             horizontal_overlap_ratio=settings.horizontal_overlap_ratio,
             font_size_tolerance_ratio=settings.font_size_tolerance_ratio,
+            negative_overlap_ratio=settings.negative_overlap_ratio,
             edge_tolerance_ratio=settings.edge_tolerance_ratio,
             max_regions=settings.max_regions,
         )

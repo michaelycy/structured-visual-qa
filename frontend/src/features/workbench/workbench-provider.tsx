@@ -47,8 +47,9 @@ export const WorkbenchProvider = (props: { children: React.ReactNode }) => {
   const [messageApi, contextHolder] = message.useMessage()
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const cancelRef = useRef(false)
+  const activeCompareRef = useRef(false)
   const cancelRejectRef = useRef<((reason: Error) => void) | null>(null)
-  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
     if (busy) {
@@ -71,7 +72,7 @@ export const WorkbenchProvider = (props: { children: React.ReactNode }) => {
 
   const cancelWaiting = () => {
     cancelRef.current = true
-    if (pollTimerRef.current) clearInterval(pollTimerRef.current)
+    if (pollTimerRef.current) clearTimeout(pollTimerRef.current)
     // 清除定时器后不会再进入轮询回调，必须主动结束等待 Promise，
     // 否则 finally 无法执行，工作台会永久停留在 busy 状态。
     cancelRejectRef.current?.(new Error("__cancelled__"))
@@ -92,6 +93,9 @@ export const WorkbenchProvider = (props: { children: React.ReactNode }) => {
   }
 
   const executeCompare = async (override?: CompareOverride) => {
+    // React 状态更新前仍可能发生连续点击；用同步引用阻止重复提交。
+    if (activeCompareRef.current) return
+    activeCompareRef.current = true
     const src = override?.source ?? source.path
     const tgt = override?.target ?? target.path
     const srcDisplay = override?.sourceDisplay ?? source.display
@@ -128,33 +132,32 @@ export const WorkbenchProvider = (props: { children: React.ReactNode }) => {
       const poll = await new Promise<TaskPollResponse>((resolve, reject) => {
         cancelRejectRef.current = reject
         let ticks = 0
-        const timer = setInterval(() => {
+        const pollOnce = () => {
           ticks += 1
           if (ticks > 300) {
-            clearInterval(timer)
             reject(new Error("__timeout__"))
             return
           }
           api.task(submitted.task_id!).then((state) => {
             if (cancelRef.current) {
-              clearInterval(timer)
               reject(new Error("__cancelled__"))
               return
             }
             setProgressText(TASK_STATUS_TEXT[state.status] ?? "处理中")
             if (state.status === "done") {
-              clearInterval(timer)
               resolve(state)
             } else if (state.status === "error") {
-              clearInterval(timer)
               reject(new Error(state.error ?? "质检失败"))
+            } else {
+              // 上一次查询完成后再计时，避免慢请求与下一次轮询重叠。
+              pollTimerRef.current = setTimeout(pollOnce, 1000)
             }
           }).catch((error) => {
-            clearInterval(timer)
             reject(error)
           })
-        }, 1000)
-        pollTimerRef.current = timer
+        }
+        // 提交成功后立即获取一次状态，让用户无需等待首个轮询周期。
+        pollOnce()
       })
       if (!poll.report) throw new Error("任务完成但缺少报告")
       applyReport(
@@ -173,6 +176,7 @@ export const WorkbenchProvider = (props: { children: React.ReactNode }) => {
         messageApi.error(`${text}。请检查服务状态或输入文档后重试。`)
       }
     } finally {
+      activeCompareRef.current = false
       setBusy(false)
       setProgressText("")
       pollTimerRef.current = null

@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+from document_qa_server import __version__
 from document_qa_server.api.middleware import RequestIdMiddleware
 from document_qa_server.observability import configure_file_logging, log_event
 from document_qa_server.adapters.ocr import build_ocr_provider
@@ -22,6 +23,7 @@ from document_qa_server.services import (
     ImageEvidenceService,
     NormalizationService,
     ProfileService,
+    ReportExportService,
     ReviewInsightService,
     ReviewService,
     SampleService,
@@ -93,7 +95,7 @@ def create_app(
 
     app = FastAPI(
         title="Structured Visual QA",
-        version="0.1.0",
+        version=__version__,
         lifespan=_build_lifespan(config, artifacts_dir=root),
     )
     # 前端开发服务器运行在其他端口，需要允许跨源访问本 API。
@@ -119,6 +121,10 @@ def create_app(
     app.state.insights = ReviewInsightService(artifacts_dir=root, database=database)
     history_service = CompareHistoryService(artifacts_dir=root, database=database)
     app.state.history = history_service
+    app.state.report_exports = ReportExportService(
+        artifacts_dir=root,
+        history=history_service,
+    )
     app.state.image_evidence = ImageEvidenceService(history_service)
     app.state.glossaries = GlossaryService(artifacts_dir=root, database=database)
     # 导出路由需要产物根目录；异步模式开关来自配置。

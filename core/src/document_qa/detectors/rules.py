@@ -723,7 +723,11 @@ class RuleDetector:
                         self._min_channel(color) < color_threshold
                         for color in text_colors
                     )
-                    or self._overlaps_dark_block(region, dark_boxes)
+                    or self._overlaps_dark_block(
+                        region,
+                        dark_boxes,
+                        thresholds.invisible_dark_background_overlap_ratio,
+                    )
                 ):
                     continue
             source_region = source_by_target.get(region.id)
@@ -746,6 +750,9 @@ class RuleDetector:
                         "text_color": text_colors[0] if text_colors else None,
                         "background_color": background,
                         "text_opacity": max(opacities) if opacities else None,
+                        "dark_background_overlap_ratio": (
+                            thresholds.invisible_dark_background_overlap_ratio
+                        ),
                         "text": target_text[:60] if target_text else None,
                         "source_text": source_text,
                         "target_text": target_text,
@@ -761,11 +768,13 @@ class RuleDetector:
             )
         return issues
 
-    @staticmethod
     def _overlaps_dark_block(
-        region: Region, dark_boxes: list[dict[str, float]]
+        self,
+        region: Region,
+        dark_boxes: list[dict[str, float]],
+        overlap_ratio: float,
     ) -> bool:
-        """判断文字区域是否落在深色背景块/图片上（重叠 ≥ 30% 面积）。"""
+        """按 Profile 阈值判断文字区域是否落在深色背景块或图片上。"""
 
         region_area = region.bbox.width * region.bbox.height
         if region_area <= 0:
@@ -781,10 +790,7 @@ class RuleDetector:
                 min(region.bbox.bottom, box["y"] + box["height"])
                 - max(region.bbox.y, box["y"]),
             )
-            if (
-                overlap_width * overlap_height
-                >= region_area * 0.3
-            ):
+            if overlap_width * overlap_height >= region_area * overlap_ratio:
                 return True
         return False
 

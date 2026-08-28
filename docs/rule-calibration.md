@@ -75,7 +75,11 @@ missing element  51
 
 ## 5. 校准后结果
 
-> 版本说明：本节「REVIEW / 91.80 / Critical 0」是校准早期的历史快照（仅布局类检测器的规则版本）。当前默认 Profile（`translation-balanced@1`）在同一批 UN China 2024 样本上的基线为 **FAIL / 86.80 / 119 issues**（已加入内容级数字/漏译与术语检测），见 `docs/todo/tech-adoption-plan.md` 的落地记录。
+> 版本说明：本节「REVIEW / 91.80 / Critical 0」是校准早期的历史快照（仅布局类
+> 检测器）。`FAIL / 86.80 / 119 issues` 是之后一次已经登记的历史基线，不再代表
+> 当前工作树。2026-08-28 完整测试中 Golden Sample 实际得到 80.39，原 86.80
+> 断言失败；在新的 parse → report 分阶段验收完成前，当前默认 Profile 暂无获准的
+> 新基线，不得直接把 80.39 写成正式期望值。失败归因见 T22。
 
 ```text
 状态             REVIEW
@@ -111,4 +115,3 @@ Low              3
 5. 每类问题至少 20 个阳性和 20 个阴性页面。
 
 只有建立人工标注集后，才能计算 Precision、Recall、F1，并确定生产阈值。当前阈值属于 MVP 校准值。
-

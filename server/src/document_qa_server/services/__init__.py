@@ -5,7 +5,7 @@
 也不知道服务层的存在。分层方向：api → services → 核心引擎。
 """
 
-from document_qa_server.services.compare_service import CompareService
+from document_qa_server.services.compare_service import CompareParsingError, CompareService
 from document_qa_server.services.file_service import FileService
 from document_qa_server.services.glossary_service import GlossaryService
 from document_qa_server.services.history_service import CompareHistoryService
@@ -15,6 +15,11 @@ from document_qa_server.services.normalization_service import (
     NormalizationService,
 )
 from document_qa_server.services.profile_service import ProfileService
+from document_qa_server.services.report_export_service import (
+    ReportExportService,
+    ReportNotFoundError,
+    ReportUnavailableError,
+)
 from document_qa_server.services.review_insight_service import ReviewInsightService
 from document_qa_server.services.review_service import ReviewService
 from document_qa_server.services.sample_service import BuiltinSampleScanResult, SampleService
@@ -22,6 +27,7 @@ from document_qa_server.services.verify_service import VerifyService, VerifyStag
 
 __all__ = [
     "CompareHistoryService",
+    "CompareParsingError",
     "CompareService",
     "BuiltinSampleScanResult",
     "FileService",
@@ -30,6 +36,9 @@ __all__ = [
     "NormalizationError",
     "NormalizationService",
     "ProfileService",
+    "ReportExportService",
+    "ReportNotFoundError",
+    "ReportUnavailableError",
     "ReviewInsightService",
     "ReviewService",
     "SampleService",

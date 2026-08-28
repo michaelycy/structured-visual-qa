@@ -16,7 +16,6 @@ def normalization_status(http: Request) -> dict:
     引擎缺失时前端应禁用 Office 上传并展示安装指引。
     """
 
-    service: NormalizationService = http.app.state.normalizer
     engine = NormalizationService.check_engine()
     return {
         "supported_extensions": NormalizationService.supported_extensions(),

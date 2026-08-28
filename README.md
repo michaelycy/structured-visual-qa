@@ -4,26 +4,38 @@ Structured Visual QA 用于比较源 PDF 与翻译后 PDF 的结构和视觉保�
 
 ## 当前能力
 
-- 使用 PyMuPDF 提取文本 Span、字体、BBox 和图片；
-- 将原始 Block 组合为可比较 Region；
-- 使用 SciPy 全局最优分配完成同页 Region 对齐；
-- 检测缺失元素、额外元素、区域偏移、字号缩小、越界和重叠；
-- 输出经过 Pydantic Schema 校验的 JSON 报告；
-- 可选渲染源文档和目标文档页面 PNG。
+- 使用 PyMuPDF 提取文本 Span、字体、透明度、BBox、图片及内容指纹；
+- 将原始 Block 组合为 Region，并通过跨页对齐和 SciPy 全局最优分配建立对应关系；
+- 检测页面/元素缺失、偏移与缩放、字号变化、对齐变化、越界、重叠、隐形文字、
+  文字转曲/栅格化、数字不一致、漏译和术语违规；
+- 可选使用本地 PaddleOCR 检查大图片候选区中的源语言残留，默认关闭且失败可降级；
+- server 支持 PDF 与 Office 文档归一化、异步任务、SQLite 历史/样本/Profile/复核、
+  XLSX/HTML 导出和 MCP stdio 接入；
+- 输出经过 Pydantic Schema 校验且内嵌 Rule Profile 快照的 JSON 报告，并可渲染
+  源/目标页面 PNG 作为复核证据。
 
 ## 安装
 
-建议创建独立虚拟环境：
+推荐使用仓库根的 uv workspace，同步 core、server 与开发工具：
+
+```bash
+uv sync --locked --all-packages --group dev
+```
+
+只安装需要的可选能力：MCP 增加 `--extra mcp`，PaddleOCR 增加
+`--extra ocr-paddle`；两者都需要时可重复传入两个 `--extra`。
+
+如不使用 uv，可按发行包依赖方向安装：
 
 ```bash
 python3.12 -m venv .venv
-.venv/bin/python -m pip install -e .
+.venv/bin/python -m pip install -e core -e server
 ```
 
 ## 使用
 
 ```bash
-document-qa source.pdf target.pdf \
+uv run document-qa source.pdf target.pdf \
   --output artifacts/qa-report.json \
   --render-dir artifacts/pages
 ```
@@ -31,19 +43,19 @@ document-qa source.pdf target.pdf \
 导出内置规则配置：
 
 ```bash
-document-qa --export-default-profile profiles/translation-balanced.v1.json
+uv run document-qa --export-default-profile profiles/translation-balanced.v1.json
 ```
 
 导出供配置界面生成表单的 JSON Schema：
 
 ```bash
-document-qa --export-profile-schema profiles/rule-profile.schema.json
+uv run document-qa --export-profile-schema profiles/rule-profile.schema.json
 ```
 
 使用经过界面或人工编辑并校验的规则配置：
 
 ```bash
-document-qa source.pdf target.pdf \
+uv run document-qa source.pdf target.pdf \
   --profile profiles/translation-balanced.v1.json \
   --output artifacts/qa-report.json
 ```
@@ -53,7 +65,7 @@ document-qa source.pdf target.pdf \
 也可以直接运行模块：
 
 ```bash
-python -m document_qa source.pdf target.pdf --output qa-report.json
+uv run python -m document_qa source.pdf target.pdf --output qa-report.json
 ```
 
 返回的状态包括：
@@ -69,7 +81,7 @@ python -m document_qa source.pdf target.pdf --output qa-report.json
 启动 FastAPI 服务器（默认端口 8765）：
 
 ```bash
-.venv/bin/document-qa-server --port 8765
+uv run document-qa-server --port 8765
 ```
 
 服务器启动后可访问：
@@ -92,7 +104,7 @@ cd frontend && bun run dev
 
 ```bash
 # 终端 1：启动后端
-.venv/bin/document-qa-server --port 8765
+uv run document-qa-server --port 8765
 
 # 终端 2：启动前端
 cd frontend && bun run dev
@@ -103,9 +115,17 @@ cd frontend && bun run dev
 ## 开发验证
 
 ```bash
-PYTHONPATH=src python -m unittest discover -s tests -v
-python -m compileall -q src tests
+uv lock --check
+uv run ruff check core/src server/src tests
+uv run mypy core/src/document_qa/schemas core/src/document_qa/profiles.py \
+  server/src/document_qa_server/persistence server/src/document_qa_server/settings.py
+uv run python -m compileall -q core/src server/src tests
+uv run python -m unittest discover -s tests -v
 ```
+
+涉及检测行为的改动还必须使用 `document-qa --verify-stage` 对 `examples/`
+真实 PDF 对依次执行 parse → group → alignment → match → detect → report，
+并按项目契约在阶段之间人工确认摘要。
 
 ## 许可证提示
 

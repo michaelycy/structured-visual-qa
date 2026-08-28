@@ -2,7 +2,7 @@
 
 ## 1. 目的
 
-Rule Profile 将匹配权重、检测器开关、检测阈值和评分规则封装为一个带版本的配置对象。CLI、后续 API 和配置界面必须共用同一个 Pydantic Schema，禁止界面直接编辑 Python 源代码。
+Rule Profile 将匹配权重、检测器开关、检测阈值和评分规则封装为一个带版本的配置对象。CLI、API 和 Web 配置界面共用同一个 Pydantic Schema，禁止界面直接编辑 Python 源代码。完整字段以 `RuleProfile` 导出的默认 JSON 和 JSON Schema 为准，本文只描述稳定结构。
 
 ## 2. 配置结构
 
@@ -18,7 +18,7 @@ RuleProfile
 │   └── logical_grouping
 │       ├── enabled / max_regions
 │       ├── line_gap_ratio / horizontal_overlap_ratio
-│       ├── font_size_tolerance_ratio / edge_tolerance_ratio
+│       ├── font_size_tolerance_ratio / edge_tolerance_ratio / negative_overlap_ratio
 │       └── counterpart_overlap_ratio
 ├── alignment
 │   ├── enabled
@@ -30,6 +30,7 @@ RuleProfile
 ├── detectors
 │   ├── enabled
 │   ├── thresholds
+│   ├── severity_overrides
 │   └── layout_analog_weights
 └── scoring
     ├── pass_score / fail_score
@@ -55,19 +56,19 @@ RuleProfile
 导出内置配置：
 
 ```bash
-document-qa --export-default-profile profiles/translation-balanced.v1.json
+uv run document-qa --export-default-profile profiles/translation-balanced.v1.json
 ```
 
 导出 JSON Schema：
 
 ```bash
-document-qa --export-profile-schema profiles/rule-profile.schema.json
+uv run document-qa --export-profile-schema profiles/rule-profile.schema.json
 ```
 
 使用指定配置执行 QA：
 
 ```bash
-document-qa source.pdf target.pdf \
+uv run document-qa source.pdf target.pdf \
   --profile profiles/translation-balanced.v1.json \
   --output artifacts/report.json
 ```
@@ -95,7 +96,11 @@ GET    /api/profile/schema
 GET    /api/profile/list
 GET    /api/profile/item/{filename}
 POST   /api/profile/save
+POST   /api/profile/item/{filename}/publish
 DELETE /api/profile/item/{filename}
 ```
 
-保存路径由服务端按 `profile_id` 与 `version` 生成，不接受客户端指定任意路径；写入采用原子替换。
+Profile 由服务端按 `profile_id` 与 `version` 生成兼容文件名，正文、摘要与状态保存在
+SQLite `rule_profile_versions` 中并通过事务写入；客户端不能指定服务器保存路径。
+发布操作创建或更新不可覆盖的已发布版本语义，历史报告继续引用任务执行时内嵌的
+Profile 快照。

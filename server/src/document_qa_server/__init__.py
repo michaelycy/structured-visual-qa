@@ -4,3 +4,10 @@
 独立的 document-qa 发行包中。依赖方向：api → services → document_qa。
 ASGI 应用实例见 document_qa_server.server:app。
 """
+
+from importlib.metadata import PackageNotFoundError, version
+
+try:
+    __version__ = version("document-qa-server")
+except PackageNotFoundError:
+    __version__ = "0.0.0+local"

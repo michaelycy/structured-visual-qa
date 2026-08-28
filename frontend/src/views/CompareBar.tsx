@@ -58,11 +58,13 @@ function PasswordField({
   label,
   name,
   value,
+  disabled,
   onChange,
 }: {
   label: string
   name: string
   value: string
+  disabled: boolean
   onChange: (value: string) => void
 }) {
   const inputId = useId()
@@ -75,6 +77,7 @@ function PasswordField({
         placeholder="无密码时留空…"
         style={{ minWidth: 160 }}
         value={value}
+        disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
         autoComplete="new-password"
       />
@@ -86,10 +89,12 @@ function PasswordField({
 function DocumentPicker({
   label,
   value,
+  disabled,
   onChange,
 }: {
   label: string
   value: DocumentRef
+  disabled: boolean
   onChange: (doc: DocumentRef) => void
 }) {
   const [samples, setSamples] = useState<string[]>([])
@@ -112,6 +117,7 @@ function DocumentPicker({
           name="file"
           accept=".pdf,.docx,.doc,.pptx,.ppt,.xlsx,.xls,.odt,.odp"
           showUploadList={false}
+          disabled={disabled}
           // 大文件先在前端拦截（后端同样限额），避免白传上百 MB 才报错。
           beforeUpload={(file) => {
             if (file.size > MAX_UPLOAD_MB * 1024 * 1024) {
@@ -142,6 +148,7 @@ function DocumentPicker({
           <Button
             className="document-picker__button"
             icon={<FileTextOutlined aria-hidden="true" />}
+            disabled={disabled}
           >
             <span className="document-picker__filename">
               {value.display || "点击选择文档"}
@@ -153,6 +160,7 @@ function DocumentPicker({
           placeholder="使用示例…"
           className="document-picker__sample"
           value={null}
+          disabled={disabled}
           onOpenChange={(open) => open && loadSamples()}
           onChange={(name) => {
             if (!name) return
@@ -212,9 +220,9 @@ export function CompareBar({
     <div className="compare-bar">
       {contextHolder}
       <div className="compare-bar__main">
-        <DocumentPicker label="源文档（原文）" value={source} onChange={onSource} />
+        <DocumentPicker label="源文档（原文）" value={source} disabled={busy} onChange={onSource} />
         <ArrowRightOutlined className="compare-bar__arrow" aria-hidden="true" />
-        <DocumentPicker label="目标文档（译文）" value={target} onChange={onTarget} />
+        <DocumentPicker label="目标文档（译文）" value={target} disabled={busy} onChange={onTarget} />
         <Button
           className="compare-bar__submit"
           type="primary"
@@ -251,6 +259,7 @@ export function CompareBar({
                     placeholder="内置平衡配置（推荐）…"
                     style={{ minWidth: 200 }}
                     value={profileFilename}
+                    disabled={busy}
                     onOpenChange={(open) => open && loadProfiles()}
                     onChange={(value) => onProfile(value ?? null)}
                     options={profiles.map((item) => ({
@@ -268,6 +277,7 @@ export function CompareBar({
                     placeholder="不启用…"
                     style={{ minWidth: 200 }}
                     value={glossaryReference}
+                    disabled={busy}
                     onOpenChange={(open) => open && loadGlossaries()}
                     onChange={(value) => onGlossary(value ?? null)}
                     options={glossaries.map((item) => ({
@@ -281,12 +291,14 @@ export function CompareBar({
                   label="源文档打开密码"
                   name="source-document-password"
                   value={sourcePassword}
+                  disabled={busy}
                   onChange={onSourcePassword}
                 />
                 <PasswordField
                   label="目标文档打开密码"
                   name="target-document-password"
                   value={targetPassword}
+                  disabled={busy}
                   onChange={onTargetPassword}
                 />
               </Space>

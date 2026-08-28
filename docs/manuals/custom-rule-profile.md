@@ -26,7 +26,7 @@ cd /path/to/structured-visual-qa
 ### 2.1 导出默认配置
 
 ```bash
-.venv/bin/document-qa \
+uv run document-qa \
   --export-default-profile profiles/translation-balanced.v1.json
 ```
 
@@ -58,7 +58,7 @@ cp profiles/translation-balanced.v1.json \
 ### 2.3 使用自定义配置运行
 
 ```bash
-.venv/bin/document-qa \
+uv run document-qa \
   source.pdf \
   target.pdf \
   --profile profiles/translation-strict.v1.json \
@@ -81,7 +81,11 @@ cp profiles/translation-balanced.v1.json \
 }
 ```
 
-## 3. 完整配置示例
+## 3. 精简可加载示例
+
+下面示例依赖 Pydantic 默认值补齐未列字段，适合讲解结构，不是当前 Schema 的完整
+字段清单。需要创建完整配置时必须执行 §2.1 的导出命令；需要工具生成表单或校验
+字段时使用 §10.1 的 JSON Schema。不要从本节复制后假设遗漏字段不存在。
 
 ```json
 {
@@ -108,6 +112,7 @@ cp profiles/translation-balanced.v1.json \
       "horizontal_overlap_ratio": 0.3,
       "font_size_tolerance_ratio": 0.15,
       "edge_tolerance_ratio": 0.015,
+      "negative_overlap_ratio": 0.25,
       "counterpart_overlap_ratio": 0.5
     }
   },
@@ -131,7 +136,9 @@ cp profiles/translation-balanced.v1.json \
       "content_out_of_page": true,
       "overlap": true,
       "number_mismatch": true,
-      "untranslated_text": true
+      "untranslated_text": true,
+      "untranslated_raster_ocr": true,
+      "text_rasterized": true
     },
     "thresholds": {
       "shifted_ratio": 0.05,
@@ -152,6 +159,9 @@ cp profiles/translation-balanced.v1.json \
     "layout_analog_weights": {
       "position": 0.7,
       "size": 0.3
+    },
+    "severity_overrides": {
+      "text_rasterized": "high"
     }
   },
   "scoring": {
@@ -329,6 +339,7 @@ position + size + type + order = 1.0
   "overlap": true,
   "number_mismatch": true,
   "untranslated_text": true,
+  "untranslated_raster_ocr": true,
   "text_rasterized": true
 }
 ```
@@ -342,6 +353,7 @@ position + size + type + order = 1.0
 | `overlap` | 新增文字重叠、文字图片重叠 |
 | `number_mismatch` | 页面数字集合不一致（数字错漏译） |
 | `untranslated_text` | 目标文本区仍保留源语言文字（漏译） |
+| `untranslated_raster_ocr` | 使用已注入 OCR Provider 检查大图片候选区内的源语言残留 |
 | `region_resized` | 匹配 Region 宽/高剧变（段落被合并或拆散） |
 | `text_fragmented` | 目标文字被竖排/拆散成字母碎片（窄列排版破坏） |
 | `font_grow` | 目标字号明显放大（换行爆炸前兆） |
@@ -389,7 +401,8 @@ shift = max(abs(x_shift_ratio), abs(y_shift_ratio))
 (target_font_size - source_font_size) / source_font_size
 ```
 
-`-0.2` 表示目标字号比源字号缩小超过 20% 时产生 `HIGH FONT_SHRINK`。
+`-0.2` 表示目标字号比源字号缩小超过 20% 时进入检测；默认分档下 20%～40%
+产生 `MEDIUM FONT_SHRINK`，达到 40% 后为 `HIGH`。
 
 取值必须位于 `-1～0`：
 
@@ -415,7 +428,7 @@ shift = max(abs(x_shift_ratio), abs(y_shift_ratio))
 
 三者取值范围均为 `0～1`。
 
-### 7.6 严重度分档（bands）
+### 7.4 严重度分档（bands）
 
 数字不一致、字号缩小与漏译三类检测支持按幅度分档严重度：轻微幅度 `MEDIUM`、
 严重幅度 `HIGH`，替代以往所有命中一律 HIGH 的扁平判定。
@@ -449,7 +462,7 @@ shift = max(abs(x_shift_ratio), abs(y_shift_ratio))
 - 基础阈值（如 `font_shrink_ratio`）仍先行把关是否算问题，分档只决定严重度；
 - 分档列表为空时退回该检测器缺省严重度（HIGH），等价于旧行为。
 
-### 7.4 图片 Caption 面积
+### 7.5 图片 Caption 面积
 
 ```json
 "image_caption_area_ratio": 0.005
@@ -461,7 +474,7 @@ shift = max(abs(x_shift_ratio), abs(y_shift_ratio))
 - 提高：更多小文字被视为 Caption；
 - 建议不要高于 `0.01`，否则可能忽略小型正文标签。
 
-### 7.5 未翻译文本判定
+### 7.6 未翻译文本判定
 
 ```json
 "untranslated_ratio": 0.7,
@@ -475,7 +488,7 @@ shift = max(abs(x_shift_ratio), abs(y_shift_ratio))
 
 源码同文、源语言无法判定或源页面本身中英混排时，该检测整体跳过。
 
-### 7.6 LibreOffice 归一化噪声容差
+### 7.7 LibreOffice 归一化噪声容差
 
 ```json
 "conversion_noise_ratio": 0.03
@@ -483,7 +496,7 @@ shift = max(abs(x_shift_ratio), abs(y_shift_ratio))
 
 当输入为 Word/PPT/Excel 等 Office 格式时，系统先经 LibreOffice 归一化为 PDF。归一化会引入约 1–3% 的版面转换噪声，该容差会**自动叠加**到偏移类阈值（`shifted_ratio`/`severely_shifted_ratio`）上，纯 PDF 流水线不受影响。报告 `metadata.normalized_from` 会标记转换来源。
 
-### 7.7 段落对齐方式推断
+### 7.8 段落对齐方式推断
 
 系统先按栏位、行距、字号和水平重叠把相邻文本行聚成临时段落流，再比较左边缘、右边缘和中心线的稳定性，推断 `left/right/center`。主要阈值如下：
 
@@ -499,7 +512,7 @@ shift = max(abs(x_shift_ratio), abs(y_shift_ratio))
 
 命中对齐变化后，系统输出 `HIGH TEXT_ALIGNMENT_CHANGED`，并抑制同一段落内由换行和对齐变化产生的重复行级 `REGION_SHIFTED/REGION_RESIZED`。
 
-### 7.8 透明文字与图片栅格化
+### 7.9 透明文字与图片栅格化
 
 ```json
 "invisible_opacity_threshold": 0.01,
@@ -509,6 +522,23 @@ shift = max(abs(x_shift_ratio), abs(y_shift_ratio))
 - `invisible_opacity_threshold`：PDF 文本 alpha 归一化后不高于该值，视为视觉不可见；
 - `rasterized_image_overlap_ratio`：已匹配透明译文文本与未匹配目标图片的重叠比例达到该值时，合并为 `text_rasterized`；
 - 命中后抑制同一图片的 `added_element`、同一透明文本的 `invisible_text` 以及两者的重叠问题。
+
+### 7.10 图像文字与候选区 OCR
+
+`untranslated_raster_*` 控制无 OCR 的图像字形簇检测；
+`untranslated_raster_ocr_*` 控制大图片候选数量、渲染 DPI、置信度、字符数和源脚本
+残留比例。完整字段较多，必须以导出的默认 Profile 为准。OCR 开关打开并不等于
+core 会自行加载模型：只有 server 配置 `DQA_OCR_ENABLED=true` 并成功构造 Provider
+时才执行 OCR；未安装 extra 或模型失败时保留确定性检测并记录降级状态。
+
+### 7.11 其他布局抑制阈值
+
+- `invisible_dark_background_overlap_ratio`：浅色文字与深色块重叠达到该比例时，
+  视为正常反白设计；
+- `alignment_negative_overlap_ratio`：对齐文本流允许的最大负行距比例；
+- `matching.logical_grouping.negative_overlap_ratio`：逻辑分组允许的最大负行距比例。
+
+这些值与其他检测阈值一样必须由 `RuleProfile` 持有，不得在检测器中写裸常量。
 
 ## 8. Scoring 配置
 
@@ -680,7 +710,7 @@ High 存在或 Score < 90     → REVIEW
 当前 CLI 在加载 `--profile` 时自动执行完整 Pydantic 校验。要单独验证配置而不处理文档，可以使用 Python：
 
 ```bash
-.venv/bin/python -c '
+uv run python -c '
 from pathlib import Path
 from document_qa.profiles import RuleProfileStore
 profile = RuleProfileStore.load(Path("profiles/translation-strict.v1.json"))
@@ -694,12 +724,13 @@ print(profile.reference)
 translation-strict@1
 ```
 
-后续 FastAPI 配置界面应提供独立的 `/validate` API；现阶段 CLI 加载即校验。
+当前 CLI 在加载时校验，Web 配置界面通过 `/api/profile/schema` 获取 Schema，并在
+`/api/profile/save` 保存边界再次执行服务端校验。尚未提供独立的 `/validate` 路由。
 
 ### 10.1 导出 JSON Schema
 
 ```bash
-.venv/bin/document-qa \
+uv run document-qa \
   --export-profile-schema profiles/rule-profile.schema.json
 ```
 
@@ -763,9 +794,11 @@ JSON Schema 可用于：
 FAIL 分数线必须低于 PASS 分数线
 ```
 
-### 11.4 删除未使用的 IssueType
+### 11.4 通过删除 IssueType 上限来关闭检测
 
-即使当前没有 `table_structure_changed` 检测器，也不能从 `issue_type_deduction_caps` 删除该键，否则配置校验失败。
+旧 Profile 缺少后来新增的 IssueType 上限时，加载边界会从默认配置补齐，以保持历史
+兼容；删除某个上限不会关闭检测器。需要关闭能力时使用 `detectors.enabled`，需要
+调整扣分时显式设置非负上限。最终通过校验的 Profile 必须覆盖全部 IssueType。
 
 ### 11.5 使用百分数 5 代替比例 0.05
 
@@ -842,13 +875,13 @@ draft → 样本验证 → published → archived
 运行测试：
 
 ```bash
-.venv/bin/python -m unittest discover -s tests -v
+uv run python -m unittest discover -s tests -v
 ```
 
 运行真实样本：
 
 ```bash
-.venv/bin/document-qa \
+uv run document-qa \
   source.pdf target.pdf \
   --profile profiles/translation-strict.v2.json \
   --output artifacts/calibration-report.json
@@ -858,7 +891,7 @@ draft → 样本验证 → published → archived
 
 - Profile JSON 不能包含 API Key、令牌、密码或文档正文；
 - `profile_id` 不是文件路径；
-- 后续 API 不应接受客户端指定服务器保存路径；
+- API 不接受客户端指定服务器保存路径；
 - 生产环境应限制 Profile JSON 大小；
 - 服务端必须重新执行 Pydantic 校验；
 - 发布配置前必须运行 Golden Sample；
@@ -872,4 +905,5 @@ draft → 样本验证 → published → archived
 - 修改配置不会创建自动 Changelog；
 - 新增检测指标仍需要先修改代码和 RuleProfile Schema，然后才能在 JSON 中配置。
 
-后续 FastAPI 和 React 界面应直接复用当前 `RuleProfile` 与导出的 JSON Schema。
+FastAPI 与 React 界面已经复用当前 `RuleProfile` 和导出的 JSON Schema；新增字段时
+仍需同步检查字段说明、表单展示和旧 Profile 兼容补齐逻辑。

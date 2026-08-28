@@ -25,7 +25,6 @@ from document_qa_server.services import (
     NormalizationService,
     ProfileService,
 )
-from document_qa_server.services.compare_service import CompareService as _CS
 from document_qa_server.services.history_service import CompareHistoryService
 from document_qa_server.settings import load_settings
 

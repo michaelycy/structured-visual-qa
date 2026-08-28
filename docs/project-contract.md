@@ -57,6 +57,24 @@
 
 PyMuPDF 同时承担 PDF 结构解析与页面渲染。业务模块不得泄漏 PyMuPDF 的 `Document`、`Page`、`Rect` 等运行时对象，只允许传递项目 Schema。
 
+### 4.1 Python 工程治理
+
+- 仓库根 `pyproject.toml` 是开发工具和 uv workspace 的唯一入口，workspace
+  成员固定为 `core/` 与 `server/`；两个发行包仍分别维护自己的运行时元数据；
+- `uv.lock` 必须提交版本控制，禁止手工编辑。依赖安装使用
+  `uv sync --locked --all-packages --group dev`；MCP、OCR 等重型或场景化能力只能
+  通过显式 extra 安装，不得进入默认运行时依赖；
+- 运行时依赖写入所属发行包的 `[project.dependencies]` 或
+  `[project.optional-dependencies]`，Ruff、mypy、build、coverage 和 HTTP 测试客户端等
+  开发工具只写入仓库根 `[dependency-groups].dev`；
+- `server` 对 `core` 的本地开发依赖必须声明为 workspace source，禁止依赖
+  `PYTHONPATH`、未记录的全局包或人工安装顺序才能运行；
+- 最低支持版本为 Python 3.11，默认开发与部署基线为 Python 3.12；CI 同时覆盖
+  最低版本、部署基线和当前最新稳定版 CPython；
+- 对外暴露的服务版本必须从已安装发行包元数据读取，禁止在应用代码中重复维护
+  版本字符串；
+- `core` 与 `server` 必须能分别构建 sdist 和 wheel。源码可运行不等于发行包可交付。
+
 ## 5. 许可证约束
 
 PyMuPDF 开源版本使用 GNU AGPL v3。项目进入闭源分发、SaaS 或商业交付前，负责人必须完成以下任一事项：
@@ -166,7 +184,12 @@ Critical 问题优先于平均分。规则阈值必须集中配置，禁止散�
 - 解析失败必须转换为明确异常，不得静默跳过；
 - 输入文件永远视为不可信；
 - 生产环境应在隔离 Worker 中解析文档，并设置 CPU、内存和执行时间限制；
-- 文件名不能直接用于拼接输出路径。
+- 文件名不能直接用于拼接输出路径；
+- API Key、令牌、密码和其他凭据只能来自环境变量、未纳入版本控制的 `.env`
+  或密钥管理系统；源码、测试、样例、日志和报告中禁止出现真实凭据；
+- 测试必须 Mock 需要认证的外部 API，默认测试与构建不得依赖外网或个人登录态；
+- CI 权限采用最小授权，第三方 Action 必须固定到完整提交 SHA；
+- 可选依赖未安装时必须保持默认能力可导入、可启动，并返回明确的启用指引。
 
 ## 10. 注释与编码约定
 
@@ -180,25 +203,59 @@ Critical 问题优先于平均分。规则阈值必须集中配置，禁止散�
 
 代码完成必须同时满足：
 
+- `uv lock --check` 通过，锁文件与所有 workspace 成员元数据一致；
+- `ruff check core/src server/src tests` 通过；Ruff 用于错误与质量门禁，禁止借机
+  对全仓库执行格式化或无关导入重排；
+- mypy 至少覆盖 schemas、RuleProfile、persistence 和 settings 等稳定边界；类型覆盖
+  应渐进扩大，禁止通过全局 `ignore_errors` 或大范围 `Any` 规避新增错误；
+- `python -m compileall -q core/src server/src tests` 通过；
 - Schema 校验测试通过；
 - Region 分组与匹配测试通过；
 - 每个检测器至少包含一个阳性和一个边界用例；
 - 可从测试代码生成 Source/Target PDF 并完成端到端比较；
 - JSON 报告可重新通过 `QAReport` Schema 校验；
 - 不包含密钥、令牌、文档正文样本或生成产物；
-- Python 编译检查通过。
+- 测试产物只能写入临时目录或已忽略的产物目录，测试结束后不得污染工作树；
+- 自动化测试是合并门禁；若仓库存在已登记的历史失败，本次变更不得增加失败数，
+  且交付说明必须列出失败用例和归因；
 - SQLite 必须开启外键约束；Schema 迁移可重复执行且不得重复导入数据；
+- 每个 SQLite 迁移的 Schema 修改、迁移审计记录和 `PRAGMA user_version` 必须在
+  同一事务提交；注入任意一步失败后不得留下半成品业务表或虚假的已迁移记录；
 - 数据库内每张业务表和每个字段必须在 `schema_descriptions` 数据字典中有
   中文用途说明；建表 SQL 同时保留中文注释；
 - 对比记录与完整 `QAReport` 必须在同一事务提交，读取后仍可通过当前
   `QAReport` Schema 校验；
+- `core` 与 `server` 的 sdist、wheel 构建通过，API 健康检查返回的版本与
+  `document-qa-server` 发行包元数据一致；
+- CI 必须从锁文件同步环境，并在最低支持版本、部署基线和当前最新稳定版 Python
+  上运行编译、静态检查和自动化测试；发行包至少在部署基线上完成构建。
+
+涉及解析、分组、对齐、匹配、检测、评分或报告行为时，还必须使用 `examples/`
+真实 PDF 对依次执行：
+
+```text
+parse → group → alignment → match → detect → report
+```
+
+每个阶段必须展示页数、Region 数、配对数、Issue 数或分数等适用摘要，并等待用户
+确认后才能进入下一阶段。交互式开发中，除非用户明确要求，不以 unittest 代替该
+分阶段验收。完成时还必须逐条说明修改点的行为不变式。
 
 ## 12. 变更规则
 
 - 新增 Issue 类型属于兼容变更；
 - 删除或重命名公开字段属于破坏性变更；
 - 匹配权重和严重度阈值变更必须附带 Golden Sample 结果；
+- 所有检测阈值和权重必须定义在 `RuleProfile`，运行时实际使用值必须进入 Issue
+  metrics 或报告内嵌的 Profile 快照；禁止在检测器、CLI、API 或 Reporter 中新增
+  裸阈值；
 - 更换 PDF 引擎必须保持 Schema 和坐标规范不变；
-- 引入 OCR、Embedding 或多模态 API 时必须增加可关闭的适配层，并在测试中 Mock 外部认证 API。
+- 引入 OCR、Embedding 或多模态 API 时必须增加可关闭的适配层，并在测试中 Mock 外部认证 API；
 - SQLite Schema 变更必须新增单向版本迁移，禁止修改已发布迁移；迁移必须
-  幂等并保留可审计记录，不得静默丢弃旧 JSON 数据。
+  幂等并保留可审计记录，不得静默丢弃旧 JSON 数据；
+- 新增、删除或升级依赖必须同步更新 `uv.lock`，说明运行时体积、许可证、安全和
+  Python 版本兼容性影响；非核心能力优先采用 optional extra；
+- 修改 workspace、质量工具或 CI 门禁时，必须同时更新根 `pyproject.toml`、锁文件、
+  README 命令和本契约；不得通过放宽规则、跳过测试或取消版本矩阵掩盖失败；
+- 修改本契约属于项目基线变更，必须获得用户确认，并在
+  `docs/todo/tech-adoption-plan.md` 留下问题、方案和验收证据。

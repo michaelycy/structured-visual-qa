@@ -9,14 +9,13 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Protocol
 
-MAX_UPLOAD_BYTES = 100 * 1024 * 1024
-
 # 上传直接受的格式：PDF 加可归一化的 Office 格式（转换在比较时进行）。
 from document_qa_server.services.normalization_service import (
     SUPPORTED_FORMATS,
     matches_magic,
 )
 
+MAX_UPLOAD_BYTES = 100 * 1024 * 1024
 ACCEPTED_SUFFIXES = (".pdf", *sorted(SUPPORTED_FORMATS))
 
 
@@ -41,6 +40,15 @@ class FileService:
         self._uploads_dir = artifacts_dir / "uploads"
         self._samples_dir = samples_dir
         self.max_upload_bytes = max_upload_bytes
+
+    @staticmethod
+    def resolve_document(value: str) -> Path:
+        """把本地输入解析为受支持的现存文档路径。"""
+
+        path = Path(value).expanduser().resolve()
+        if not path.is_file() or path.suffix.lower() not in ACCEPTED_SUFFIXES:
+            raise ValueError(f"无效文档路径: {path}")
+        return path
 
     async def save_upload_stream(self, filename: str, stream: _AsyncReader) -> Path:
         """流式校验并保存上传文件，返回服务器端路径。

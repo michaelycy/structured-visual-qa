@@ -1,7 +1,9 @@
 # Structured Visual QA 前端架构
 
-状态：**目标架构已确认，渐进迁移中**  
-架构风格：**统一壳层（Unified App Shell）+ Feature-first**  
+状态：**核心路由迁移完成，API 与 views 收口中**
+
+架构风格：**统一壳层（Unified App Shell）+ Feature-first**
+
 适用范围：`frontend/`  
 实现基线：2026-08-21
 
@@ -20,13 +22,15 @@
 
 ## 2. 当前基线
 
-当前代码已接入 Router、QueryClient 和统一 HTTP 客户端，但仍有以下结构问题：
+当前代码已经完成统一壳层、五个一级真实路由、Workbench feature 状态与 URL
+搜索参数接入；管理页仍通过 feature page 包装旧 `views/`，API 也尚未全部按 feature
+拆分。当前剩余问题如下：
 
 | 当前问题 | 目标 |
 | --- | --- |
-| `App.tsx` 同时负责壳层、页面分发、质检任务和报告状态 | 壳层与工作台业务分离 |
-| 子路由只声明路径，页面由 `App.tsx` 条件渲染 | 路由直接绑定 feature page |
-| 页面以 `useEffect + useState` 保存请求结果 | 使用声明式 Query，避免双状态 |
+| `features/*/pages` 中部分页面只是旧 `views/` 的路由包装 | 把组件、请求和状态逐步迁入所属 feature |
+| Router 仍深层导入 feature page | 各 feature 补公开入口后由装配层只引用公开 API |
+| 部分页面仍以 `useEffect + useState` 保存服务端结果 | 使用声明式 Query，避免双状态 |
 | `api.ts` 集中全部 DTO 和请求 | endpoint 按 feature 拆分，共享 DTO 进入 `contracts/` |
 | `views/` 混合页面和内部展示组件 | 迁入所属 feature |
 | `global.css` 混合全局和页面样式 | 全局样式与 feature 样式分离 |
@@ -158,7 +162,8 @@ AppShell
 - 服务端数据由 TanStack Query 持有，不长期复制到 `useState`；
 - 编辑草稿、Drawer、Modal 等局部状态归最近的 feature 组件；
 - 侧栏折叠、移动导航开关等纯布局状态归 `AppShell`；
-- 当前 `App.tsx` 的质检提交、轮询和报告状态迁入 `workbench`。
+- 工作台提交、轮询、停止等待和报告状态已经迁入 `features/workbench`；后续继续把
+  其集中式 API 调用与旧 `views/` 展示组件收口到 feature。
 
 ## 7. Query 与 API
 
@@ -190,10 +195,14 @@ Feature Page
 
 ## 9. 迁移顺序
 
-1. **壳层与路由**：建立 Provider、Router 和 `AppShell`，五个 URL 直接绑定页面。
-2. **工作台**：把提交、轮询、停止等待和报告状态迁入 `features/workbench`。
-3. **管理页面**：按 `history → samples → rules → glossary` 迁移页面、Query 和 API。
-4. **收口**：删除无调用者的 `views`、集中门面和页面级全局样式，补充关键测试。
+1. **壳层与路由（已完成）**：Provider、Router、`AppShell` 和五个 URL 已直接绑定
+   feature page。
+2. **工作台状态（已完成）**：提交、轮询、停止等待、历史恢复和报告 URL 状态已迁入
+   `features/workbench`。
+3. **管理页面（进行中）**：按 `history → samples → rules → glossary` 迁移 Query、
+   API、页面组件和样式；当前仍有旧 `views/` 包装。
+4. **收口（待完成）**：删除无调用者的 `views`、集中 `api.ts` 门面和页面级全局
+   样式，补充 feature 公共入口与关键测试。
 
 每个阶段保持 URL、API DTO 和用户可见业务行为不变，并独立完成构建与页面回归。
 

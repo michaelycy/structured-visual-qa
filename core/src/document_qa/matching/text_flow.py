@@ -24,6 +24,7 @@ class TextFlowBuilder:
         line_gap_ratio: float,
         horizontal_overlap_ratio: float,
         font_size_tolerance_ratio: float,
+        negative_overlap_ratio: float,
         edge_tolerance_ratio: float = 0.0,
         max_regions: int | None = None,
     ) -> None:
@@ -32,6 +33,7 @@ class TextFlowBuilder:
         self.line_gap_ratio = line_gap_ratio
         self.horizontal_overlap_ratio = horizontal_overlap_ratio
         self.font_size_tolerance_ratio = font_size_tolerance_ratio
+        self.negative_overlap_ratio = negative_overlap_ratio
         self.edge_tolerance_ratio = edge_tolerance_ratio
         self.max_regions = max_regions
 
@@ -70,7 +72,7 @@ class TextFlowBuilder:
             return False
         line_height = max(previous.bbox.height, current.bbox.height)
         gap = current.bbox.y - previous.bbox.bottom
-        if gap < -line_height * 0.25:
+        if gap < -line_height * self.negative_overlap_ratio:
             return False
         if gap > line_height * self.line_gap_ratio:
             return False

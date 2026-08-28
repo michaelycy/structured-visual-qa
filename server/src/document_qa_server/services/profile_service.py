@@ -59,6 +59,12 @@ class ProfileService:
 
         return RuleProfileStore.load(path)
 
+    @staticmethod
+    def resolve_path(value: str) -> Path:
+        """把协议层传入的外部 Profile 路径转换为本地路径对象。"""
+
+        return Path(value)
+
     def save(self, profile_data: dict) -> tuple[str, str]:
         """校验并保存草稿版本，返回数据库定位符与版本引用。"""
 

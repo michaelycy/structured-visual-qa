@@ -18,10 +18,14 @@ dependencies = [
 
 [project.optional-dependencies]
 mcp = ["mcp>=1.17,<2"]
+
 ocr-paddle = [
   "paddleocr>=3.7,<3.8",
   "paddlepaddle>=3.3,<3.4",
 ]
+
+[tool.uv.sources]
+document-qa = { workspace = true }
 
 [project.scripts]
 document-qa-server = "document_qa_server.__main__:main"

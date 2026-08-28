@@ -27,11 +27,11 @@ class VerifyService:
         self._artifacts_dir = artifacts_dir
 
     def run(
-        self, source: Path, target: Path, *, stop_after: Stage
+        self, source: Path, target: Path, *, stop_after: str
     ) -> list[VerifyStageResult]:
         """执行到指定阶段并返回逐阶段结果。"""
 
-        artifacts = StagedVerifier().run(source, target, stop_after=stop_after)
+        artifacts = StagedVerifier().run(source, target, stop_after=Stage(stop_after))
         paths = save_artifacts(artifacts, self._artifacts_dir / "stages")
         return [
             VerifyStageResult(

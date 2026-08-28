@@ -26,6 +26,7 @@
 | `comparison_glossaries` | 保存对比记录实际使用的术语库版本外键 |
 | `review_tasks` | 保存人工复核任务的报告身份快照 |
 | `review_decisions` | 保存逐 Issue 的确认、误报或忽略结论 |
+| `async_tasks` | 保存异步比较任务状态、错误及完成后的历史记录关联 |
 | `schema_migrations` | 记录已经应用的数据库结构迁移 |
 | `legacy_imports` | 审计旧 JSON 的一次性导入数量 |
 | `schema_descriptions` | 数据库内可查询的逐表、逐字段中文数据字典 |
@@ -41,6 +42,8 @@ stored_files ──< samples >── stored_files
                     └── comparison_glossaries ── glossary_versions
 
 review_tasks ──< review_decisions
+
+async_tasks ── history_record_id ──▶ comparison_records（逻辑关联，可为空）
 ```
 
 样本、规则和术语库的“删除”采用归档，不物理删除被历史引用的数据。删除
@@ -82,3 +85,7 @@ PRAGMA user_version;
 `integrity_check` 应返回 `ok`，`foreign_key_check` 应返回空结果。对比成功时，
 `comparison_records`、`comparison_reports` 和可选的
 `comparison_glossaries` 在同一事务中写入，任一写入失败都会整体回滚。
+
+每个版本迁移也必须原子执行：Schema 修改、`schema_migrations` 审计行和
+`PRAGMA user_version` 同时提交。迁移失败后不得留下半成品业务表或虚假的版本记录；
+修复故障后使用同一数据库重新初始化必须能够继续升级。

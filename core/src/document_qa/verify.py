@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import Any
 
 from document_qa.pipeline import DocumentQAPipeline
-from document_qa.profiles import RuleProfile, default_rule_profile
 
 
 class Stage(StrEnum):

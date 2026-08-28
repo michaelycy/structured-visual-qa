@@ -1,0 +1,43 @@
+[project]
+name = "structured-visual-qa-workspace"
+version = "0.0.0"
+requires-python = ">=3.11"
+dependencies = []
+
+[dependency-groups]
+dev = [
+  "build>=1.2,<2",
+  "coverage[toml]>=7.8,<8",
+  "httpx2>=2.12,<3",
+  "mypy>=1.16,<2",
+  "ruff>=0.12,<1",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["core", "server"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+
+[tool.mypy]
+python_version = "3.11"
+check_untyped_defs = true
+disallow_any_generics = false
+ignore_missing_imports = true
+warn_redundant_casts = true
+warn_unused_configs = true
+
+[tool.coverage.run]
+branch = true
+source = ["document_qa", "document_qa_server"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true

@@ -2,6 +2,7 @@ import { useEffect } from "react"
 import { getRouteApi, useNavigate } from "@tanstack/react-router"
 import { useQuery } from "@tanstack/react-query"
 import { Alert, Button, Empty, Spin, Tag, Typography } from "antd"
+import { LoadingOutlined } from "@ant-design/icons"
 import { CompareBar } from "../../../views/CompareBar"
 import { ReportDetail } from "../../../views/ReportDetail"
 import type { PageDetailsViewState } from "../../../views/PageDetails"
@@ -155,12 +156,15 @@ export const WorkbenchPage = () => {
           onSubmit={() => void workbench.runCompare()}
         />
         {busy ? (
-          <div className="workbench-progress" role="status" aria-live="polite">
-            <Typography.Text type="secondary">
-              {progressText} · 已耗时 {elapsed} 秒（大型文档可能需要一两分钟）
-            </Typography.Text>
-            <Button size="small" onClick={workbench.cancelWaiting}>停止等待</Button>
-          </div>
+          <Alert
+            className="workbench-progress"
+            type="info"
+            showIcon
+            icon={<LoadingOutlined spin />}
+            message={progressText || "正在提交质检任务"}
+            description={`已耗时 ${elapsed} 秒；完成后将自动展示新报告，大型文档可能需要一两分钟。`}
+            action={<Button size="small" onClick={workbench.cancelWaiting}>停止等待</Button>}
+          />
         ) : null}
       </section>
       <h2 className="workbench-detail-nav"><span>报告详情</span></h2>

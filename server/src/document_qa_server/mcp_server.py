@@ -144,6 +144,7 @@ def list_history() -> str:
                     "status": r.status,
                     "document_score": r.document_score,
                     "issue_total": r.issue_total,
+                    "problem_total": r.problem_total,
                 }
                 for r in records[:30]
             ]

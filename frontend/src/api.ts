@@ -8,6 +8,7 @@ export interface ReportSummary {
   review_pages: number
   failed_pages: number
   issue_counts: Record<string, number>
+  problem_total?: number | null
 }
 
 export interface Issue {
@@ -88,6 +89,89 @@ export interface ReviewRecord {
   updated_at: string
 }
 
+/** 误报归因统计：单一 Issue 类型的复核结论分布（T21 P0）。 */
+export interface IssueTypeInsight {
+  issue_type: string
+  detector: string
+  severity: string
+  confirmed: number
+  false_positive: number
+  ignored: number
+  reviewed: number
+  fp_rate: number
+}
+
+/** 复核判定的误报归因总览（/api/insights/review）。 */
+export interface ReviewInsight {
+  generated_at: string
+  pair_count: number
+  confirmed: number
+  false_positive: number
+  ignored: number
+  unmatched: number
+  by_type: IssueTypeInsight[]
+}
+
+/** 一条调优建议：阈值调整或严重度降级（/api/insights/review/suggestions）。 */
+export interface TuningSuggestion {
+  issue_type: string
+  kind: "threshold" | "severity"
+  field: string
+  current_value: number | string | null
+  proposed_value: number | string | null
+  fp_samples: number
+  confirmed_samples: number
+  rationale: string
+}
+
+/** 调优建议总览：建议列表 + 可直接保存的 DRAFT Profile 草案。 */
+export interface TuningAdvice {
+  base_reference: string
+  profile_basis: "stored" | "default"
+  sample_count: number
+  unmatched: number
+  suggestions: TuningSuggestion[]
+  proposed_profile: RuleProfile | null
+  notes: string[]
+}
+
+/** AI 修复报告中的一组误报诊断任务。 */
+export interface RepairCluster {
+  cluster_id: string
+  issue_type: string
+  detector: string
+  false_positive_count: number
+  confirmed_count: number
+  root_cause_status: "unverified"
+  evidence_status: "ready" | "partial"
+  suspected_stage: "parse" | "group" | "alignment" | "match" | "detect" | "report"
+  suspected_code_locations: string[]
+  investigation_questions: string[]
+  metrics_summary: Record<string, { count: number; min: number | null; max: number | null }>
+  representative_false_positives: Record<string, unknown>[]
+  representative_confirmed: Record<string, unknown>[]
+  rule_adjustment_available: boolean
+  recommended_action: string
+  regression_expectations: string[]
+}
+
+/** 面向代码修复 AI 的结构化误报诊断报告。 */
+export interface AIRepairReport {
+  schema_version: number
+  purpose: "code_repair"
+  generated_at: string
+  pair_count: number
+  reviewed: number
+  confirmed: number
+  false_positive: number
+  ignored: number
+  unmatched: number
+  profile_references: string[]
+  clusters: RepairCluster[]
+  content_safety_notice: string
+  operating_constraints: string[]
+}
+
 export interface HistoryRecord {
   record_id: string
   created_at: string
@@ -97,6 +181,7 @@ export interface HistoryRecord {
   document_score: number
   pages: number
   issue_total: number
+  problem_total?: number
   rule_profile_reference: string
   normalized_from?: Record<string, string | null> | null
   rendered?: { source: string[]; target: string[] } | null
@@ -252,6 +337,15 @@ export const documentQaService = {
       }),
     }),
   reviewTask: (taskId: string) => httpClient.json<ReviewRecord>(`/api/review/task/${taskId}`),
+  reviewInsight: () => httpClient.json<ReviewInsight>("/api/insights/review"),
+  tuningSuggestions: () => httpClient.json<TuningAdvice>("/api/insights/review/suggestions"),
+  aiRepairReport: () => httpClient.json<AIRepairReport>("/api/insights/review/repair-report"),
+  downloadAIRepairReport: (clusterIds: string[]) =>
+    httpClient.blob("/api/insights/review/repair-report/download", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cluster_ids: clusterIds }),
+    }),
   historyList: () =>
     httpClient.json<{ records: Omit<HistoryRecord, "report">[] }>("/api/history/list").then(
       (r) => r.records,

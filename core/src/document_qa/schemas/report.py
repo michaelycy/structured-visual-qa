@@ -37,6 +37,8 @@ class ReportSummary(SchemaModel):
     review_pages: int = Field(ge=0)
     failed_pages: int = Field(ge=0)
     issue_counts: dict[str, int] = Field(default_factory=dict)
+    # 旧报告没有该字段，读取边界会从完整 Issue 明细兼容计算。
+    problem_total: int | None = Field(default=None, ge=0)
 
 
 class QAReport(SchemaModel):

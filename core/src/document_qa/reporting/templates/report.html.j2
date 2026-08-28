@@ -50,7 +50,9 @@
       <div class="value">{{ "%.2f"|format(report.document_score) }}</div></div>
     <div class="stat"><div class="label">页面</div>
       <div class="value">{{ summary.pages }}</div></div>
-    <div class="stat"><div class="label">问题总数</div>
+    <div class="stat"><div class="label">问题组数</div>
+      <div class="value">{{ summary.problem_total if summary.problem_total is not none else summary.issue_counts.values()|sum }}</div></div>
+    <div class="stat"><div class="label">规则命中</div>
       <div class="value">{{ summary.issue_counts.values()|sum }}</div></div>
   </div>
 

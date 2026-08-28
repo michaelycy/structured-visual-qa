@@ -94,6 +94,34 @@ class MatchingAndDetectionTests(unittest.TestCase):
         self.assertEqual(len(image_issues), 1)
         self.assertEqual(QAScorer().score(issues)[1], QAStatus.FAIL)
 
+    def test_ignores_blank_unmatched_target_text(self) -> None:
+        """PDF 导出器产生的空白文本框不应计为新增元素。"""
+
+        source = Page(document_id="source", page=1, width=200, height=200)
+        target = Page(
+            document_id="target",
+            page=1,
+            width=200,
+            height=200,
+            regions=[
+                Region(
+                    id="target-blank",
+                    page=1,
+                    type=ElementType.PARAGRAPH,
+                    bbox=BoundingBox(x=10, y=10, width=20, height=10),
+                    content=Content(text=" \u00a0 "),
+                )
+            ],
+        )
+
+        issues = RuleDetector().detect(
+            source,
+            target,
+            RegionMatcher().match_page(source, target),
+        )
+
+        self.assertNotIn(IssueType.ADDED_ELEMENT, {issue.type for issue in issues})
+
     def test_detects_text_rasterized_without_duplicate_added_image(self) -> None:
         """透明译文层与同位置图片应合并为一个文字栅格化问题。"""
 

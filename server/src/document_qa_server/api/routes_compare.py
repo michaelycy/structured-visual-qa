@@ -129,14 +129,18 @@ def compare(request: CompareRequest, http: Request, background: BackgroundTasks)
             "history_record_id": record.record_id,
         }
 
-    task_id = service.submit(
-        source,
-        target,
-        displays=(
-            request.source_display or source.name,
-            request.target_display or target.name,
-        ),
-    )
+    try:
+        task_id = service.submit(
+            source,
+            target,
+            displays=(
+                request.source_display or source.name,
+                request.target_display or target.name,
+            ),
+        )
+    except CompareService.QueueFullError as exc:
+        # 排队上限：明确拒绝而不是无限积压（429 Too Many Requests）。
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
     background.add_task(
         service.execute,
         task_id,

@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+from document_qa_server.api.middleware import RequestIdMiddleware
+from document_qa_server.observability import configure_file_logging, log_event
 from document_qa_server.persistence import Database
 from document_qa_server.services import (
     CompareHistoryService,
@@ -17,11 +21,41 @@ from document_qa_server.services import (
     ImageEvidenceService,
     NormalizationService,
     ProfileService,
+    ReviewInsightService,
     ReviewService,
     SampleService,
     VerifyService,
 )
 from document_qa_server.settings import ServerSettings, load_settings
+
+
+def _build_lifespan(config: ServerSettings, *, artifacts_dir: Path):
+    """构建 lifespan：启动时挂载持久化日志并打点，停机时记录收尾事件。
+
+    configure_file_logging 必须晚于 uvicorn 的 dictConfig 执行，
+    lifespan startup 满足该时序；直接 uvicorn 启动与 --reload 均走此路径。
+    """
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        log_file: str | None = None
+        if config.log_file_enabled:
+            log_dir = config.log_dir or (artifacts_dir / "logs")
+            log_file = str(configure_file_logging(log_dir, config.log_retention_days))
+        # 启动事件是排障时间线的锚点：pid、日志路径、版本一次给全。
+        log_event(
+            "server_started",
+            pid=os.getpid(),
+            version=app.version,
+            log_file=log_file,
+        )
+        try:
+            yield
+        finally:
+            # 正常停机打点；日志里缺失该事件即可推断进程被强杀或崩溃。
+            log_event("server_stopped", pid=os.getpid())
+
+    return lifespan
 
 
 def create_app(
@@ -52,7 +86,11 @@ def create_app(
         database=database,
     )
 
-    app = FastAPI(title="Structured Visual QA", version="0.1.0")
+    app = FastAPI(
+        title="Structured Visual QA",
+        version="0.1.0",
+        lifespan=_build_lifespan(config, artifacts_dir=root),
+    )
     # 前端开发服务器运行在其他端口，需要允许跨源访问本 API。
     app.add_middleware(
         CORSMiddleware,
@@ -60,6 +98,8 @@ def create_app(
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    # 请求关联 ID（T20）：置于 CORS 外层，预检与被拒响应同样可追溯。
+    app.add_middleware(RequestIdMiddleware)
 
     # 把服务实例挂到 app.state，路由通过依赖注入获取，避免模块级单例。
     app.state.compare = compare_service
@@ -70,6 +110,8 @@ def create_app(
     app.state.database = database
     app.state.samples = sample_service
     app.state.reviews = ReviewService(artifacts_dir=root, database=database)
+    # 复核误报归因统计（T21 P0）：只读聚合，与复核服务共用数据库。
+    app.state.insights = ReviewInsightService(artifacts_dir=root, database=database)
     history_service = CompareHistoryService(artifacts_dir=root, database=database)
     app.state.history = history_service
     app.state.image_evidence = ImageEvidenceService(history_service)
@@ -82,6 +124,7 @@ def create_app(
     from document_qa_server.api.routes_files import router as files_router
     from document_qa_server.api.routes_glossary import router as glossary_router
     from document_qa_server.api.routes_history import router as history_router
+    from document_qa_server.api.routes_insights import router as insights_router
     from document_qa_server.api.routes_normalize import router as normalize_router
     from document_qa_server.api.routes_report import router as report_router
     from document_qa_server.api.routes_review import router as review_router
@@ -99,6 +142,7 @@ def create_app(
     app.include_router(history_router)
     app.include_router(glossary_router)
     app.include_router(report_router)
+    app.include_router(insights_router)
 
     @app.get("/api/health")
     def health() -> dict:

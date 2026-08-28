@@ -6,6 +6,7 @@ webapp-artifacts/），部署时用 DQA_ 前缀环境变量或 .env 覆盖。
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -39,9 +40,29 @@ class ServerSettings(BaseSettings):
     # 比较任务异步模式：True 时 compare 立即返回 task_id 由后台执行；
     # False 时保持同步阻塞行为（CLI/测试回归路径）。
     async_mode: bool = True
+    # 持久化日志（T20）：JSON 事件与 uvicorn 访问/错误日志按天轮转落盘，
+    # 便于事后排障；关闭后退回纯 stderr/stdout（与历史行为一致）。
+    log_file_enabled: bool = True
+    # None 表示跟随 artifacts_dir/logs；显式路径供部署侧分离数据与日志。
+    log_dir: Path | None = None
+    # 按天轮转后保留的历史文件数；超出自动删除，给磁盘占用一个上界。
+    log_retention_days: int = 14
 
 
 def load_settings() -> ServerSettings:
-    """读取配置；构造失败（如 .env 非法）由调用方转为启动错误。"""
+    """读取配置；构造失败（如 .env 非法）由调用方转为启动错误。
 
-    return ServerSettings()
+    绑定非回环地址时输出安全告警：compare 接受服务器本地任意文档
+    路径（内网质检工作台的既定用法），暴露到非回环网络等于允许
+    该网段读取本机文档的分析结果，必须显式知情。
+    """
+
+    settings = ServerSettings()
+    if settings.host not in ("127.0.0.1", "localhost", "::1"):
+        logging.getLogger("document_qa_server").warning(
+            "DQA_HOST=%s 为非回环地址：API 将接受该网络上任意客户端的"
+            "比较请求，且可引用服务器本地任意 PDF/Office 路径。生产部署"
+            "请配套网络隔离或认证网关。",
+            settings.host,
+        )
+    return settings

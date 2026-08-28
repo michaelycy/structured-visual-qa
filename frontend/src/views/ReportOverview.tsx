@@ -39,6 +39,7 @@ export function ReportOverview({
   const [exporting, setExporting] = useState<"xlsx" | "html" | null>(null)
   const [messageApi, contextHolder] = message.useMessage()
   const issueTotal = Object.values(summary.issue_counts).reduce((sum, count) => sum + count, 0)
+  const problemTotal = summary.problem_total ?? issueTotal
   // 交付风险卡与默认判定一致：High/Critical 归为严重，其余为一般提示。
   const severeTotal = (summary.issue_counts.critical ?? 0) + (summary.issue_counts.high ?? 0)
   const generalTotal = Math.max(issueTotal - severeTotal, 0)
@@ -71,7 +72,7 @@ export function ReportOverview({
             <span translate="no">{report.rule_profile_reference}</span>
           </Tag>
           <Typography.Text type="secondary" className="report-page-summary">
-            共 {summary.pages} 页 · {summary.passed_pages} 页通过 · {summary.review_pages} 页复核 · {summary.failed_pages} 页失败
+            共 {summary.pages} 页 · {problemTotal} 个问题组 · {issueTotal} 条规则命中 · {summary.passed_pages} 页通过 · {summary.review_pages} 页复核 · {summary.failed_pages} 页失败
           </Typography.Text>
         </Space>
         <Space wrap size={8}>
@@ -130,7 +131,7 @@ export function ReportOverview({
         <Col xs={24} sm={12} xl={6}>
           <Card className="metric-card metric-card--critical" variant="borderless">
             <div className="metric-card__label">
-              <span><ExclamationCircleFilled aria-hidden="true" /> 严重问题</span>
+              <span><ExclamationCircleFilled aria-hidden="true" /> 严重命中</span>
               <span>Critical / High</span>
             </div>
             <div className="metric-card__body">
@@ -143,7 +144,7 @@ export function ReportOverview({
         <Col xs={24} sm={12} xl={6}>
           <Card className="metric-card metric-card--warning" variant="borderless">
             <div className="metric-card__label">
-              <span><WarningFilled aria-hidden="true" /> 一般问题</span>
+              <span><WarningFilled aria-hidden="true" /> 一般命中</span>
               <span>Medium / Low / Info</span>
             </div>
             <div className="metric-card__body">

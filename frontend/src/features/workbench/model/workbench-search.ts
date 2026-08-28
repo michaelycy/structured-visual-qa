@@ -5,6 +5,7 @@ export interface WorkbenchSearch {
   page?: number
   issue?: string
   issueNumber?: string
+  sourceText?: string
   severity?: string[]
   issueType?: string[]
   review?: ReviewFilter
@@ -36,6 +37,9 @@ export const validateWorkbenchSearch = (search: Record<string, unknown>): Workbe
     issue: typeof search.issue === "string" ? search.issue : undefined,
     issueNumber: typeof search.issueNumber === "string" && search.issueNumber
       ? search.issueNumber
+      : undefined,
+    sourceText: typeof search.sourceText === "string" && search.sourceText
+      ? search.sourceText
       : undefined,
     severity: severity?.length ? severity : undefined,
     issueType: issueType?.length ? issueType : undefined,

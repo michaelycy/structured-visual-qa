@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Iterator
 
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 
 # 表名、字段名（空串代表表）与中文用途。该数据同时是可查询的数据字典。
@@ -97,6 +97,11 @@ SCHEMA_DESCRIPTIONS: tuple[tuple[str, str, str], ...] = (
     ("comparison_records", "document_score", "报告总分，范围 0 至 100。"),
     ("comparison_records", "page_count", "报告页面数量。"),
     ("comparison_records", "issue_total", "报告问题总数。"),
+    (
+        "comparison_records",
+        "problem_total",
+        "按页面、根因区域与系统性异常聚合后的问题组数量。",
+    ),
     ("comparison_records", "rule_profile_id", "本次使用的规则配置家族标识。"),
     ("comparison_records", "rule_profile_version", "本次使用的规则配置版本号。"),
     ("comparison_records", "rule_profile_reference", "面向外部展示的规则版本引用快照。"),
@@ -206,6 +211,12 @@ class Database:
                 connection.execute(
                     "INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)",
                     (5, "async_task_lifecycle", self.now()),
+                )
+            if 6 not in applied:
+                self._migration_6(connection)
+                connection.execute(
+                    "INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)",
+                    (6, "comparison_problem_total", self.now()),
                 )
             connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
@@ -462,6 +473,23 @@ class Database:
                 item
                 for item in SCHEMA_DESCRIPTIONS
                 if item[0] == "async_tasks"
+            ],
+        )
+
+    def _migration_6(self, connection: sqlite3.Connection) -> None:
+        """新增问题组数量摘要；历史值由 History Service 从完整报告安全回填。"""
+
+        connection.execute(
+            "ALTER TABLE comparison_records ADD COLUMN problem_total "
+            "INTEGER NOT NULL DEFAULT 0 CHECK(problem_total >= 0)"
+        )
+        connection.executemany(
+            "INSERT OR REPLACE INTO schema_descriptions("
+            "table_name, column_name, description) VALUES (?, ?, ?)",
+            [
+                item
+                for item in SCHEMA_DESCRIPTIONS
+                if item[0] == "comparison_records" and item[1] == "problem_total"
             ],
         )
 

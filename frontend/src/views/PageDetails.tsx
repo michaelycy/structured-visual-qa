@@ -45,6 +45,20 @@ function parseIssueNumberQueries(value: string): string[] {
   )]
 }
 
+/** 归一化原文文本与查询词：小写化并折叠全部空白（PDF 提取文本常含换行与多余空格）。 */
+function normalizeSourceText(value: string): string {
+  return value.toLowerCase().replace(/\s+/g, " ").trim()
+}
+
+/** 取 Issue 的原文证据文本；重叠类 Issue 有两段原文区域（原文区域 2 = source_other_text），一并纳入匹配。 */
+function issueSourceTexts(issue: Issue): string[] {
+  const metrics = issue.metrics ?? {}
+  const texts: string[] = []
+  if (typeof metrics.source_text === "string") texts.push(metrics.source_text)
+  if (typeof metrics.source_other_text === "string") texts.push(metrics.source_other_text)
+  return texts
+}
+
 function pageImage(
   side: "source" | "target",
   page: number,
@@ -328,6 +342,7 @@ export interface PageDetailsViewState {
   page?: number
   issue?: string
   issueNumber?: string
+  sourceText?: string
   severity?: string[]
   issueType?: string[]
   review?: ReviewFilter
@@ -1084,6 +1099,7 @@ export function PageDetails({
   const [localActiveIssueId, setLocalActiveIssueId] = useState<string | null>(null)
   // 复核工作流筛选：只看某种严重度 / 只看未复核，处理上百条 Issue 时定位更快。
   const [localIssueNumberFilter, setLocalIssueNumberFilter] = useState("")
+  const [localSourceTextFilter, setLocalSourceTextFilter] = useState("")
   const [localSeverityFilter, setLocalSeverityFilter] = useState<string[]>([])
   const [localIssueTypeFilter, setLocalIssueTypeFilter] = useState<string[]>([])
   const [localReviewFilter, setLocalReviewFilter] = useState<ReviewFilter>("all")
@@ -1093,6 +1109,9 @@ export function PageDetails({
   const issueNumberFilter = viewState
     ? viewState.issueNumber ?? ""
     : localIssueNumberFilter
+  const sourceTextFilter = viewState
+    ? viewState.sourceText ?? ""
+    : localSourceTextFilter
   const severityFilter = viewState ? viewState.severity ?? EMPTY_SEVERITIES : localSeverityFilter
   const issueTypeFilter = viewState
     ? viewState.issueType ?? EMPTY_ISSUE_TYPES
@@ -1142,7 +1161,7 @@ export function PageDetails({
       }))
   }
 
-  // 问题列表覆盖整份文档；点击行会同步切换双栏页码并高亮目标区域。
+  // 规则命中列表覆盖整份文档；点击行会同步切换双栏页码并高亮目标区域。
   const visibleIssues = useMemo(() => {
     let list = allIssues
     const issueNumberQueries = parseIssueNumberQueries(issueNumberFilter)
@@ -1155,6 +1174,16 @@ export function PageDetails({
     }
     if (severityFilter.length) {
       list = list.filter((issue) => severityFilter.includes(issue.severity))
+    }
+    // 原文文本模糊过滤：逐词 AND 收窄；换行/多余空白归一后再比对，
+    // 避免"UN Entity"匹配不上源文本里的换行断词。
+    const sourceTextQuery = normalizeSourceText(sourceTextFilter)
+    if (sourceTextQuery) {
+      const tokens = [...new Set(sourceTextQuery.split(" ").filter(Boolean))]
+      list = list.filter((issue) => {
+        const haystacks = issueSourceTexts(issue).map(normalizeSourceText)
+        return tokens.every((token) => haystacks.some((text) => text.includes(token)))
+      })
     }
     if (issueTypeFilter.length) {
       list = list.filter((issue) => issueTypeFilter.includes(issue.type))
@@ -1169,6 +1198,7 @@ export function PageDetails({
     allIssues,
     issueNumberById,
     issueNumberFilter,
+    sourceTextFilter,
     severityFilter,
     issueTypeFilter,
     reviewFilter,
@@ -1195,7 +1225,7 @@ export function PageDetails({
             value: item.page,
             label: `第 ${item.page} 页 · ${INTEGER_FORMATTER.format(item.score)} 分 · ${
               STATUS_META[item.status]?.label ?? item.status
-            }${item.issues.length ? ` · ${item.issues.length} 个问题` : ""}`,
+            }${item.issues.length ? ` · ${item.issues.length} 条规则命中` : ""}`,
           }))}
           showSearch
           optionFilterProp="label"
@@ -1222,7 +1252,7 @@ export function PageDetails({
 
       <div className="issue-list-heading">
         <Space wrap size={10}>
-          <Typography.Title level={5}>问题列表</Typography.Title>
+          <Typography.Title level={5}>规则命中列表</Typography.Title>
           <Tag variant="filled" className="issue-list-count">{allIssues.length}</Tag>
         </Space>
         <Space wrap size={8} className="issue-list-filters">
@@ -1237,6 +1267,19 @@ export function PageDetails({
               setLocalIssueNumberFilter(value)
               setLocalIssuePage(1)
               updateViewState({ issueNumber: value || undefined, issuePage: undefined })
+            }}
+          />
+          <Input
+            aria-label="按原文文本筛选问题"
+            allowClear
+            placeholder="按原文文本筛选…"
+            className="issue-list-text-filter"
+            value={sourceTextFilter}
+            onChange={(event) => {
+              const value = event.target.value
+              setLocalSourceTextFilter(value)
+              setLocalIssuePage(1)
+              updateViewState({ sourceText: value || undefined, issuePage: undefined })
             }}
           />
           <Select

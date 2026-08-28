@@ -73,7 +73,11 @@ class RuleDetector:
             alignment_result = self.alignment_detector.detect(
                 source, target, match_result
             )
-            issues.extend(alignment_result.issues)
+            issues.extend(
+                issue
+                for issue in alignment_result.issues
+                if issue.target_region not in rasterized_text_ids
+            )
         if (
             enabled.region_shifted
             or enabled.font_shrink
@@ -82,11 +86,22 @@ class RuleDetector:
         ):
             issues.extend(
                 self._detect_geometry(
-                    source, target, match_result, alignment_result
+                    source,
+                    target,
+                    match_result,
+                    alignment_result,
+                    suppressed_target_ids=rasterized_text_ids,
                 )
             )
         if enabled.text_fragmented:
-            issues.extend(self._detect_fragmented(target, source, match_result))
+            issues.extend(
+                self._detect_fragmented(
+                    target,
+                    source,
+                    match_result,
+                    suppressed_target_ids=rasterized_text_ids,
+                )
+            )
         if enabled.invisible_text:
             issues.extend(
                 self._detect_invisible_text(
@@ -105,6 +120,7 @@ class RuleDetector:
                     target,
                     match_result,
                     suppressed_pairs=rasterized_pairs,
+                    suppressed_target_ids=rasterized_text_ids,
                 )
             )
         return issues
@@ -153,6 +169,8 @@ class RuleDetector:
             if region_id in suppressed_target_ids:
                 continue
             region = target_regions[region_id]
+            if self._is_blank_text_region(region):
+                continue
             issues.append(
                 Issue(
                     id=f"p{target.page}-added-{region_id}",
@@ -304,6 +322,7 @@ class RuleDetector:
         target: Page,
         result: PageMatchResult,
         alignment_result: AlignmentDetectionResult,
+        suppressed_target_ids: set[str] | None = None,
     ) -> list[Issue]:
         """检测显著位移、尺寸剧变与字号变化，并保留触发规则的比例。"""
 
@@ -311,12 +330,15 @@ class RuleDetector:
         target_regions = {region.id: region for region in target.regions}
         thresholds = self.profile.detectors.thresholds
         enabled = self.profile.detectors.enabled
+        suppressed_target_ids = suppressed_target_ids or set()
         matches_by_pair = {
             (match.source_region_id, match.target_region_id): match
             for match in result.matches
         }
         issues: list[Issue] = []
         for diff in result.diffs:
+            if diff.target_region_id in suppressed_target_ids:
+                continue
             source_region = source_regions[diff.source_region_id]
             target_region = target_regions[diff.target_region_id]
             evidence = region_evidence(
@@ -528,7 +550,11 @@ class RuleDetector:
         )
 
     def _detect_fragmented(
-        self, target: Page, source: Page, result: PageMatchResult
+        self,
+        target: Page,
+        source: Page,
+        result: PageMatchResult,
+        suppressed_target_ids: set[str] | None = None,
     ) -> list[Issue]:
         """检测目标文字被竖排/拆散成单字母碎片的排版破坏。
 
@@ -540,6 +566,7 @@ class RuleDetector:
         """
 
         thresholds = self.profile.detectors.thresholds
+        suppressed_target_ids = suppressed_target_ids or set()
         source_regions = {region.id: region for region in source.regions}
         # 目标区域 → 源区域映射：碎片化目标区域匹配到的源区域文本即原文。
         source_by_target = {
@@ -548,7 +575,10 @@ class RuleDetector:
         }
         issues: list[Issue] = []
         for region in target.regions:
-            if region.type not in self._TEXT_TYPES:
+            if (
+                region.type not in self._TEXT_TYPES
+                or region.id in suppressed_target_ids
+            ):
                 continue
             text = region.content.text if region.content else None
             if not text:
@@ -762,12 +792,14 @@ class RuleDetector:
         target: Page,
         result: PageMatchResult,
         suppressed_pairs: set[frozenset[str]] | None = None,
+        suppressed_target_ids: set[str] | None = None,
     ) -> list[Issue]:
         """只报告翻译后新增或显著加剧的区域重叠。"""
 
         issues: list[Issue] = []
         thresholds = self.profile.detectors.thresholds
         suppressed_pairs = suppressed_pairs or set()
+        suppressed_target_ids = suppressed_target_ids or set()
         # 每个 Region 的源版面类比只需计算一次；两两组合会重复请求同一 Region。
         analog_cache: dict[str, Region | None] = {}
         source_by_id = {region.id: region for region in source.regions}
@@ -782,6 +814,12 @@ class RuleDetector:
         for first_index, second_index in candidate_pairs:
             first = regions[first_index]
             second = regions[second_index]
+            if first.id in suppressed_target_ids or second.id in suppressed_target_ids:
+                continue
+            if self._is_blank_text_region(
+                first
+            ) or self._is_blank_text_region(second):
+                continue
             if frozenset((first.id, second.id)) in suppressed_pairs:
                 continue
             if (
@@ -917,6 +955,15 @@ class RuleDetector:
                 )
             )
         return issues
+
+    @classmethod
+    def _is_blank_text_region(cls, region: Region) -> bool:
+        """忽略 PDF 导出器产生的纯空白文本框，避免新增和重叠误报。"""
+
+        if region.type not in cls._TEXT_TYPES:
+            return False
+        text = region.content.text if region.content else None
+        return not text or not text.strip()
 
     @staticmethod
     def _overlap_candidate_pairs(regions: list[Region]) -> list[tuple[int, int]]:

@@ -60,6 +60,8 @@ class HistoryCompatibilityTests(unittest.TestCase):
             loaded = service.get(record.record_id)
 
             self.assertEqual(loaded.status, "pass")
+            self.assertEqual(loaded.problem_total, 0)
+            self.assertEqual(loaded.report["summary"]["problem_total"], 0)
             caps = loaded.report["rule_profile_snapshot"]["scoring"][
                 "issue_type_deduction_caps"
             ]

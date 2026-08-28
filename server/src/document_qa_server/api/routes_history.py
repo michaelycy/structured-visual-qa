@@ -37,6 +37,7 @@ def list_history(http: Request) -> dict:
                 "document_score": item.document_score,
                 "pages": item.pages,
                 "issue_total": item.issue_total,
+                "problem_total": item.problem_total,
                 "rule_profile_reference": item.rule_profile_reference,
                 "normalized_from": item.normalized_from,
             }

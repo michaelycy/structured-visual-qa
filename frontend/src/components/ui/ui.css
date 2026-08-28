@@ -309,6 +309,11 @@
   gap: 2px;
 }
 
+/* 长表单滚动不穿透底层页面（Web Interface Guidelines: overscroll）。 */
+.qa-form-drawer .ant-drawer-body {
+  overscroll-behavior: contain;
+}
+
 .qa-form-drawer__title small {
   color: var(--qa-text-secondary);
   font-size: 12px;

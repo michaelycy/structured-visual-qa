@@ -7,6 +7,15 @@
   box-shadow: none;
 }
 
+/* Form.Item 默认尾距会叠加卡片内边距；改由栅格统一控制行距，避免末行留白偏大。 */
+.rule-editor__form-grid {
+  row-gap: var(--qa-space-6);
+}
+
+.rule-editor__form-grid .ant-form-item {
+  margin-bottom: 0;
+}
+
 .rule-editor__rule,
 .rule-editor__policy {
   display: flex;
@@ -28,6 +37,11 @@
   gap: var(--qa-space-1);
 }
 
+/* 开关行的说明文字是可点击 label：给出可交互暗示。 */
+label.rule-editor__rule-content {
+  cursor: pointer;
+}
+
 .rule-editor__number {
   width: 100%;
 }
@@ -44,7 +58,349 @@
   padding-top: var(--qa-space-2);
 }
 
+/* 复核反馈闭环（T21）：证据呈现样式。
+ * 契约约束：低装饰、边框分区、语义色只表达业务状态、4px 间距网格。 */
+
+/* —— 关键计数条：稳定扫描顺序（误报 → 确认 → 忽略 → 无法归因） —— */
+
+.rules-loop__stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  margin-bottom: var(--qa-space-5);
+  border: 1px solid var(--qa-border);
+  border-radius: var(--qa-radius-md);
+}
+
+.rules-loop__stat {
+  display: flex;
+  flex-direction: column;
+  gap: var(--qa-space-0-5);
+  padding: var(--qa-space-3) var(--qa-space-4);
+}
+
+/* 相邻单元格用 1px 边框分区，不做卡片堆叠。 */
+.rules-loop__stat + .rules-loop__stat {
+  border-left: 1px solid var(--qa-border);
+}
+
+.rules-loop__stat-value {
+  color: var(--qa-text);
+  font-size: 20px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 28px;
+}
+
+.rules-loop__stat-value--critical {
+  color: var(--qa-critical-text);
+}
+
+.rules-loop__stat-value--warning {
+  color: var(--qa-warning-text);
+}
+
+.rules-loop__stat-value--info {
+  color: var(--qa-info-text);
+}
+
+.rules-loop__stat-label {
+  color: var(--qa-text-secondary);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.rules-loop__scope {
+  color: var(--qa-text-secondary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  line-height: 18px;
+}
+
+/* —— 口径脚注层：解释性文本的固定归属 ——
+ * 与上方内容用 1px 分隔线建立边界，消除"解释文本紧贴表格/卡片"的失衡感。 */
+
+.rules-loop__notes {
+  display: grid;
+  gap: var(--qa-space-1);
+  margin-top: var(--qa-space-4);
+  padding-top: var(--qa-space-3);
+  border-top: 1px solid var(--qa-border);
+}
+
+.rules-loop__note {
+  margin: 0;
+  color: var(--qa-text-secondary);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+/* —— 结论分布条：堆叠比例条，颜色即语义，文字由相邻数字列承载 —— */
+
+.rules-loop__bar {
+  display: flex;
+  width: 120px;
+  height: 6px;
+  overflow: hidden;
+  border-radius: var(--qa-radius-xs);
+  background: var(--qa-canvas);
+}
+
+.rules-loop__bar-seg {
+  min-width: 2px;
+}
+
+.rules-loop__bar-seg--confirmed {
+  background: var(--qa-info);
+}
+
+.rules-loop__bar-seg--fp {
+  background: var(--qa-critical);
+}
+
+.rules-loop__bar-seg--ignored {
+  background: var(--qa-text-muted);
+}
+
+.rules-loop__bar-empty {
+  color: var(--qa-text-muted);
+}
+
+.rules-repair__code-location {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 规则页表格数字启用等宽数字（契约 §4）。 */
+.rules-page .qa-data-table .ant-table td {
+  font-variant-numeric: tabular-nums;
+}
+
+/* 页面水平留白保持 32px，纵向区块严格使用契约规定的 24px。 */
+.rules-page .management-page__section {
+  margin-block: var(--qa-space-6);
+  margin-inline: var(--qa-space-8);
+}
+
+/* 文本操作保持 8px 可辨间隔；伪元素仅扩展纵向点击热区，不改变表格视觉高度。 */
+.rules-table__actions .ant-btn {
+  position: relative;
+}
+
+.rules-table__actions .ant-btn::after {
+  position: absolute;
+  inset-block: -6px;
+  inset-inline: 0;
+  content: "";
+}
+
+/* —— 调优基准行：身份组（标签+引用+来源）在左，样本口径在右 —— */
+
+.rules-loop__basis {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--qa-space-2);
+  margin-bottom: var(--qa-space-4);
+}
+
+.rules-loop__basis-label {
+  color: var(--qa-text-secondary);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.rules-loop__basis-ref {
+  padding: var(--qa-space-0-5) var(--qa-space-2);
+  border: 1px solid var(--qa-border);
+  border-radius: var(--qa-radius-xs);
+  background: var(--qa-canvas);
+  font-size: 12px;
+  line-height: 18px;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.rules-loop__basis-tag {
+  padding: 1px var(--qa-space-2);
+  border-radius: var(--qa-radius-xs);
+  background: var(--qa-info-soft);
+  color: var(--qa-info-text);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 18px;
+}
+
+.rules-loop__basis-meta {
+  margin-left: auto;
+  color: var(--qa-text-secondary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  line-height: 18px;
+}
+
+/* —— 区块状态：加载、失败与空态保持稳定留白，避免内容紧贴容器边缘 —— */
+
+.rules-loop__state {
+  padding: var(--qa-space-6);
+}
+
+.rules-loop__loading {
+  display: flex;
+  min-height: 96px;
+  align-items: center;
+  justify-content: center;
+  gap: var(--qa-space-2);
+}
+
+/* 反馈闭环内容与标题对齐；内部用分隔行降低“卡片套卡片”的层级噪声。 */
+.rules-loop-section .qa-page-section__body {
+  padding: var(--qa-space-4) var(--qa-space-6);
+}
+
+.rules-loop-section .rules-loop__state {
+  padding: 0;
+}
+
+/* —— 建议列表：分隔线分区，语义只出现在类别章与目标值上 —— */
+
+.rules-suggestion-list {
+  display: grid;
+  gap: 0;
+  margin-bottom: 0;
+  max-width: 960px;
+}
+
+.rules-suggestion {
+  padding: var(--qa-space-4) 0;
+  border: 0;
+  border-top: 1px solid var(--qa-border);
+  border-radius: 0;
+  background: transparent;
+}
+
+.rules-suggestion__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--qa-space-2);
+  margin-bottom: var(--qa-space-2);
+}
+
+.rules-suggestion__kind {
+  padding: 1px var(--qa-space-2);
+  border-radius: var(--qa-radius-xs);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 18px;
+}
+
+.rules-suggestion__kind--threshold {
+  color: var(--qa-info-text);
+  background: var(--qa-info-soft);
+}
+
+.rules-suggestion__kind--severity {
+  color: var(--qa-warning-text);
+  background: var(--qa-warning-soft);
+}
+
+.rules-suggestion__type {
+  margin: 0;
+  color: var(--qa-text);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 22px;
+}
+
+.rules-suggestion__evidence {
+  margin-left: auto;
+  color: var(--qa-text-secondary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  line-height: 18px;
+}
+
+.rules-suggestion__change {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--qa-space-2);
+  margin-bottom: var(--qa-space-2);
+}
+
+.rules-suggestion__field {
+  font-size: 12px;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+}
+
+.rules-suggestion__values {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--qa-space-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.rules-suggestion__value {
+  color: var(--qa-text-secondary);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 22px;
+}
+
+.rules-suggestion__arrow {
+  color: var(--qa-text-muted);
+}
+
+/* 调整目标值是建议里唯一的强调点：语义色文字 + 浅底。 */
+.rules-suggestion__value--target {
+  padding: 0 var(--qa-space-2);
+  border-radius: var(--qa-radius-xs);
+}
+
+.rules-suggestion--threshold .rules-suggestion__value--target {
+  color: var(--qa-info-text);
+  background: var(--qa-info-soft);
+}
+
+.rules-suggestion--severity .rules-suggestion__value--target {
+  color: var(--qa-warning-text);
+  background: var(--qa-warning-soft);
+}
+
+.rules-suggestion__rationale {
+  max-width: 760px;
+  margin: 0;
+  color: var(--qa-text-secondary);
+  font-size: 12px;
+  line-height: 18px;
+}
+
 @media (max-width: 767px) {
+  .rules-page .management-page__section {
+    margin-block: var(--qa-space-6);
+    margin-inline: var(--qa-space-4);
+  }
+
+  .rules-loop__stats {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  /* 2×2 布局下第三格不再有左邻，撤掉分隔线避免孤立竖线。 */
+  .rules-loop__stat:nth-child(3) {
+    border-left: 0;
+  }
+
+  .rules-loop__stat:nth-child(n + 3) {
+    border-top: 1px solid var(--qa-border);
+  }
+
+  .rules-suggestion__evidence {
+    margin-left: 0;
+  }
+
   .rule-editor__policy {
     align-items: flex-start;
     flex-direction: column;

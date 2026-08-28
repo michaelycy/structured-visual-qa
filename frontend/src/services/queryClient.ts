@@ -83,6 +83,13 @@ export const api = {
   ),
   reviewTask: (taskId: string) =>
     query(queryKeys.review(taskId), () => documentQaService.reviewTask(taskId)),
+  reviewInsight: () => query(["insights", "review"], documentQaService.reviewInsight),
+  tuningSuggestions: () =>
+    query(["insights", "review", "suggestions"], documentQaService.tuningSuggestions),
+  aiRepairReport: () =>
+    query(["insights", "review", "repair-report"], documentQaService.aiRepairReport),
+  downloadAIRepairReport: (clusterIds: string[]) =>
+    documentQaService.downloadAIRepairReport(clusterIds),
   historyList: () => query(queryKeys.history, documentQaService.historyList),
   historyItem: (recordId: string) =>
     query(queryKeys.historyItem(recordId), () => documentQaService.historyItem(recordId)),

@@ -12,6 +12,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from document_qa.profiles import RuleProfile, default_rule_profile
+from document_qa.problem_groups import count_problem_groups
 from document_qa.schemas import QAReport
 from document_qa_server.observability import log_event
 from document_qa_server.persistence import Database
@@ -28,6 +29,7 @@ class CompareRecord(BaseModel):
     document_score: float
     pages: int
     issue_total: int
+    problem_total: int = Field(default=0, ge=0)
     rule_profile_reference: str
     normalized_from: dict[str, Any] | None = None
     rendered: dict[str, Any] | None = None
@@ -57,6 +59,7 @@ class CompareHistoryService:
         self._legacy_dir = artifacts_dir / "history"
         self._max_records = max_records
         self._import_legacy()
+        self._backfill_problem_totals()
         self._collect_orphan_render_dirs()
 
     def add(
@@ -122,7 +125,10 @@ class CompareHistoryService:
         # 校验；数据库中的历史 JSON 和当时的分数、状态均保持不变。
         legacy_report = json.loads(row["report_json"])
         compatible_report = self._upgrade_legacy_report(legacy_report)
-        report = QAReport.model_validate(compatible_report).model_dump(mode="json")
+        validated = QAReport.model_validate(compatible_report)
+        report = validated.model_dump(mode="json")
+        if report["summary"].get("problem_total") is None:
+            report["summary"]["problem_total"] = count_problem_groups(validated.pages)
         return self._record_from_row(row, report=report, include_paths=True)
 
     def _save(
@@ -142,12 +148,16 @@ class CompareHistoryService:
         compatible_report = self._upgrade_legacy_report(report)
         validated = QAReport.model_validate(compatible_report)
         report_dict = validated.model_dump(mode="json")
+        profile = self._profile_from_report(report_dict)
+        issue_total = sum(report_dict.get("summary", {}).get("issue_counts", {}).values())
+        problem_total = validated.summary.problem_total
+        if problem_total is None:
+            problem_total = count_problem_groups(validated.pages)
+            report_dict["summary"]["problem_total"] = problem_total
         report_json = json.dumps(
             report_dict, ensure_ascii=False, separators=(",", ":"), sort_keys=True
         )
         report_bytes = report_json.encode("utf-8")
-        profile = self._profile_from_report(report_dict)
-        issue_total = sum(report_dict.get("summary", {}).get("issue_counts", {}).values())
         normalized = (report_dict.get("metadata") or {}).get("normalized_from")
         with self._database.transaction() as connection:
             source_id = self._register_file(
@@ -168,10 +178,10 @@ class CompareHistoryService:
             connection.execute(
                 "INSERT OR IGNORE INTO comparison_records("
                 "record_id, source_file_id, target_file_id, sample_id, source_display, "
-                "target_display, status, document_score, page_count, issue_total, "
+                "target_display, status, document_score, page_count, issue_total, problem_total, "
                 "rule_profile_id, rule_profile_version, rule_profile_reference, "
                 "normalized_from_json, rendered_json, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     record_id,
                     source_id,
@@ -183,6 +193,7 @@ class CompareHistoryService:
                     report_dict["document_score"],
                     report_dict["summary"]["pages"],
                     issue_total,
+                    problem_total,
                     profile.profile_id,
                     profile.version,
                     report_dict["rule_profile_reference"],
@@ -239,6 +250,7 @@ class CompareHistoryService:
             document_score=report_dict["document_score"],
             pages=report_dict["summary"]["pages"],
             issue_total=issue_total,
+            problem_total=problem_total,
             rule_profile_reference=report_dict["rule_profile_reference"],
             normalized_from=normalized,
             rendered=rendered,
@@ -285,6 +297,32 @@ class CompareHistoryService:
             import_key, source_count=len(paths), imported_count=imported
         )
         self._evict_expired()
+
+    def _backfill_problem_totals(self) -> None:
+        """从不可变历史报告回填问题组数量；重复启动只写入相同确定值。"""
+
+        updates: list[tuple[int, str]] = []
+        with self._database.connect() as connection:
+            rows = connection.execute(
+                "SELECT record_id, report_json FROM comparison_reports"
+            ).fetchall()
+        for row in rows:
+            try:
+                report = QAReport.model_validate(
+                    self._upgrade_legacy_report(json.loads(row["report_json"]))
+                )
+            except (ValueError, TypeError, json.JSONDecodeError):
+                continue
+            problem_total = report.summary.problem_total
+            if problem_total is None:
+                problem_total = count_problem_groups(report.pages)
+            updates.append((problem_total, row["record_id"]))
+        if updates:
+            with self._database.transaction() as connection:
+                connection.executemany(
+                    "UPDATE comparison_records SET problem_total = ? WHERE record_id = ?",
+                    updates,
+                )
 
     def _evict_expired(self) -> None:
         """超过上限时删除最旧数据库记录；完整报告通过外键级联删除。
@@ -475,6 +513,7 @@ class CompareHistoryService:
             document_score=row["document_score"],
             pages=row["page_count"],
             issue_total=row["issue_total"],
+            problem_total=row["problem_total"],
             rule_profile_reference=row["rule_profile_reference"],
             normalized_from=json.loads(row["normalized_from_json"])
             if row["normalized_from_json"]

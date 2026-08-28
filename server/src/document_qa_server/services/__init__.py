@@ -15,6 +15,7 @@ from document_qa_server.services.normalization_service import (
     NormalizationService,
 )
 from document_qa_server.services.profile_service import ProfileService
+from document_qa_server.services.review_insight_service import ReviewInsightService
 from document_qa_server.services.review_service import ReviewService
 from document_qa_server.services.sample_service import BuiltinSampleScanResult, SampleService
 from document_qa_server.services.verify_service import VerifyService, VerifyStageResult
@@ -29,6 +30,7 @@ __all__ = [
     "NormalizationError",
     "NormalizationService",
     "ProfileService",
+    "ReviewInsightService",
     "ReviewService",
     "SampleService",
     "VerifyService",

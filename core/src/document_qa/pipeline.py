@@ -11,6 +11,7 @@ from document_qa.matching import LogicalRegionComposer, PageAligner, RegionMatch
 from document_qa.parsers import PyMuPDFParser
 from document_qa.glossary import Glossary
 from document_qa.profiles import RuleProfile, default_rule_profile
+from document_qa.problem_groups import count_problem_groups
 from document_qa.renderers import PyMuPDFRenderer
 from document_qa.schemas import (
     Document,
@@ -339,6 +340,7 @@ class DocumentQAPipeline:
                 severity.value: issue_counts.get(severity.value, 0)
                 for severity in Severity
             },
+            problem_total=count_problem_groups(page_results),
         )
         return QAReport(
             source_document_id=source.document_id,

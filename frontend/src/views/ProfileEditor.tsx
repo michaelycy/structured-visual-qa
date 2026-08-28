@@ -1,6 +1,6 @@
 /** 规则配置编辑器：按业务规则分组，服务端 Pydantic 校验兜底。 */
 
-import { useEffect, useState } from "react"
+import { useEffect, useId, useState } from "react"
 import {
   Alert,
   Button,
@@ -10,6 +10,7 @@ import {
   Form,
   Input,
   InputNumber,
+  Popconfirm,
   Row,
   Select,
   Space,
@@ -24,6 +25,8 @@ import { api } from "../services/queryClient"
 export interface ProfileEditorProps {
   /** 外部初始配置；缺省时使用内置默认值。 */
   initial?: RuleProfile
+  /** 表单被用户修改时回调（用于关闭前未保存拦截）。 */
+  onDirtyChange?: (dirty: boolean) => void
   /** 保存成功回调，参数为版本引用。 */
   onSaved?: (reference: string) => void
 }
@@ -97,17 +100,18 @@ function rasterizedPolicy(profile: RuleProfile): RasterizedPolicy {
   return "high"
 }
 
-/** 带解释的检测规则开关。 */
+/** 带解释的检测规则开关：说明文字整体可点（label 关联 Switch）。 */
 function RuleToggle(props: RuleToggleProps) {
   const { name, label, description } = props
+  const switchId = useId()
   return (
     <div className="rule-editor__rule">
-      <div className="rule-editor__rule-content">
+      <label className="rule-editor__rule-content" htmlFor={switchId}>
         <Typography.Text strong>{label}</Typography.Text>
         <Typography.Text type="secondary">{description}</Typography.Text>
-      </div>
+      </label>
       <Form.Item name={name} valuePropName="checked" noStyle>
-        <Switch aria-label={label} />
+        <Switch id={switchId} aria-label={label} />
       </Form.Item>
     </div>
   )
@@ -115,7 +119,7 @@ function RuleToggle(props: RuleToggleProps) {
 
 /** 编辑完整规则配置；纯展示单元不承担请求和版本决策。 */
 export function ProfileEditor(props: ProfileEditorProps) {
-  const { initial, onSaved } = props
+  const { initial, onDirtyChange, onSaved } = props
   const [form] = Form.useForm<ProfileForm>()
   const [profile, setProfile] = useState<RuleProfile | null>(initial ?? null)
   const [error, setError] = useState("")
@@ -189,7 +193,13 @@ export function ProfileEditor(props: ProfileEditorProps) {
     })
   }, [profile, form])
 
-  if (!profile) return <span>{error || "加载默认配置…"}</span>
+  if (!profile) {
+    return error ? (
+      <Alert type="error" showIcon message={error} />
+    ) : (
+      <span role="status">加载默认配置…</span>
+    )
+  }
 
   const save = async (values: ProfileForm) => {
     setBusy(true)
@@ -212,6 +222,7 @@ export function ProfileEditor(props: ProfileEditorProps) {
       }
       const saved = await api.saveProfile(next)
       messageApi.success(`已保存草稿 ${saved.reference}`)
+      onDirtyChange?.(false)
       onSaved?.(saved.reference)
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc))
@@ -246,26 +257,40 @@ export function ProfileEditor(props: ProfileEditorProps) {
   ) => (
     <Col xs={24} sm={12} lg={6}>
       <Form.Item label={label} name={name} tooltip={tooltip}>
-        <InputNumber className="rule-editor__number" step={step} min={min} max={max} />
+        <InputNumber
+          className="rule-editor__number"
+          name={String(name)}
+          autoComplete="off"
+          step={step}
+          min={min}
+          max={max}
+        />
       </Form.Item>
     </Col>
   )
 
   return (
-    <Form className="rule-editor" form={form} layout="vertical" onFinish={(values) => void save(values)}>
+    <Form
+      className="rule-editor"
+      form={form}
+      layout="vertical"
+      scrollToFirstError
+      onChange={() => onDirtyChange?.(true)}
+      onFinish={(values) => void save(values)}
+    >
       {contextHolder}
       {error && <Alert type="error" showIcon message={error} />}
 
       <Card size="small" title="配置说明">
-        <Row gutter={16}>
+        <Row className="rule-editor__form-grid" gutter={16}>
           <Col xs={24} md={10}>
             <Form.Item label="配置名称" name="name" rules={[{ required: true }]}>
-              <Input />
+              <Input name="name" autoComplete="off" />
             </Form.Item>
           </Col>
           <Col xs={24} md={14}>
             <Form.Item label="适用说明" name="description">
-              <Input />
+              <Input name="description" autoComplete="off" />
             </Form.Item>
           </Col>
         </Row>
@@ -336,7 +361,7 @@ export function ProfileEditor(props: ProfileEditorProps) {
       </Card>
 
       <Card size="small" title="常用判断阈值">
-        <Row gutter={16}>
+        <Row className="rule-editor__form-grid" gutter={16}>
           {numberField("位置变化比例", "detectors.thresholds.shifted_ratio", undefined, 0.01, 0, 1)}
           {numberField("严重位置变化比例", "detectors.thresholds.severely_shifted_ratio", undefined, 0.01, 0, 1)}
           {numberField("字号缩小比例", "detectors.thresholds.font_shrink_ratio", "负数，如 -0.2 表示缩小超过 20%", 0.01, -1, 0)}
@@ -349,7 +374,7 @@ export function ProfileEditor(props: ProfileEditorProps) {
       </Card>
 
       <Card size="small" title="结果判定">
-        <Row gutter={16}>
+        <Row className="rule-editor__form-grid" gutter={16}>
           {numberField("通过分数线", "scoring.pass_score", "达到此分数且无阻断问题时判为通过", 1, 0, 100)}
           {numberField("未通过分数线", "scoring.fail_score", "低于此分数时判为未通过", 1, 0, 100)}
         </Row>
@@ -362,7 +387,7 @@ export function ProfileEditor(props: ProfileEditorProps) {
             key: "expert",
             label: "专家设置",
             children: (
-              <Row gutter={16}>
+              <Row className="rule-editor__form-grid" gutter={16}>
                 {numberField("最低匹配分", "matching.minimum_score", undefined, 0.05, 0, 1)}
                 {numberField("合并文本覆盖率", "matching.merged_text_coverage_ratio", undefined, 0.05, 0, 1)}
                 {numberField("最大页码偏移", "alignment.max_shift", undefined, 1, 0, 50)}
@@ -376,15 +401,22 @@ export function ProfileEditor(props: ProfileEditorProps) {
             key: "identity",
             label: "标识与版本",
             children: (
-              <Row gutter={16}>
+              <Row className="rule-editor__form-grid" gutter={16}>
                 <Col xs={24} md={12}>
                   <Form.Item label="配置标识" name="profile_id" rules={[{ required: true }]}>
-                    <Input disabled />
+                    <Input name="profile_id" autoComplete="off" disabled />
                   </Form.Item>
                 </Col>
                 <Col xs={24} md={6}>
                   <Form.Item label="版本号" name="version">
-                    <InputNumber className="rule-editor__number" step={1} min={1} disabled />
+                    <InputNumber
+                      className="rule-editor__number"
+                      name="version"
+                      autoComplete="off"
+                      step={1}
+                      min={1}
+                      disabled
+                    />
                   </Form.Item>
                 </Col>
               </Row>
@@ -397,7 +429,16 @@ export function ProfileEditor(props: ProfileEditorProps) {
         <Button type="primary" htmlType="submit" loading={busy}>
           保存草稿
         </Button>
-        <Button onClick={() => void resetToDefault()}>重置为默认</Button>
+        <Popconfirm
+          title="重置为默认配置？"
+          description="当前表单中所有未保存的修改都会被内置平衡配置覆盖。"
+          okText="重置"
+          okButtonProps={{ danger: true }}
+          cancelText="取消"
+          onConfirm={() => void resetToDefault()}
+        >
+          <Button>重置为默认</Button>
+        </Popconfirm>
       </Space>
     </Form>
   )

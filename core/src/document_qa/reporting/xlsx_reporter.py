@@ -71,7 +71,13 @@ def export_xlsx(report: QAReport, output_path: Path) -> Path:
         ("复核页面", report.summary.review_pages),
         ("失败页面", report.summary.failed_pages),
         ("规则配置", report.rule_profile_reference),
-        ("问题总数", sum(report.summary.issue_counts.values())),
+        (
+            "问题组数",
+            report.summary.problem_total
+            if report.summary.problem_total is not None
+            else sum(report.summary.issue_counts.values()),
+        ),
+        ("规则命中总数", sum(report.summary.issue_counts.values())),
         ("源文档", report.source_document_id[:16]),
         ("目标文档", report.target_document_id[:16]),
     ]

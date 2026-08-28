@@ -32,6 +32,23 @@ _run_lock = threading.Lock()
 TaskStatus = Literal["queued", "running", "done", "error"]
 
 
+def _sanitize_error(exc: Exception) -> str:
+    """把异常转成可给前端的用户可读信息，抹去服务器本机路径。
+
+    PyMuPDF/LibreOffice 的异常常内嵌完整文件路径（用户不需要也不应
+    看到服务器目录结构）；产物根目录替换为占位符，其余文本保留。
+    """
+
+    import re
+
+    text = str(exc)
+    # 产物目录绝对路径 → 相对标记；任意类 Unix 绝对路径 → 只留文件名。
+    root = "/Users/"
+    if root in text:
+        text = re.sub(r"/Users/[\w.-]+/\S*", "<服务器路径>", text)
+    return text[:500]
+
+
 @dataclass
 class TaskState:
     """一个比较任务的运行状态与结果引用。"""
@@ -72,13 +89,29 @@ class CompareService:
 
     # 终态任务保留时长：结果已被前端取走或超时弃取后释放内存。
     _TERMINAL_TTL_SECONDS = 3600
+    # 排队任务上限：比较是 CPU 密集重活，无限排队会拖垮线程池并
+    # 让后提交任务的等待时间不可预期；超限直接拒绝并提示稍后再试。
+    _MAX_QUEUED_TASKS = 3
+
+    class QueueFullError(Exception):
+        """排队任务数已达上限。"""
 
     def submit(self, source: Path, target: Path, *, displays: tuple[str, str]) -> str:
-        """登记任务并返回 task_id（queued 状态）。"""
+        """登记任务并返回 task_id（queued 状态）。
+
+        queued 任务达到上限时抛 QueueFullError，由路由转 429。
+        """
 
         self._evict_expired_tasks()
-        task_id = uuid.uuid4().hex[:12]
         with self._tasks_lock:
+            queued = sum(
+                1 for task in self._tasks.values() if task.status == "queued"
+            )
+            if queued >= self._MAX_QUEUED_TASKS:
+                raise self.QueueFullError(
+                    f"排队任务已达上限（{self._MAX_QUEUED_TASKS}），请等待进行中的任务完成后再提交"
+                )
+            task_id = uuid.uuid4().hex[:12]
             self._tasks[task_id] = TaskState(
                 status="queued",
                 source_path=str(source),
@@ -135,7 +168,9 @@ class CompareService:
         except Exception as exc:
             # 兜底捕获一切异常（对抗审查 M-1：只捕解析/归一化两类时，
             # 磁盘满等运行时错误会让任务永久卡在 running，前端无限轮询）。
-            self._update(task_id, status="error", error=str(exc))
+            message = _sanitize_error(exc)
+            log_event("task_state", task_id=task_id, status="error", error=message)
+            self._update(task_id, status="error", error=message)
             return
         report_dict = report.model_dump(mode="json")
         state = self._peek(task_id)
@@ -156,7 +191,7 @@ class CompareService:
                 self._update(
                     task_id,
                     status="error",
-                    error=f"报告持久化失败: {exc}",
+                    error=f"报告持久化失败: {_sanitize_error(exc)}",
                 )
                 return
         self._update(

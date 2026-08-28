@@ -10,9 +10,9 @@ import { HistoryDetail } from "./HistoryDetail"
 import { PALETTE, scoreColor } from "../uiTokens"
 import { DataTable, PageHeader, PageSection, StatusTag } from "../components/ui"
 
-// 固定列合计约 920 px，给两个可省略的文档列各保留约 90 px；
+// 固定列合计约 980 px，给两个可省略的文档列各保留约 85 px；
 // 容器达到该宽度时不应再被人为强制出横向滚动条。
-const HISTORY_TABLE_MIN_WIDTH = 1100
+const HISTORY_TABLE_MIN_WIDTH = 1150
 
 /** 本地时间格式化：created_at 为 UTC ISO 串，直接截串会差时区。 */
 function formatTime(iso: string): string {
@@ -282,23 +282,31 @@ export function HistoryView({
       align: "right",
     },
     {
-      title: "问题",
-      dataIndex: "issue_total",
-      width: 70,
+      title: "问题组",
+      dataIndex: "problem_total",
+      width: 96,
       align: "right",
+      // 窄桌面下与操作列一起固定，避免问题数被右侧操作区覆盖。
+      fixed: shouldFixOperation ? "right" : undefined,
       // 无问题弱化展示，有问题红字突出，扫一眼即可定位差记录。
-      render: (value: number) =>
-        value > 0 ? (
-          <Typography.Text strong style={{ color: PALETTE.criticalText }}>
-            {value}
-          </Typography.Text>
-        ) : (
-          <Typography.Text type="secondary">0</Typography.Text>
-        ),
+      render: (value: number | undefined, record) => {
+        const total = value ?? record.issue_total
+        return (
+          <Tooltip title={`${record.issue_total} 条规则命中`}>
+            {total > 0 ? (
+              <Typography.Text strong style={{ color: PALETTE.criticalText }}>
+                {total}
+              </Typography.Text>
+            ) : (
+              <Typography.Text type="secondary">0</Typography.Text>
+            )}
+          </Tooltip>
+        )
+      },
     },
     {
       title: "操作",
-      width: 256,
+      width: 288,
       fixed: shouldFixOperation ? "right" : undefined,
       // 防止 antd Table 单元格内容换行导致行高抖动。
       onCell: () => ({

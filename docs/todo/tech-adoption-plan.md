@@ -1,4 +1,4 @@
-# 需求待办：技术采纳方案（T1–T19）
+# 需求待办：技术采纳方案（T1–T21）
 
 > 来源：2025-08 架构对标梳理（T1–T5）与多格式/像素层讨论（T9–T10）。
 > 每项含目标、方案、验收。通用约束：遵循 docs/project-contract.md；
@@ -25,6 +25,8 @@
 | T17 | 跨行样式与条目边界安全分组 | ✅ 已落地 | P1 | 0.5 天 |
 | T18 | 文本重叠双轴判定与双语证据 | ✅ 已落地 | P1 | 0.5 天 |
 | T19 | 问题编号多条件过滤 | ✅ 已落地 | P2 | 0.25 天 |
+| T20 | 服务端持久化日志（按天轮转 + request_id 关联） | ✅ 已落地 | P1 | 0.5 天 |
+| T21 | 复核反馈自学习回路（误报归因 → AI 修复报告 / 规则调优 → 定期闭环） | 🟡 P0+P1+AI 修复报告已落地；P2 待办 | P2 | P2 1–2 天 |
 
 ### 落地记录
 
@@ -499,6 +501,138 @@ BBox 和 Region ID 写入 metrics；详情页以“原文区域 1/2、译文区�
 - 人工构造 3 类盲区样例（改颜色/换图/加水印）各一，检测器全部命中；
 - Golden Sample 默认配置下行为零变化（pixel_diff 默认关）；
 - 启用后真实样例的误报率经复核闭环标注 < 30% 才可转默认开启评估。
+
+---
+
+## T20 服务端持久化日志（按天轮转 + request_id 关联）
+
+**问题**：服务端结构化 JSON 事件（observability.py）与 uvicorn 访问
+日志仅输出到 stderr/stdout，进程一退出日志即丢失；事后排障（任务
+失踪、启动崩溃、请求报障）没有持久证据可查。
+
+**方案**（纯标准库，延续 observability 零依赖哲学）：
+
+1. **落盘布局**：`webapp-artifacts/logs/` 下三个按天轮转文件——
+   `server.jsonl`（JSON 事件，机器采集）、`access.log`（访问日志，
+   人读）、`error.log`（应用异常与启动生命周期消息）。继承
+   artifacts 目录的 gitignore；产物 GC 只扫 `pages/task-*`，不误删。
+2. **轮转与保留**：`TimedRotatingFileHandler`（when=midnight）+
+   `backupCount` 按天滚动、自动过期，磁盘占用有上界。多进程并发写
+   不支持（当前单进程部署不受影响，文档如实标注）。
+3. **接入时机**：`create_app` lifespan startup 调用
+   `configure_file_logging`——晚于 uvicorn dictConfig，避免 handler
+   被整体替换；幂等防 `--reload` 重复挂载。stderr/stdout 输出保持
+   不变（12-Factor 约定，容器侧仍可走标准流采集）。
+4. **请求关联**：新增纯 ASGI `RequestIdMiddleware`（api 层）——每
+   请求生成 8 位 request_id 存 contextvar，`RequestContextFilter`
+   自动注入 JSON 事件，并回写 `X-Request-ID` 响应头；后台任务继承
+   提交请求的 request_id，访问日志与业务事件可互相印证。
+5. **生命周期事件**：`server_started`（pid、日志路径、版本）/
+   `server_stopped` 登记 KNOWN_EVENTS，作为排障时间线锚点。
+6. **配置**：settings 新增 `log_file_enabled`（默认 True）、
+   `log_dir`（默认 `artifacts_dir/logs`）、`log_retention_days`
+   （默认 14），均可用 DQA_ 环境变量覆盖；关闭后退回纯标准流，
+   历史行为零变化。
+
+**验收**：
+
+- 启动后三个日志文件生成，`server.jsonl` 首条为 `server_started`，
+  access.log 记录到 HTTP 请求且与控制台访问行一致；
+- JSON 事件携带 request_id 且与响应头 `X-Request-ID` 一致；
+- `log_file_enabled=False` 时无文件产生，stderr 行为与历史一致；
+- `python -m compileall -q server/src` 通过。
+
+**落地记录（2026-08）**：
+
+- `observability.py` 新增 `configure_file_logging`/`RequestContextFilter`
+  与 request_id contextvar API；`api/middleware.py` 新增纯 ASGI
+  `RequestIdMiddleware`；`api/app.py` 接入 lifespan 生命周期事件；
+  `settings.py` 新增 `log_file_enabled/log_dir/log_retention_days`。
+- 验证证据：真实样例 `POST /api/compare` 全链路——响应头
+  `x-request-id: b426e0bc` 与 `task_submitted/running/done` 三条事件
+  的 `request_id` 完全一致（后台任务经 contextvar 继承关联）；
+  `server.jsonl` 记录到优雅停机的 `server_stopped`；access.log 与
+  控制台访问行一致；`DQA_LOG_FILE_ENABLED=false` 时 logs 目录不
+  创建且事件回退 stderr（`log_file: null`）；compileall 通过。
+- 已知限制（已写入 docstring）：`TimedRotatingFileHandler` 不支持
+  多进程并发写；当前单进程部署不受影响。
+
+---
+
+## T21 复核反馈自学习回路（误报归因 → 调优建议 → 定期闭环）
+
+**问题**：复核闭环已持久化 `confirmed/false_positive/ignored` 判定，但
+这些结论没有被回流用于检测调优——误报集中在哪些检测器、哪些场景，
+只能靠人工翻报告，规则阈值校准（见 rule-calibration.md）缺乏持续
+数据输入。
+
+**方案（三阶段，人在环上，不做无人值守改阈值/黑盒 ML）**：
+
+1. **P0 误报归因统计（已落地）**：`ReviewInsightService` 把
+   `review_decisions` 关联到该文档对最新报告，按 Issue 类型聚合
+   确认/误报/忽略分布与误报率；`GET /api/insights/review` 输出；
+   规则管理页展示"误报归因统计"区块。无法归因的决策（重跑后
+   Issue ID 变化）计入 unmatched 如实呈现。
+2. **P1 调优建议生成**：从误报热区生成 RuleProfile 新版本草稿
+   （DRAFT）——阈值微调建议（附 FP 的 metrics 分布证据）或
+   `severity_overrides` 降级建议；生成后自动跑 Golden 回归，人工
+   确认才升版本。需要 profile schema 扩展抑制规则（可选）。
+3. **P2 定期闭环**：定时任务重放近期复核 → 生成候选 profile →
+   Golden + 近期真实任务回归 → 全绿进待审批队列。
+
+**明确不做**：无人值守直接修改生产阈值（违反契约 §12 可复核性）；
+训练 ML 分类器过滤误报（FP 量级不够，违反"结构化证据"原则）。
+
+**验收**：
+
+- P0：`/api/insights/review` 返回与 `review_decisions` 一致的聚合
+  （总决策数 = 确认 + 误报 + 忽略）；规则页可见误报热区排序；
+- P1：建议产物是合法 RuleProfile 新版本，Golden 回归结果随建议
+  一并呈现，未审批不生效；
+- P2：闭环产物只进待审批队列，审计可查。
+
+**落地记录（2026-08，P0）**：
+
+- `server/.../services/review_insight_service.py`（聚合）+
+  `api/routes_insights.py`（GET /api/insights/review）+
+  `app.py` 装配；`frontend`：`api.ts` 类型与方法、`queryClient.ts`
+  包装、`ProfileManager` 误报归因统计区块（按误报率排序，≥50% 红 /
+  ≥25% 黄高亮）。
+- 验证：真实库 17 条判定（1 确认 + 13 误报 + 3 忽略）→ 接口返回
+  一致，12 条归因 + 5 条 unmatched；`number_mismatch` 3/3 误报率
+  100% 排首位；frontend build/lint 通过。
+
+**落地记录（2026-08，P1）**：
+
+- core 新增 `document_qa/feedback.py`：`suggest_tuning` 纯函数——
+  门控指标（契约 §6.4 metrics）分离窗口分析生成阈值建议 +
+  严重度降级建议（fp_rate ≥70% 且判定 ≥3）；草案强制重过
+  `RuleProfile` Schema 校验（含 severely_shifted_ratio 次序约束）。
+- 防误导三闸门：误报 <2 条不建议；误报/确认指标窗口重叠不建议；
+  指标超阈值 Schema 上限（数值杠杆失效）不建议。真实数据仅
+  `number_mismatch`（3/3 误报、无数值杠杆）产出 severity 降级建议，
+  region_shifted 因窗口重叠被正确拒判。
+- server：`ReviewInsightService.tuning_advice`（基准取判定时引用的
+  Profile 版本，缺失回退内置）+ `GET /api/insights/review/suggestions`；
+  frontend：规则页"调优建议"区块 + "应用为 DRAFT 草案"（走既有
+  profile 保存，只入库不生效）。
+- 验证：构造样本 4 场景（正例窗口/重叠/超上限/单样本）全部符合
+  预期；Golden 不变性——feedback 模块纯建议、不接入检测流水线，
+  检测行为与 Golden 基线零变化；compileall + build + lint 通过。
+
+**落地记录（2026-08，AI 修复报告）**：
+
+- server 在既有只读归因链路上按 `issue_type + detector` 聚合误报，输出
+  代表误报/确认对照、数值 metrics、疑似流水线阶段、代码检索起点、
+  待验证问题与回归要求；根因统一标记为 `unverified`，不把代码提示
+  包装成已确认结论。
+- 新增 `GET /api/insights/review/repair-report` 结构化接口与 Markdown
+  下载接口；证据文本明确标记为不可信内容并以 JSON 代码块承载，避免
+  文档内容伪造报告指令。
+- frontend 新增“AI 修复报告”摘要与按误报模式多选导出入口；原“调优
+  建议”明确改名为“规则调优”，继续作为代码诊断后的可选分支。
+- 验证：当前真实库生成 6 组误报诊断任务；接口、Markdown 下载、
+  compileall、frontend build/lint 与 1280 px 桌面布局检查通过。
 
 ---
 

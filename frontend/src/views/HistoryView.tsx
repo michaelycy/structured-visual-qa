@@ -10,9 +10,10 @@ import { HistoryDetail } from "./HistoryDetail"
 import { PALETTE, scoreColor } from "../uiTokens"
 import { DataTable, PageHeader, PageSection, StatusTag } from "../components/ui"
 
-// 固定列合计约 980 px，给两个可省略的文档列各保留约 85 px；
-// 容器达到该宽度时不应再被人为强制出横向滚动条。
-const HISTORY_TABLE_MIN_WIDTH = 1150
+// 固定列合计约 980 px，源/目标文档两列合计保留约 380 px（各约 190 px），
+// 保证完整文件名可直接读出；悬停还有 Tooltip 兜底。容器达到该宽度时
+// 不应再被人为强制出横向滚动条。
+const HISTORY_TABLE_MIN_WIDTH = 1360
 
 /** 本地时间格式化：created_at 为 UTC ISO 串，直接截串会差时区。 */
 function formatTime(iso: string): string {
@@ -256,8 +257,30 @@ export function HistoryView({
         </Tooltip>
       ),
     },
-    { title: "源文档", dataIndex: "source_display", ellipsis: true },
-    { title: "目标文档", dataIndex: "target_display", ellipsis: true },
+    {
+      title: "源文档",
+      dataIndex: "source_display",
+      width: 190,
+      // Tooltip 的触发元素是块级自截断的 span：定位矩形等于单元格可视
+      // 宽度；行内长文本会把矩形溢出到单元格外，导致气泡向右偏移。
+      ellipsis: { showTitle: false },
+      render: (value: string) => (
+        <Tooltip title={value}>
+          <span className="history-record-doc">{value}</span>
+        </Tooltip>
+      ),
+    },
+    {
+      title: "目标文档",
+      dataIndex: "target_display",
+      width: 190,
+      ellipsis: { showTitle: false },
+      render: (value: string) => (
+        <Tooltip title={value}>
+          <span className="history-record-doc">{value}</span>
+        </Tooltip>
+      ),
+    },
     {
       title: "状态",
       dataIndex: "status",

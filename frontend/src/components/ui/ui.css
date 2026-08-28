@@ -201,6 +201,16 @@
   white-space: nowrap;
 }
 
+/* 源/目标文档名：块级自截断，保证 Tooltip 的触发矩形等于可视宽度，
+ * 否则行内长文本的布局框会溢出单元格，气泡定位向右偏移。 */
+.history-record-doc {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 22px;
+}
+
 .history-record-id {
   position: relative;
   display: block;

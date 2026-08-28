@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # 项目根（server/src/document_qa_server/settings.py 上退四级）。
@@ -40,6 +41,9 @@ class ServerSettings(BaseSettings):
     # 比较任务异步模式：True 时 compare 立即返回 task_id 由后台执行；
     # False 时保持同步阻塞行为（CLI/测试回归路径）。
     async_mode: bool = True
+    # 比较子进程的 BLAS/推理线程数上限（T23 进程隔离）：防止 PaddleOCR
+    # 在 CPU 推理时吃满所有核、拖慢同机 API 响应；0 表示不限制。
+    worker_threads: int = Field(default=4, ge=0, le=256)
     # 持久化日志（T20）：JSON 事件与 uvicorn 访问/错误日志按天轮转落盘，
     # 便于事后排障；关闭后退回纯 stderr/stdout（与历史行为一致）。
     log_file_enabled: bool = True

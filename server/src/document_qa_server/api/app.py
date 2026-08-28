@@ -74,10 +74,12 @@ def create_app(
     database = Database(artifacts_dir=root)
 
     # 服务实例在应用级创建一次；互斥锁因此对全部请求生效。
+    # worker_threads 传给比较子进程，限制 OCR/BLAS 线程数保护 API 响应。
     compare_service = CompareService(
         artifacts_dir=root,
         database=database,
         ocr_provider=build_ocr_provider(config, artifacts_dir=root),
+        worker_threads=config.worker_threads,
     )
     verify_service = VerifyService(artifacts_dir=root)
     profile_service = ProfileService(artifacts_dir=root, database=database)

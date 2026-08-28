@@ -1,20 +1,24 @@
-"""比较任务服务：归一化输入、执行流水线、管理渲染产物与任务状态。
+"""比较任务服务：任务状态管理 + 子进程隔离执行（T23）。
 
-异步模式下 compare 登记任务返回 task_id，由 BackgroundTasks 线程执行
-（沿用同一把互斥锁，保持单 worker 语义）；同步模式行为与历史版本一致。
+异步模式下 compare 登记任务返回 task_id；任务在 spawn 子进程中执行
+完整流水线（含可选 PaddleOCR），API 进程只等待结果——OCR 推理占满
+CPU 时接口仍能即时响应，子进程崩溃也不会拖垮服务。同步模式
+（DQA_ASYNC_MODE=false / MCP）保留在当前进程执行的历史行为。两条
+路径共用 compare_worker.execute_compare，避免执行逻辑漂移。
 """
 
 from __future__ import annotations
 
+import multiprocessing
 import threading
-import uuid
 import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Literal
 
 from document_qa.parsers import DocumentParsingError
-from document_qa.pipeline import DocumentQAPipeline, RenderScope
+from document_qa.pipeline import RenderScope
 from document_qa.glossary import Glossary
 from document_qa.ocr import OCRProvider
 from document_qa.profiles import RuleProfile
@@ -22,11 +26,9 @@ from document_qa.schemas import QAReport
 
 from document_qa_server.observability import log_event
 from document_qa_server.persistence import Database
-from document_qa_server.services.normalization_service import (
-    NormalizationService,
-)
+from document_qa_server.services.compare_worker import execute_compare, run_compare
 
-# 一次只允许一个比较任务占用渲染目录，避免并发结果互相覆盖。
+# 一次只允许一个比较任务（子进程）执行并占用渲染目录，避免并发互相覆盖。
 _run_lock = threading.Lock()
 
 TaskStatus = Literal["queued", "running", "done", "error"]
@@ -36,11 +38,12 @@ class CompareParsingError(Exception):
     """比较输入无法被核心解析，供协议层映射为校验失败。"""
 
 
-def _sanitize_error(exc: Exception) -> str:
-    """把异常转成可给前端的用户可读信息，抹去服务器本机路径。
+def _sanitize_error(exc: object) -> str:
+    """把异常或子进程错误文本转成用户可读信息，抹去服务器本机路径。
 
     PyMuPDF/LibreOffice 的异常常内嵌完整文件路径（用户不需要也不应
     看到服务器目录结构）；产物根目录替换为占位符，其余文本保留。
+    接受任意对象：子进程错误以纯字符串经管道回传，走同一净化入口。
     """
 
     import re
@@ -76,19 +79,21 @@ class CompareService:
         self,
         *,
         artifacts_dir: Path,
-        normalizer: NormalizationService | None = None,
         database: Database | None = None,
         ocr_provider: OCRProvider | None = None,
+        worker_threads: int = 0,
     ) -> None:
-        """注入产物根目录与可选归一化/持久化服务；渲染页写入 pages/ 子目录。"""
+        """注入产物根目录与可选持久化/OCR 依赖；渲染页写入 pages/ 子目录。
+
+        worker_threads 是比较子进程的 BLAS/推理线程数上限（0 不限制）；
+        ocr_provider 仅供同步路径使用，异步子进程按 DQA_ 环境变量重建。
+        """
 
         self._artifacts_dir = artifacts_dir
         self._render_dir = artifacts_dir / "pages"
-        self._normalizer = normalizer or NormalizationService(
-            artifacts_dir=artifacts_dir
-        )
         self._database = database
         self._ocr_provider = ocr_provider
+        self._worker_threads = worker_threads
         self._tasks: dict[str, TaskState] = {}
         self._tasks_lock = threading.Lock()
         self._recover_interrupted_tasks()
@@ -152,33 +157,48 @@ class CompareService:
             Callable[[dict, Path, Path, str, str, dict[str, list[str]]], str] | None
         ) = None,
     ) -> None:
-        """在当前线程执行已登记的任务（供 BackgroundTasks 调用）。
+        """在隔离子进程中执行已登记的任务（供 BackgroundTasks 调用）。
 
-        history_callback(report_dict, source, target, s_display, t_display, rendered)
-        返回对比记录 ID，在比较成功后调用。密码只透传给流水线，
-        不写入任务状态（TaskState）与历史记录。
+        流水线（含可选 PaddleOCR）运行在 spawn 子进程里，API 进程只在
+        管道上等待结果：OCR 推理吃满 CPU 时其他接口仍能即时响应，子进程
+        崩溃也不会拖垮服务。history_callback(report_dict, source, target,
+        s_display, t_display, rendered) 返回对比记录 ID，在比较成功后调用。
+        密码经 spawn 管道内存传递，不写入任务状态（TaskState）与历史记录。
         """
 
         self._update(task_id, status="running")
+        payload = {
+            "artifacts_dir": str(self._artifacts_dir),
+            "source": str(source),
+            "target": str(target),
+            "profile_json": profile.model_dump_json(),
+            "glossary_json": glossary.model_dump_json() if glossary else None,
+            "render": render,
+            "render_scope": render_scope,
+            "source_password": source_password,
+            "target_password": target_password,
+            "worker_threads": self._worker_threads,
+        }
+        error_message: str | None = None
+        result: dict = {}
         try:
-            report, rendered = self.run(
-                source,
-                target,
-                profile=profile,
-                render=render,
-                render_scope=render_scope,
-                glossary=glossary,
-                source_password=source_password,
-                target_password=target_password,
-            )
+            # 单 worker 语义：同一时刻最多一个比较子进程，沿用既有互斥锁。
+            with _run_lock:
+                result = self._execute_in_subprocess(payload)
+            if "error" in result:
+                error_message = _sanitize_error(result["error"])
         except Exception as exc:
-            # 兜底捕获一切异常（对抗审查 M-1：只捕解析/归一化两类时，
-            # 磁盘满等运行时错误会让任务永久卡在 running，前端无限轮询）。
-            message = _sanitize_error(exc)
-            log_event("task_state", task_id=task_id, status="error", error=message)
-            self._update(task_id, status="error", error=message)
+            # 兜底捕获一切异常（对抗审查 M-1：磁盘满等运行时错误不能让
+            # 任务永久卡在 running，前端无限轮询）。
+            error_message = _sanitize_error(exc)
+        if error_message is not None:
+            log_event(
+                "task_state", task_id=task_id, status="error", error=error_message
+            )
+            self._update(task_id, status="error", error=error_message)
             return
-        report_dict = report.model_dump(mode="json")
+        report_dict = result["report"]
+        rendered = result["rendered"]
         state = self._peek(task_id)
         record_id = None
         if history_callback and state:
@@ -229,90 +249,62 @@ class CompareService:
         source_password: str | None = None,
         target_password: str | None = None,
     ) -> tuple[QAReport, dict[str, list[str]]]:
-        """同步执行比较并返回报告与渲染页文件名索引。
+        """同步执行比较并返回报告与渲染页文件名索引（当前进程内）。
 
-        非 PDF 输入先经 LibreOffice 归一化；报告 metadata 记录
-        normalized_from。可能抛出 CompareParsingError / NormalizationError。
-        密码仅用于打开密码 PDF 的解析与渲染，不落入任何产物。
+        供 DQA_ASYNC_MODE=false 回归路径与 MCP 使用，行为与历史版本
+        一致；异步任务的进程隔离执行见 execute()。非 PDF 输入先经
+        LibreOffice 归一化，可能抛出 CompareParsingError /
+        NormalizationError。密码仅用于打开密码 PDF 的解析与渲染，
+        不落入任何产物。
         """
 
-        source_pdf, source_origin = self._ensure_pdf(source)
-        target_pdf, target_origin = self._ensure_pdf(target)
-        # 归一化发生时给偏移类阈值叠加转换噪声容差（Profile 副本上改，
-        # 不污染用户配置；core 检测逻辑保持无来源感知）。
-        effective_profile = profile
-        if source_origin or target_origin:
-            noise = profile.detectors.thresholds.conversion_noise_ratio
-            thresholds = profile.detectors.thresholds.model_copy(
-                update={
-                    "shifted_ratio": min(
-                        1.0, profile.detectors.thresholds.shifted_ratio + noise
-                    ),
-                    "severely_shifted_ratio": min(
-                        1.0,
-                        profile.detectors.thresholds.severely_shifted_ratio + noise,
-                    ),
-                }
-            )
-            effective_profile = profile.model_copy(
-                update={
-                    "detectors": profile.detectors.model_copy(
-                        update={"thresholds": thresholds}
-                    )
-                }
-            )
-        # 渲染产物按任务隔离（对抗审查 M-2）：共享 pages/ 会串染——
-        # 上一个任务的残留页混入本次索引，且并发任务的写入互相覆盖。
-        # 每任务独立子目录 + 索引在锁内生成，读的是本次任务的快照。
-        render_dir = None
-        with _run_lock:
-            if render:
-                render_dir = self._render_dir / f"task-{uuid.uuid4().hex[:10]}"
-            try:
-                report = DocumentQAPipeline(
-                    profile=effective_profile,
+        try:
+            # 单 worker 语义：同步路径与异步子进程共用同一把互斥锁。
+            with _run_lock:
+                return execute_compare(
+                    artifacts_dir=self._artifacts_dir,
+                    source=source,
+                    target=target,
+                    profile=profile,
                     glossary=glossary,
                     ocr_provider=self._ocr_provider,
-                ).compare(
-                    source_pdf,
-                    target_pdf,
-                    render_dir=render_dir,
+                    render=render,
                     render_scope=render_scope,
                     source_password=source_password,
                     target_password=target_password,
                 )
-            except DocumentParsingError as exc:
-                raise CompareParsingError(str(exc)) from exc
-            rendered = (
-                self._index_rendered(render_dir) if render else {"source": [], "target": []}
-            )
-            # rendered 中的路径是相对 pages/ 根的完整段（含任务目录）。
-        # 在流水线产物之上补记归一化来源，提示验收人结论含转换因素。
-        origins = {"source": source_origin, "target": target_origin}
-        metadata = dict(report.metadata)
-        if any(origins.values()):
-            metadata["normalized_from"] = origins
-        if glossary is not None:
-            # 报告保存本次实际术语版本引用，持久化层据此建立不可变外键。
-            metadata["glossary_reference"] = glossary.reference
-        if metadata != report.metadata:
-            report = report.model_copy(
-                update={"metadata": metadata}
-            )
-        return report, rendered
+        except DocumentParsingError as exc:
+            raise CompareParsingError(str(exc)) from exc
+
+    def _execute_in_subprocess(self, payload: dict) -> dict:
+        """spawn 子进程运行 run_compare，并回收结果或错误。
+
+        daemon=True：主进程退出（含 --reload 重启）时子进程一并终止，
+        不留孤儿任务继续占用 CPU；中断任务由启动恢复逻辑标记 error。
+        管道写端在父进程侧立即关闭，子进程退出后 recv 不会挂起。
+        """
+
+        context = multiprocessing.get_context("spawn")
+        receiver, sender = context.Pipe(duplex=False)
+        process = context.Process(
+            target=run_compare, args=(payload, sender), daemon=True
+        )
+        process.start()
+        sender.close()
+        try:
+            result: dict = receiver.recv()
+        except EOFError:
+            # 子进程未发送任何结果即退出：通常是推理框架段错误或被 OOM 杀死。
+            result = {"error": "比较子进程异常退出（未返回结果），请重试"}
+        finally:
+            receiver.close()
+        process.join()
+        return result
 
     def render_root(self) -> Path:
         """返回渲染页根目录，供静态文件挂载使用。"""
 
         return self._render_dir
-
-    def _ensure_pdf(self, path: Path) -> tuple[Path, str | None]:
-        """PDF 直接返回；Office 格式归一化为 PDF 并返回原格式标记。"""
-
-        if path.suffix.lower() == ".pdf":
-            return path, None
-        normalized, origin = self._normalizer.normalize(path)
-        return normalized, origin
 
     def _update(self, task_id: str, **fields) -> None:
         """合并更新任务状态字段，并把生命周期变化同步落库。"""
@@ -466,24 +458,3 @@ class CompareService:
             ]
             for task_id in expired:
                 del self._tasks[task_id]
-
-    @staticmethod
-    def _index_rendered(task_dir: Path) -> dict[str, list[str]]:
-        """列出该任务两侧已渲染页面的文件名，供前端拼接图片 URL。
-
-        任务目录隔离后索引天然是本次比较的快照，无跨任务串染。
-        """
-
-        prefix = task_dir.name
-        index: dict[str, list[str]] = {}
-        for side in ("source", "target"):
-            side_dir = task_dir / side
-            index[side] = (
-                sorted(
-                    f"{prefix}/{side}/{path.name}"
-                    for path in side_dir.glob("page-*.png")
-                )
-                if side_dir.is_dir()
-                else []
-            )
-        return index

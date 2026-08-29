@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 from collections import Counter
+from decimal import Decimal
 
 from document_qa.detectors.evidence import region_evidence
 from document_qa.detectors.quantities import QuantityMention, extract_quantity_mentions
@@ -335,10 +336,12 @@ class ContentDetector:
         severity = thresholds.band_severity(
             thresholds.number_mismatch_bands, diff_count, Severity.HIGH
         )
-        # 差异明细直接写进描述，界面列表不展开也能看到具体数字。
+        # 差异明细直接写进描述，界面列表不展开也能看到具体数字；
+        # 数量类差异附换算后绝对值（0.57亿元 vs 0.57 billion yuan 这类
+        # 单位混淆从原始表达式肉眼看不出 10 倍差）。
         detail_parts = []
-        missing_display = self._display_numbers(missing, source_labels)
-        extra_display = self._display_numbers(extra, target_labels)
+        missing_display = self._humanized_displays(missing, source_labels)
+        extra_display = self._humanized_displays(extra, target_labels)
         if missing:
             detail_parts.append(
                 "缺失数字：" + "、".join(missing_display)
@@ -347,6 +350,9 @@ class ContentDetector:
             detail_parts.append(
                 "多余数字：" + "、".join(extra_display)
             )
+        hint = self._conversion_ratio_hint(missing, extra)
+        if hint:
+            detail_parts.append(hint)
         return [
             Issue(
                 id=f"p{target.page}-numbers",
@@ -403,19 +409,77 @@ class ContentDetector:
                 labels.setdefault(mention.key, []).append(mention.display)
         return numbers, labels
 
-    @staticmethod
+    @classmethod
     def _display_numbers(
-        numbers: Counter, labels: dict[str, list[str]]
+        cls, numbers: Counter, labels: dict[str, list[str]]
     ) -> list[str]:
         """把规范数量键还原为报告中可读的原文表达。"""
 
-        values: list[str] = []
+        return [
+            display for _key, display in cls._display_entries(numbers, labels)
+        ]
+
+    @staticmethod
+    def _display_entries(
+        numbers: Counter, labels: dict[str, list[str]]
+    ) -> list[tuple[str, str]]:
+        """返回 (规范键, 原文表达) 差异明细；供原始渲染与换算标注共用。"""
+
+        entries: list[tuple[str, str]] = []
         for key in sorted(numbers):
             available = labels.get(key, [])
             count = numbers[key]
-            values.extend(available[:count])
-            values.extend([key] * max(0, count - len(available)))
-        return values
+            for display in available[:count]:
+                entries.append((key, display))
+            entries.extend((key, key) for _ in range(max(0, count - len(available))))
+        return entries
+
+    @classmethod
+    def _humanized_displays(
+        cls, numbers: Counter, labels: dict[str, list[str]]
+    ) -> list[str]:
+        """渲染差异明细；数量类键附加换算后绝对值，便于肉眼比较量级。
+
+        原始表达式（如 0.57亿元 与 0.57 billion yuan）无法直接看出单位
+        换算差异；绝对值用千分位数字呈现（57,000,000 vs 570,000,000），
+        不依赖任何语言的单位词，跨语言场景通用。百分比与月份本身可直接
+        比较，不附加换算。
+        """
+
+        humanized: list[str] = []
+        for key, display in cls._display_entries(numbers, labels):
+            if key.startswith("quantity:"):
+                converted = f"{Decimal(key.removeprefix('quantity:')):,}"
+                humanized.append(f"{display} → {converted}")
+            else:
+                humanized.append(display)
+        return humanized
+
+    @staticmethod
+    def _conversion_ratio_hint(missing: Counter, extra: Counter) -> str:
+        """单一数量键两侧各差一条且恰为 10^n 倍时，给出单位换算错误提示。
+
+        亿元↔billion 这类单位混淆恰好放大/缩小 10 倍；这是数字一致性
+        检测最高频的真实错译形态，值得在描述中直接点破。多键差异或
+        非 10^n 倍不做推断，避免描述越权下结论。
+        """
+
+        missing_keys = [key for key in missing if key.startswith("quantity:")]
+        extra_keys = [key for key in extra if key.startswith("quantity:")]
+        if len(missing_keys) != 1 or len(extra_keys) != 1:
+            return ""
+        if sum(missing.values()) != 1 or sum(extra.values()) != 1:
+            return ""
+        source_value = Decimal(missing_keys[0].removeprefix("quantity:"))
+        target_value = Decimal(extra_keys[0].removeprefix("quantity:"))
+        if source_value <= 0 or target_value <= 0:
+            return ""
+        for times in (10, 100, 1000, 10000, 100000, 1000000):
+            if target_value == source_value * times:
+                return f"两者换算后相差 {times} 倍，疑似单位换算错误"
+            if source_value == target_value * times:
+                return f"两者换算后相差 {times} 倍，疑似单位换算错误"
+        return ""
 
     @staticmethod
     def _map_to_target(

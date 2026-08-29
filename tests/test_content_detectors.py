@@ -112,7 +112,27 @@ class NumberMismatchTests(unittest.TestCase):
         )
         mismatches = [i for i in issues if i.type == IssueType.NUMBER_MISMATCH]
         self.assertEqual(len(mismatches), 1)
-        self.assertEqual(mismatches[0].metrics["missing_numbers"], ["15"])
+        # missing_numbers 存原文表达（含百分号）；历史登记失败"数字展示值"
+        # 的根因是 display 带前导空格（" 15%"），strip 后应为 "15%"。
+        self.assertEqual(mismatches[0].metrics["missing_numbers"], ["15%"])
+
+    def test_unit_scale_error_description_shows_converted_values(self) -> None:
+        """亿元误译为 billion 时，描述应附换算绝对值与 10 倍提示。
+
+        回归背景：真实样例中 0.57亿元 被译为 0.57 billion yuan，原始
+        表达式肉眼难辨差异，描述必须让复核者直接看到换算后的量级差。
+        """
+
+        _, _, issues = detect_for(
+            ["预计2022年需求0.57亿元，至2025年达到28.36亿元。"],
+            ["The 2022 demand is 0.57 billion yuan, reaching 2.836 billion yuan by 2025."],
+        )
+        mismatches = [i for i in issues if i.type == IssueType.NUMBER_MISMATCH]
+        self.assertEqual(len(mismatches), 1)
+        description = mismatches[0].description
+        self.assertIn("0.57亿元 → 57,000,000", description)
+        self.assertIn("0.57 billion yuan → 570,000,000", description)
+        self.assertIn("两者换算后相差 10 倍，疑似单位换算错误", description)
 
     def test_thousand_separator_equivalence(self) -> None:
         """千分位逗号差异不应判为数字错漏。"""

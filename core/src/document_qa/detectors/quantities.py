@@ -190,7 +190,10 @@ def extract_quantity_mentions(text: str) -> list[QuantityMention]:
     def add(key: str, display: str, span: tuple[int, int]) -> None:
         if not available(span):
             return
-        mentions.append(QuantityMention(key=key, display=display, span=span))
+        # display 仅用于报告展示（数字遮蔽走 span）：正则的 \s* 会把
+        # 表达式前后的空白带进 match.group(0)（如 " 15%"、"1.09 billion "），
+        # 统一去除，避免报告与界面出现脏展示。
+        mentions.append(QuantityMention(key=key, display=display.strip(), span=span))
         occupied.append(span)
 
     # 范围必须先于单月处理，否则“1-3月”只会识别末端的 3 月。

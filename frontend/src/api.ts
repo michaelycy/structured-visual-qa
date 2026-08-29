@@ -21,6 +21,8 @@ export interface Issue {
   target_region?: string | null
   bbox?: { x: number; y: number; width: number; height: number }
   metrics?: Record<string, unknown>
+  /** 产出该问题的检测器标识；与 core schemas/issue.py 的 detector 字段对齐。 */
+  detector?: string | null
 }
 
 export interface PageResult {

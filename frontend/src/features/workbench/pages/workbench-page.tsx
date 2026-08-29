@@ -82,6 +82,8 @@ export const WorkbenchPage = () => {
           historyRecordId={historyRecordId}
           viewState={viewState}
           onViewStateChange={updateViewState}
+          sourceDisplay={source.display}
+          targetDisplay={target.display}
         />
       )
     }

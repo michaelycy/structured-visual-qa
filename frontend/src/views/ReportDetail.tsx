@@ -18,12 +18,17 @@ export function ReportDetail({
   report,
   rendered,
   historyRecordId,
+  sourceDisplay = "",
+  targetDisplay = "",
   viewState,
   onViewStateChange,
 }: {
   report: QAReport
   rendered?: { source: string[]; target: string[] }
   historyRecordId: string | null
+  /** 文档对显示名：透传给逐页详情的任务书环境锚点。 */
+  sourceDisplay?: string
+  targetDisplay?: string
   viewState?: PageDetailsViewState
   onViewStateChange?: (state: PageDetailsViewState) => void
 }) {
@@ -134,6 +139,8 @@ export function ReportDetail({
           onDecideMany={decideMany}
           viewState={viewState}
           onViewStateChange={onViewStateChange}
+          sourceDisplay={sourceDisplay}
+          targetDisplay={targetDisplay}
         />
       </div>
     </>

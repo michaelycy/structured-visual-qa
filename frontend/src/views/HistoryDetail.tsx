@@ -63,6 +63,8 @@ export function HistoryDetail({
           report={full.report}
           rendered={full.rendered ?? { source: [], target: [] }}
           historyRecordId={record.record_id}
+          sourceDisplay={full.source_display}
+          targetDisplay={full.target_display}
         />
       ) : (
         <Empty

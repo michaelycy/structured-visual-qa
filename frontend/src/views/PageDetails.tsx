@@ -18,6 +18,7 @@ import {
   Segmented,
   Select,
   Space,
+  Switch,
   Table,
   Tag,
   Tooltip,
@@ -25,6 +26,12 @@ import {
 } from "antd"
 import type { Issue, QAReport, ReviewDecision } from "../api"
 import { DECISION_META, ISSUE_TYPE_META, PALETTE, SEVERITY_META, STATUS_META } from "../uiTokens"
+import { AiBriefModal } from "./AiBriefModal"
+import {
+  isDevModeEnabled,
+  setDevModeEnabled,
+  type BriefIssue,
+} from "../features/workbench/model/ai-brief"
 
 const INTEGER_FORMATTER = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 })
 const EMPTY_SEVERITIES: string[] = []
@@ -940,6 +947,7 @@ function IssueDetails({
   relatedIssues,
   historyRecordId,
   rendered,
+  onAiInvestigate,
   hideLocation = false,
 }: {
   issue: Issue
@@ -949,6 +957,8 @@ function IssueDetails({
   relatedIssues: RelatedIssueEvidence[]
   historyRecordId: string | null
   rendered?: { source: string[]; target: string[] }
+  /** 开发者模式下的 AI 排查入口；未开启时为 undefined，不渲染按钮。 */
+  onAiInvestigate?: () => void
   /** 合并组内非首条不重复"位置"行。 */
   hideLocation?: boolean
 }) {
@@ -1108,6 +1118,11 @@ function IssueDetails({
             {DECISION_META[key].label}
           </Button>
         ))}
+        {onAiInvestigate && (
+          <Button size="small" onClick={onAiInvestigate}>
+            AI 排查
+          </Button>
+        )}
       </Space>
     </Space>
   )
@@ -1123,6 +1138,8 @@ export function PageDetails({
   onDecideMany,
   viewState,
   onViewStateChange,
+  sourceDisplay,
+  targetDisplay,
 }: {
   report: QAReport
   rendered?: { source: string[]; target: string[] }
@@ -1133,6 +1150,9 @@ export function PageDetails({
   onDecideMany: (issueIds: string[], decision: ReviewDecision) => Promise<string[]>
   viewState?: PageDetailsViewState
   onViewStateChange?: (state: PageDetailsViewState) => void
+  /** 文档对显示名：仅用于任务书环境锚点，由路由页传入。 */
+  sourceDisplay: string
+  targetDisplay: string
 }) {
   const problems = report.pages.filter((page) => page.status !== "pass")
   const defaultPage = problems[0]?.page ?? report.pages[0]?.page ?? null
@@ -1202,6 +1222,25 @@ export function PageDetails({
         issue: candidate,
         number: (issueNumberById.get(candidate.id) ?? 0) + 1,
       }))
+  }
+
+  // 开发者模式：AI 排查任务书入口的总开关；持久化到 localStorage，
+  // 刷新保持。不属于可分享状态，不进 URL 路由。
+  const [devMode, setDevMode] = useState(() => isDevModeEnabled())
+  const [briefIssues, setBriefIssues] = useState<BriefIssue[] | null>(null)
+
+  const toggleDevMode = (value: boolean) => {
+    setDevMode(value)
+    setDevModeEnabled(value)
+  }
+
+  const openAiBrief = (issueIds: string[]) => {
+    const byId = new Map(allIssues.map((issue) => [issue.id, issue]))
+    const targets: BriefIssue[] = issueIds
+      .map((id) => byId.get(id))
+      .filter((issue): issue is Issue => Boolean(issue))
+      .map((issue) => ({ issue, number: (issueNumberById.get(issue.id) ?? 0) + 1 }))
+    if (targets.length) setBriefIssues(targets)
   }
 
   // 规则命中列表覆盖整份文档；点击行会同步切换双栏页码并高亮目标区域。
@@ -1401,6 +1440,15 @@ export function PageDetails({
               },
             ]}
           />
+          <label className="issue-list-dev-toggle">
+            <Switch
+              size="small"
+              checked={devMode}
+              onChange={toggleDevMode}
+              aria-label="切换开发者模式"
+            />
+            开发者模式
+          </label>
         </Space>
       </div>
 
@@ -1422,6 +1470,14 @@ export function PageDetails({
                 批量{DECISION_META[decision].label}
               </Button>
             ))}
+            {devMode && (
+              <Button
+                size="small"
+                onClick={() => openAiBrief(selectedIssueIds)}
+              >
+                生成 AI 排查任务书
+              </Button>
+            )}
             <Button
               size="small"
               type="text"
@@ -1568,6 +1624,7 @@ export function PageDetails({
               relatedIssues={relatedIssuesFor(issue)}
               historyRecordId={historyRecordId}
               rendered={rendered}
+              onAiInvestigate={devMode ? () => openAiBrief([issue.id]) : undefined}
             />
           ),
         }}
@@ -1588,6 +1645,16 @@ export function PageDetails({
             updateViewState({ page: issue.page, issue: issue.id })
           },
         })}
+      />
+
+      <AiBriefModal
+        open={briefIssues !== null}
+        issues={briefIssues ?? []}
+        report={report}
+        historyRecordId={historyRecordId}
+        sourceDisplay={sourceDisplay}
+        targetDisplay={targetDisplay}
+        onClose={() => setBriefIssues(null)}
       />
     </section>
   )

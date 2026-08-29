@@ -640,3 +640,33 @@
   }
 
 }
+
+/* AI 排查任务书弹窗（开发者模式） */
+.ai-brief-hint {
+  display: block;
+  margin-top: var(--qa-space-2, 8px);
+  font-size: 12px;
+}
+
+.ai-brief-preview {
+  max-height: 380px;
+  margin: var(--qa-space-2, 8px) 0 0;
+  padding: 12px;
+  overflow: auto;
+  font-size: 12px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--qa-canvas, #f9f9fb);
+  border-radius: var(--qa-radius-md, 8px);
+}
+
+/* 规则命中列表：开发者模式开关标签 */
+.issue-list-dev-toggle {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  font-size: 12px;
+  color: var(--qa-text-secondary, #5f6b7a);
+  cursor: pointer;
+}

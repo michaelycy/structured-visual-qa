@@ -80,6 +80,7 @@ export interface IssueBriefInput {
 const WORK_CONVENTIONS = `## 工作约定（强制，逐条遵守）
 
 - 以 docs/project-contract.md 与 AGENTS.md 为基线：契约优先；认为契约本身有问题时，先提出修改建议并等用户确认，不得绕过。
+- 执行任何修复前，先从专业角度独立评估两件事：(1) issue 本身是否为真实缺陷——还是检测器误报、正常翻译排版适配或已知容差场景；(2) 用户追加描述是否成立。若分析表明用户理解有误，必须直接反驳并给出可验证依据（metrics 数值、契约条款、PDF 实际渲染效果、排版领域惯例），不得为了顺从而附和执行。
 - 先复现诊断（document-qa --verify-stage 分阶段 / tests/ 定向用例），确认根因后再动手；不得以降级严重度、放宽阈值或跳过测试掩盖问题。
 - 遵守分层边界：core 零 HTTP、禁止 import server/persistence；api → services → core；frontend 组件禁止直接 fetch，请求必须走 services 层与 TanStack Query。
 - 检测阈值与权重只能写入 core/src/document_qa/profiles.py 的 RuleProfile；触碰契约 §12（删除/重命名公开字段、匹配权重、严重度阈值、更换 PDF 引擎）必须先说明影响并等待用户确认。
@@ -121,7 +122,7 @@ export function buildIssueBrief(input: IssueBriefInput): string {
     "",
     "## 任务",
     "",
-    "针对下列 issue 完成根因排查：确认代码缺陷后按最佳实践修复；确认检测逻辑正确则给出误报原因与证据。禁止以降级严重度、放宽阈值或跳过测试掩盖问题。",
+    "针对下列 issue 完成根因排查。执行前先独立评估：issue 是否真实缺陷（还是误报/正常排版适配），以及用户追加描述是否成立——若用户理解有误，直接反驳并给出依据，不要附和执行。确认代码缺陷后按最佳实践修复；确认检测逻辑正确则给出误报原因与证据。禁止以降级严重度、放宽阈值或跳过测试掩盖问题。",
     "",
     "用户追加描述：",
     "",

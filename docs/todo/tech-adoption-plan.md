@@ -31,6 +31,7 @@
 | T23 | 比较任务子进程隔离（OCR 不再拖慢 API） | ✅ 已落地 | P0 | 0.5–1 天 |
 | T24 | 多机部署时的任务队列选型（Celery 评估） | ⭕ 待办（触发条件制） | P3 | 触发后评估 |
 | T25 | 评审修复第一批：越界容差 / 移页数字豁免 / 事务外哈希 / review_task_id 下发 | ✅ 已落地（2026-08） | P0 | 0.5–1 天 |
+| T26 | 评审修复第二批：字号基线加权 / language_overrides 贯通 / 脚本表统一 / 解析器合规（匹配惩罚经 Golden 否决） | ✅ 已落地（2026-08，②待方案重定） | P0 | 1–2 天 |
 
 ### 落地记录
 
@@ -796,6 +797,85 @@ SHA-256（单文件上限 100 MiB），期间阻塞任务状态落库、复核�
   页码差异豁免、正文数字/章节号差异照报（`margin_band_ratio=0.08`）、
   跨越带边界的区域不豁免、非移页页对页脚差异行为不变。
 - 后续项：`sample_service` 同类事务内哈希待重构（低频路径，P2）。
+
+---
+
+## T26 评审修复第二批：检测可信度
+
+**问题**：2026-08 全仓代码评审第二批发现——
+① 代表样式取 Region 内**最大字号**块：源侧「20pt 标题 + 10pt 副题」合并
+后代表为 20pt，目标侧换行/合并后与不同子块比较，既会假阳性触发
+FONT_SHRINK HIGH，也会掩盖真实缩小（grouper/composer/matcher 三处联动）；
+② 匈牙利分配对方阵强制全配：一侧 Region 因翻译合并消失时，后续 Region
+整体顺延配对，产生一串 0.45～0.6 的伪匹配并连带成串 REGION_SHIFTED/
+RESIZED 误报；
+③ `RuleDetector`/`TextAlignmentDetector` 直接读全局 `detectors`，
+`language_overrides` 对布局/字体/重叠/对齐检测不生效，与
+`detector_settings_for` 的注释承诺矛盾；
+④ `raster_ocr.py` 与 `content.py` 的脚本判定表不一致（kana 归属、阿语
+数字区间），同一报告内 OCR 启用判断可能自相矛盾；
+⑤ `pymupdf_parser` 背景提取 `except Exception: pass` 静默吞错（违反 §9），
+且背景深色判定阈值（0.1/0.92/0.5）散落在解析器内未进 RuleProfile；
+⑥ REGION_SHIFTED/FONT_SHRINK/REGION_RESIZED/碎片化/重叠等 Issue 的
+metrics 缺少判定阈值（§6.4）。
+
+**方案**：
+
+1. core 新增 `style_stats.weighted_median_font_size`：grouper 与
+   composer 的代表样式改用**字符数加权字号中位数**（样式身份与标题
+   判定保持原逻辑），matcher 的 font_change 因此对比主体字号。
+2. `MatchingSettings` 新增 `weak_match_score_floor`（0.6）与
+   `weak_match_cost_penalty`（0.5）：得分低于可信线的代价项加罚，
+   阻止强制分配用弱配对挤占强配对的目标列；`minimum_score` 过滤不变。
+3. core 新增 `script_detection.py` 共享模块（判定表 + 主导脚本投票 +
+   语言场景解析）：content/raster_ocr/RuleDetector/alignment 统一取
+   `detector_settings_for(language)`，默认 overrides 为空故默认行为
+   不变。
+4. 解析器背景提取异常记入 page metadata（`background_parse_errors`），
+   背景判定阈值收敛为 RuleProfile `BackgroundSettings`（默认值与原
+   硬编码一致），pipeline 装配时传入。
+5. 上述检测器 Issue metrics 补齐阈值字段。
+
+**验收**：
+
+- 默认行为差异仅限预期项：字号基线加权与匹配惩罚下限引起的
+  FONT_SHRINK/REGION_SHIFTED/REGION_RESIZED 增减，逐条归因；
+- language_overrides 生效路径有构造用例覆盖，默认 Profile 行为不变；
+- ruff、渐进 mypy、compileall、双包构建通过；
+- 分阶段真实样例验证 + HEAD 基线 worktree 逐条对照并归因。
+
+**落地记录（2026-08）**：
+
+- ①③④⑤⑥ 已落地：新增 `style_stats.weighted_median_font_size`
+  （grouper/composer 代表样式保留最大字号块身份，字号改字符数加权
+  中位数）；新增 `script_detection.py` 共享模块（脚本判定表 + 主导
+  脚本投票 + `resolve_language`），content/raster_ocr/RuleDetector/
+  TextAlignmentDetector 统一经 `detector_settings_for(language)` 取
+  配置；解析器背景提取异常记入 page metadata
+  `background_parse_errors`，背景判定阈值收敛为 RuleProfile
+  `BackgroundSettings`（默认值与原硬编码一致，pipeline 装配传入）；
+  182 条 Issue 的 metrics 补齐判定阈值字段。
+- 构造用例：latin-cjk 覆盖关闭碎片化生效（0 条）且默认 Profile 同页
+  照报（1 条）；同源 Block 混排 20pt/10pt 行的代表字号由 20.0 修正为
+  10.0（加权中位数）。
+- **② 低可信匹配惩罚下限：实现后经 Golden 否决并回退**。真实样例
+  第 43 页存在 3 源 3 目标、其中一对无真实对应：无惩罚时匈牙利最优
+  解让位置相似度 1.000/0.998 的真实配对保持不动、最差行承担剩余列
+  （3 条可疑几何 Issue）；加入 0.6 悬崖惩罚后，求解器牺牲强配对
+  （0.939→0.908、0.942→0.919）把弱配对抬过可信线，配对整体换位反
+  而多产出 5 条伪几何 Issue（275→278，80.39→80.30）。惩罚悬崖制造
+  了"跳崖激励"，与设计目标相反，已回退。候选替代方案（需另行评审）：
+  a) 检测器侧可信门控——match.score 低于可信线的配对不产出
+  REGION_SHIFTED/FONT_SHRINK/RESIZED（伪配对不再伪装成几何证据）；
+  b) 平滑斜坡惩罚替代悬崖（Golden 显示该样例仍会换位，亦不推荐）；
+  c) 维持现状（minimum_score=0.45 过滤已覆盖最差情形）。
+- 验收：`uv lock --check`、Ruff、渐进 mypy、compileall、双包
+  sdist+wheel 构建通过；真实样例六阶段——parse 46 页 1360/15284
+  Block、group 508/486、alignment 46 对、match 459 对、detect 275
+  Issue、report fail/80.39；与 HEAD 基线 worktree 逐条比对 275 条
+  Issue 键集合、类型、严重度、描述与全部 font_size_change_ratio
+  逐位一致（本轮改动在该样例正确休眠：单一样式 Region 的加权中位
+  数等于原最大字号，language_overrides 未配置）。
 
 ---
 

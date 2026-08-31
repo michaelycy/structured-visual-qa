@@ -53,7 +53,9 @@ class DocumentQAPipeline:
         """支持注入 Profile 与组件，便于界面配置、测试和替换 PDF 引擎。"""
 
         self.profile = profile or default_rule_profile()
-        self.parser = parser or PyMuPDFParser()
+        # 背景识别阈值来自同一 Profile：隐形文字检测的背景判断与
+        # 检测阈值随一次配置修改贯穿全流程。
+        self.parser = parser or PyMuPDFParser(background=self.profile.background)
         self.renderer = renderer or PyMuPDFRenderer()
         self.grouper = grouper or RegionGrouper(self.profile)
         self.logical_region_composer = (

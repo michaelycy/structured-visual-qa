@@ -13,7 +13,9 @@ from document_qa.schemas import (
     Page,
     Region,
     RegionRelationships,
+    TextStyle,
 )
+from document_qa.style_stats import weighted_median_font_size
 
 
 class RegionGrouper:
@@ -117,7 +119,11 @@ class RegionGrouper:
                     if block.content and block.content.text
                 )
             )
-            style = representative.style
+            # 代表样式保留最大字号块的身份（颜色/对齐/字重），但字号改用
+            # 字符数加权中位数：以最大字号代表整个 Region 会让「标题+多行
+            # 正文」的合并组被错标为标题字号，翻译后两侧取到不同子块时
+            # 字号变化检测既误报也漏报。
+            style = self._representative_style(text_blocks, representative)
 
         return Region(
             id=region_id,
@@ -345,6 +351,26 @@ class RegionGrouper:
 
         text = block.content.text if block.content else None
         return bool(text and self._TEXT_ITEM_PREFIX.match(text))
+
+    @staticmethod
+    def _representative_style(
+        text_blocks: list[Block], representative: Block
+    ) -> TextStyle | None:
+        """返回以加权中位数字号修正后的代表样式（无字号时原样返回）。"""
+
+        style = representative.style
+        if style is None:
+            return None
+        weighted = weighted_median_font_size(
+            [
+                (block.style.font_size, len(block.content.text or ""))
+                for block in text_blocks
+                if block.style and block.style.font_size
+            ]
+        )
+        if weighted is None or style.font_size == weighted:
+            return style
+        return style.model_copy(update={"font_size": weighted})
 
     @staticmethod
     def _union_bbox(blocks: list[Block]) -> BoundingBox:

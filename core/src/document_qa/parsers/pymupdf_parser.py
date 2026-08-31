@@ -9,6 +9,7 @@ from typing import Any
 import pymupdf
 
 from document_qa.parsers.base import DocumentParsingError
+from document_qa.profiles import BackgroundSettings
 from document_qa.schemas import (
     Block,
     BoundingBox,
@@ -28,11 +29,13 @@ class PyMuPDFParser:
         *,
         max_file_size: int = 100 * 1024 * 1024,
         max_pages: int = 500,
+        background: BackgroundSettings | None = None,
     ) -> None:
-        """设置输入文件大小和页数上限，避免异常文档无限消耗资源。"""
+        """设置输入限制与背景识别阈值（缺省使用内置 Profile 默认值）。"""
 
         self.max_file_size = max_file_size
         self.max_pages = max_pages
+        self.background = background or BackgroundSettings()
 
     def parse(
         self,
@@ -189,37 +192,47 @@ class PyMuPDFParser:
                 if image_block is not None:
                     blocks.append(image_block)
 
-        background_color, dark_boxes = self._page_background(pdf_page)
+        background_color, dark_boxes, background_errors = self._page_background(
+            pdf_page
+        )
+        page_metadata = {
+            "rotation": int(pdf_page.rotation),
+            # 页面背景色（#RRGGBB 或 None）：供"隐形文字"检测判断
+            # 文字颜色是否与页面整体背景同色。
+            "background_color": background_color,
+            # 深色填充块与图片的 bbox 列表：白字落在其上时是正常
+            # 设计（黑底白字、图上白字），隐形检测需按区域排除。
+            "dark_boxes": dark_boxes,
+        }
+        if background_errors:
+            # 背景/深色块提取失败会让隐形文字检测对该页降级（漏报
+            # 白字白底）；契约 §9 禁止静默跳过，失败类型必须随报告
+            # 可见，供验收人判断该页检测能力的可信度。
+            page_metadata["background_parse_errors"] = background_errors
         return Page(
             document_id=document_id,
             page=page_number,
             width=float(pdf_page.rect.width),
             height=float(pdf_page.rect.height),
             blocks=blocks,
-            metadata={
-                "rotation": int(pdf_page.rotation),
-                # 页面背景色（#RRGGBB 或 None）：供"隐形文字"检测判断
-                # 文字颜色是否与页面整体背景同色。
-                "background_color": background_color,
-                # 深色填充块与图片的 bbox 列表：白字落在其上时是正常
-                # 设计（黑底白字、图上白字），隐形检测需按区域排除。
-                "dark_boxes": dark_boxes,
-            },
+            metadata=page_metadata,
         )
 
-    @staticmethod
     def _page_background(
-        pdf_page: pymupdf.Page,
-    ) -> tuple[str | None, list[dict[str, float]]]:
-        """提取页面背景色与深色背景块。
+        self, pdf_page: pymupdf.Page
+    ) -> tuple[str | None, list[dict[str, float]], list[str]]:
+        """提取页面背景色、深色背景块与提取失败记录。
 
-        返回 (背景色, 深色块列表)。背景色取覆盖面积最大的整页填充矩形
-        颜色；找不到大面积填充时为 None。深色块包括非浅色填充矩形与
-        全部图片：隐形文字检测用它们按区域判断白字是否真实不可见。
+        返回 (背景色, 深色块列表, 失败记录)。背景色取覆盖面积最大的
+        整页填充矩形颜色；找不到大面积填充时为 None。深色块包括非
+        浅色填充矩形与全部图片。个别异常 PDF 的绘图/图片枚举可能
+        抛错——按无背景降级处理，但失败类型写入报告而不是静默吞掉。
         """
 
+        settings = self.background
         page_area = pdf_page.rect.width * pdf_page.rect.height
         dark_boxes: list[dict[str, float]] = []
+        errors: list[str] = []
         largest: tuple[float, tuple[float, float, float] | None] | None = None
         try:
             for drawing in pdf_page.get_drawings():
@@ -228,10 +241,10 @@ class PyMuPDFParser:
                 if rect is None or fill is None:
                     continue
                 area = rect.width * rect.height
-                if area < page_area * 0.1:
+                if area < page_area * settings.dark_box_min_area_ratio:
                     # 过小的装饰块不影响文字可见性判断。
                     continue
-                is_dark = min(fill) < 0.92  # 任一路低于 92% 白视为深色
+                is_dark = min(fill) < settings.dark_fill_max_channel
                 if is_dark:
                     dark_boxes.append(
                         {
@@ -241,13 +254,12 @@ class PyMuPDFParser:
                             "height": rect.height,
                         }
                     )
-                if area >= page_area * 0.5 and not is_dark:
+                if area >= page_area * settings.background_min_area_ratio and not is_dark:
                     # 浅色整页填充才是页面背景色；深色整页填充进 dark_boxes。
                     if largest is None or area > largest[0]:
                         largest = (area, fill)
-        except Exception:
-            # 个别异常 PDF 的 get_drawings 可能抛错；按无背景处理。
-            pass
+        except Exception as exc:
+            errors.append(f"get_drawings:{type(exc).__name__}")
         # 图片视为非浅色背景块：白字在图片上正常可见（图片可能是
         # 深色照片，也可能是浅色插画——统一跳过避免误判）。
         try:
@@ -263,13 +275,13 @@ class PyMuPDFParser:
                         "height": bbox[3] - bbox[1],
                     }
                 )
-        except Exception:
-            pass
+        except Exception as exc:
+            errors.append(f"get_image_info:{type(exc).__name__}")
         if largest is None:
-            return None, dark_boxes
+            return None, dark_boxes, errors
         red, green, blue = (max(0.0, min(1.0, channel)) for channel in largest[1])
         color = f"#{int(round(red * 255)):02X}{int(round(green * 255)):02X}{int(round(blue * 255)):02X}"
-        return color, dark_boxes
+        return color, dark_boxes, errors
 
     def _parse_text_block(
         self,

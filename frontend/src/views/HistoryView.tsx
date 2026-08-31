@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { ReloadOutlined, SearchOutlined } from "@ant-design/icons"
-import { Button, message, Modal, Select, Space, Tooltip, Typography, Input } from "antd"
+import { Alert, Button, message, Modal, Select, Space, Tooltip, Typography, Input } from "antd"
 import type { ColumnsType } from "antd/es/table"
 import type { HistoryRecord } from "../api"
 import { api } from "../services/queryClient"
@@ -31,11 +31,14 @@ function formatTime(iso: string): string {
 function RerunModal({
   record,
   open,
+  confirming,
   onConfirm,
   onClose,
 }: {
   record: HistoryRecord | null
   open: boolean
+  /** 确认中需要拉取完整记录取路径：按钮进入 loading，防止误以为卡死重复点击。 */
+  confirming: boolean
   onConfirm: (profile: string | null, passwords: { source: string; target: string }) => void
   onClose: () => void
 }) {
@@ -64,6 +67,8 @@ function RerunModal({
       title="重新质检"
       okText="开始质检"
       cancelText="取消"
+      confirmLoading={confirming}
+      okButtonProps={{ disabled: confirming }}
       onOk={() =>
         onConfirm(profile, { source: sourcePassword, target: targetPassword })
       }
@@ -112,12 +117,18 @@ function RerunModal({
 
 export function HistoryView({
   refreshToken,
+  busy = false,
+  progressText = "",
   onReopen,
   onRerun,
   onStart,
 }: {
   /** 每次比较成功落盘后变化，驱动列表重新读取服务端记录。 */
   refreshToken: number
+  /** 是否有质检任务在后台执行：历史页显示执行中横幅，避免误以为无响应。 */
+  busy?: boolean
+  /** 后台任务的实时进度文案（排队/处理中/渲染中）。 */
+  progressText?: string
   onReopen: (record: HistoryRecord) => void
   /** 重新执行质检：profile 为 null 沿用工作台当前配置；密码不落历史需重输。 */
   onRerun: (
@@ -135,6 +146,7 @@ export function HistoryView({
   >(null)
   // 重新质检目标：先存摘要行，确认时再拉完整记录取路径。
   const [rerunRecord, setRerunRecord] = useState<Omit<HistoryRecord, "report"> | null>(null)
+  const [rerunSubmitting, setRerunSubmitting] = useState(false)
   const [query, setQuery] = useState("")
   const [statusFilter, setStatusFilter] = useState("all")
   const tableContainerRef = useRef<HTMLDivElement>(null)
@@ -213,16 +225,30 @@ export function HistoryView({
     passwords: { source: string; target: string },
   ) => {
     if (!rerunRecord) return
+    if (busy) {
+      // executeCompare 对并发提交是静默忽略的；必须在这里提前拦截，
+      // 否则点击"开始质检"后弹窗关闭且毫无反应，与卡死无法区分。
+      messageApi.warning("已有质检任务在执行中，请等待完成后再重新质检。")
+      return
+    }
+    setRerunSubmitting(true)
     try {
       const full = await api.historyItem(rerunRecord.record_id)
       if (!full.source_path || !full.target_path) {
         throw new Error("该记录缺少输入文档路径，无法重新质检")
       }
       onRerun(full, profile, passwords)
+      // 任务在后台轮询执行；历史页本身不展示进度（顶部横幅除外），
+      // 必须显式告知已提交，否则用户以为点击没有生效。
+      messageApi.success(
+        `已提交重新质检任务（${rerunRecord.source_display} → ${rerunRecord.target_display}），完成后将自动打开报告。`,
+        6,
+      )
     } catch (exc) {
       const reason = exc instanceof Error ? exc.message : String(exc)
       messageApi.error(`准备重新质检失败：${reason}。请确认原文档仍可用后重试。`)
     } finally {
+      setRerunSubmitting(false)
       setRerunRecord(null)
     }
   }
@@ -368,6 +394,17 @@ export function HistoryView({
           </Button>
         }
       />
+      {busy ? (
+        // 后台质检任务的唯一可见信号（本页没有工作台的进度条）：
+        // 不展示时用户会以为"重新质检"点击后没有生效。
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message={`质检任务执行中：${progressText || "已提交，等待任务启动"}`}
+          description="完成后将自动打开报告；当前列表可继续浏览，无需等待。"
+        />
+      ) : null}
       <PageSection
         className="history-records"
         extra={
@@ -402,6 +439,7 @@ export function HistoryView({
             columns={columns}
             dataSource={filteredRecords}
             scroll={{ x: HISTORY_TABLE_MIN_WIDTH }}
+            pagination={{ pageSize: 20 }}
             emptyTitle={records.length === 0 ? "还没有质检记录" : "没有匹配的质检记录"}
             emptyDescription={
               records.length === 0
@@ -434,6 +472,7 @@ export function HistoryView({
       <RerunModal
         record={rerunRecord}
         open={rerunRecord !== null}
+        confirming={rerunSubmitting}
         onConfirm={(profile, passwords) => void confirmRerun(profile, passwords)}
         onClose={() => setRerunRecord(null)}
       />

@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 from statistics import mean
 from typing import Callable
 
 from document_qa.ocr import OCRLine, OCRProvider, OCRResult
 from document_qa.profiles import RuleProfile, default_rule_profile
+from document_qa.script_detection import (
+    SCRIPT_PATTERNS,
+    dominant_script_by_characters,
+    resolve_language,
+)
 from document_qa.schemas import (
     BoundingBox,
     ElementType,
@@ -21,13 +25,6 @@ from document_qa.schemas import (
 )
 
 ImageLoader = Callable[[Page, BoundingBox], bytes]
-
-_SCRIPT_PATTERNS = {
-    "latin": re.compile(r"[A-Za-z]"),
-    "cjk": re.compile(r"[\u3040-\u30ff\u3400-\u9fff]"),
-    "cyrillic": re.compile(r"[\u0400-\u04ff]"),
-    "arabic": re.compile(r"[\u0600-\u06ff]"),
-}
 
 
 @dataclass
@@ -69,8 +66,10 @@ class RasterOCRDetector:
         if not settings.enabled.untranslated_raster_ocr:
             return RasterOCRDetectionResult()
 
-        source_script = self._dominant_script(source)
-        target_script = self._dominant_script(target)
+        # 主导脚本判断与 ContentDetector 共用同一实现，保证同一页面
+        # 在指纹规则与 OCR 规则中的翻译方向结论一致。
+        source_script = dominant_script_by_characters(source.regions)
+        target_script = dominant_script_by_characters(target.regions)
         if (
             source_script in {None, "mixed"}
             or target_script in {None, "mixed"}
@@ -181,7 +180,7 @@ class RasterOCRDetector:
         residue_lines = [
             line
             for line in target_lines
-            if _SCRIPT_PATTERNS[source_script].search(line.text)
+            if SCRIPT_PATTERNS[source_script].search(line.text)
         ]
         bbox = self._map_lines_to_page(
             residue_lines,
@@ -258,7 +257,7 @@ class RasterOCRDetector:
     def _script_count(lines: list[OCRLine], script: str) -> int:
         """统计一组 OCR 行中指定脚本的字符数。"""
 
-        return sum(len(_SCRIPT_PATTERNS[script].findall(line.text)) for line in lines)
+        return sum(len(SCRIPT_PATTERNS[script].findall(line.text)) for line in lines)
 
     @staticmethod
     def _map_lines_to_page(
@@ -309,33 +308,10 @@ class RasterOCRDetector:
                 values.append(digest)
         return tuple(values)
 
-    @staticmethod
-    def _dominant_script(page: Page) -> str | None:
-        """按页面可提取文字的字符总量判断主导脚本。"""
-
-        counts = {
-            name: sum(
-                len(pattern.findall(region.content.text or ""))
-                for region in page.regions
-                if region.content and region.content.text
-            )
-            for name, pattern in _SCRIPT_PATTERNS.items()
-        }
-        positive = sorted(
-            ((name, count) for name, count in counts.items() if count),
-            key=lambda item: (-item[1], item[0]),
-        )
-        if not positive:
-            return None
-        if len(positive) > 1 and positive[0][1] == positive[1][1]:
-            return "mixed"
-        return positive[0][0]
-
     def resolve_language(self, source: Page, target: Page) -> str:
-        """返回 Profile 语言覆盖所使用的源脚本-目标脚本标识。"""
+        """返回 Profile 语言覆盖所使用的源脚本-目标脚本标识。
 
-        source_script = self._dominant_script(source)
-        target_script = self._dominant_script(target)
-        if source_script and target_script:
-            return f"{source_script}-{target_script}"
-        return self.profile.language
+        委托共享解析逻辑，保证与 ContentDetector 的场景键一致。
+        """
+
+        return resolve_language(self.profile, source.regions, target.regions)

@@ -13,6 +13,13 @@ from decimal import Decimal
 from document_qa.detectors.evidence import region_evidence
 from document_qa.detectors.quantities import QuantityMention, extract_quantity_mentions
 from document_qa.profiles import RuleProfile, default_rule_profile
+from document_qa.script_detection import (
+    ANY_SCRIPT_PATTERN,
+    SCRIPT_PATTERNS,
+    dominant_script,
+    dominant_script_by_characters,
+    resolve_language,
+)
 from document_qa.schemas import (
     BoundingBox,
     ElementType,
@@ -36,27 +43,6 @@ _NUMBER_PATTERN = re.compile(r"\d+(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?")
 _DIGIT_TRANSLATION = str.maketrans(
     "０１２３４５６７８９．，٠١٢٣٤٥٦٧٨٩٫٬۰۱۲۳۴۵۶۷۸۹",
     "0123456789.,0123456789.,0123456789",
-)
-# 参与脚本投票与漏译判定的文字区块：名称即语言场景标识（language 维度）
-# 中的脚本名。中英互译沿用 "cjk"/"latin"，新增语言按 Unicode 区块补充。
-_SCRIPT_PATTERNS: dict[str, re.Pattern[str]] = {
-    "latin": re.compile(r"[A-Za-z]"),
-    "cjk": re.compile(r"[\u4e00-\u9fff\u3400-\u4dbf]"),
-    # 阿拉伯字母区间排除了阿拉伯-印度数字（U+0660-0669）与标点，
-    # 否则数字串会参与"文字占比"统计。
-    "arabic": re.compile(r"[\u0620-\u064a\u066e-\u06d3]"),
-    "hebrew": re.compile(r"[\u05b0-\u05ea]"),
-    "cyrillic": re.compile(r"[\u0400-\u04ff]"),
-    "greek": re.compile(r"[\u0370-\u03ff\u1f00-\u1fff]"),
-    "devanagari": re.compile(r"[\u0900-\u097f]"),
-    "bengali": re.compile(r"[\u0980-\u09ff]"),
-    "thai": re.compile(r"[\u0e00-\u0e7f]"),
-    "hangul": re.compile(r"[\uac00-\ud7af\u1100-\u11ff]"),
-    "kana": re.compile(r"[\u3040-\u30ff]"),
-}
-# 全部脚本字母的并集匹配：漏译判定中"字母总数"的分母。
-_ANY_SCRIPT_PATTERN = re.compile(
-    "|".join(f"(?:{pattern.pattern})" for pattern in _SCRIPT_PATTERNS.values())
 )
 # 全大写字母词（机构缩写：UNICEF、WHO、CSAM）通常保留原文不翻译。
 _ACRONYM_PATTERN = re.compile(r"\b[A-Z]{2,}\b")
@@ -89,7 +75,7 @@ class ContentDetector:
         """
 
         issues: list[Issue] = []
-        language = self._resolve_language(source, target)
+        language = resolve_language(self.profile, source.regions, target.regions)
         settings = self.profile.detector_settings_for(language)
         if settings.enabled.number_mismatch:
             issues.extend(
@@ -121,8 +107,8 @@ class ContentDetector:
         # 表格内大量 IGBT/SiC 等短缩写会在 Region 投票中压过正文。
         # 图像化漏译需要判断整页翻译方向，因此按可提取字符总量判断；
         # 普通文本漏译仍使用 Region 投票，保持既有混排豁免行为。
-        source_script = self._dominant_script_by_characters(source.regions)
-        target_script = self._dominant_script_by_characters(target.regions)
+        source_script = dominant_script_by_characters(source.regions)
+        target_script = dominant_script_by_characters(target.regions)
         if (
             source_script in {None, "mixed"}
             or target_script in {None, "mixed"}
@@ -287,22 +273,6 @@ class ContentDetector:
         x1 = max(region.bbox.right for region in regions)
         y1 = max(region.bbox.bottom for region in regions)
         return BoundingBox(x=x0, y=y0, width=x1 - x0, height=y1 - y0)
-
-    def _resolve_language(self, source: Page, target: Page) -> str:
-        """解析当前比较的语言场景标识（源脚本-目标脚本）。
-
-        显式声明的 language 优先（用户比自动推断更清楚翻译方向）；
-        auto 模式按双方主导脚本拼接，任一侧无法判定或同脚本时回退
-        全局默认配置（场景键不会命中任何覆盖）。
-        """
-
-        if self.profile.language != "auto":
-            return self.profile.language
-        source_script = self._dominant_script(source.regions)
-        target_script = self._dominant_script(target.regions)
-        if not source_script or not target_script or source_script == target_script:
-            return "default"
-        return f"{source_script}-{target_script}"
 
     def _detect_number_mismatch(
         self,
@@ -580,8 +550,8 @@ class ContentDetector:
 
         source_regions = {region.id: region for region in source.regions}
         target_regions = {region.id: region for region in target.regions}
-        source_script = self._dominant_script(list(source_regions.values()))
-        target_script = self._dominant_script(list(target_regions.values()))
+        source_script = dominant_script(list(source_regions.values()))
+        target_script = dominant_script(list(target_regions.values()))
         if (
             source_script == target_script
             or source_script is None
@@ -597,7 +567,7 @@ class ContentDetector:
         ).thresholds
         threshold = thresholds.untranslated_ratio
         min_letters = thresholds.untranslated_min_letters
-        pattern = _SCRIPT_PATTERNS[source_script]
+        pattern = SCRIPT_PATTERNS[source_script]
         issues: list[Issue] = []
         for match in result.matches:
             source_region = source_regions.get(match.source_region_id)
@@ -611,11 +581,11 @@ class ContentDetector:
                 continue
             # 机构名、版权行（© WHO、© UNFPA）本来就保留原文；
             # 字母字符过少或全由大写缩写构成的短文本不参与漏译判定。
-            letters = _ANY_SCRIPT_PATTERN.findall(text)
+            letters = ANY_SCRIPT_PATTERN.findall(text)
             if len(letters) < min_letters:
                 continue
             without_acronyms = _ACRONYM_PATTERN.sub("", text)
-            remaining = _ANY_SCRIPT_PATTERN.findall(without_acronyms)
+            remaining = ANY_SCRIPT_PATTERN.findall(without_acronyms)
             if len(remaining) < min_letters:
                 continue
             ratio = len(pattern.findall(text)) / len(letters)
@@ -687,55 +657,3 @@ class ContentDetector:
                 QuantityMention(key=value, display=value, span=match.span())
             )
         return sorted(mentions, key=lambda item: item.span)
-
-    @staticmethod
-    def _dominant_script(regions: list[Region]) -> str | None:
-        """按各 Region 主脚本的数量投票判断页面主导脚本。
-
-        用区域数而非字符数投票：英文单词字母多、中文汉字信息密度高，
-        按字符数统计会把"中文为主夹一段英文"的页面误判为英文。
-        """
-
-        votes: Counter = Counter()
-        for region in regions:
-            # 图片等 Region 的 content.text 可能为 None，需先判空。
-            text = region.content.text if region.content else ""
-            if not has_visible_text(text):
-                continue
-            counts = {
-                name: len(pattern.findall(text))
-                for name, pattern in _SCRIPT_PATTERNS.items()
-            }
-            top_two = sorted(counts.items(), key=lambda kv: -kv[1])[:2]
-            if top_two[0][1] == 0:
-                continue
-            # 平票的 Region 不投票：中英对照的 Region 没有明确主脚本。
-            if len(top_two) > 1 and top_two[0][1] == top_two[1][1]:
-                continue
-            votes[top_two[0][0]] += 1
-        if not votes:
-            return None
-        top = votes.most_common(2)
-        # 平票视为混排，无法定义"源语言"，漏译判定跳过。
-        if len(top) == 2 and top[0][1] == top[1][1]:
-            return "mixed"
-        return top[0][0]
-
-    @staticmethod
-    def _dominant_script_by_characters(regions: list[Region]) -> str | None:
-        """按全页字符总量判断主脚本，供图像化区域翻译方向识别。"""
-
-        counts: Counter = Counter()
-        for region in regions:
-            text = region.content.text if region.content else None
-            if not has_visible_text(text):
-                continue
-            for name, pattern in _SCRIPT_PATTERNS.items():
-                counts[name] += len(pattern.findall(text or ""))
-        positive = [(name, count) for name, count in counts.items() if count > 0]
-        if not positive:
-            return None
-        top = sorted(positive, key=lambda item: (-item[1], item[0]))
-        if len(top) > 1 and top[0][1] == top[1][1]:
-            return "mixed"
-        return top[0][0]

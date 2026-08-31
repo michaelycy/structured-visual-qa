@@ -11,10 +11,12 @@ from document_qa.matching.geometry import (
     size_similarity,
 )
 from document_qa.profiles import (
+    DetectorSettings,
     DetectorThresholds,
     RuleProfile,
     default_rule_profile,
 )
+from document_qa.script_detection import resolve_language
 from document_qa.text_visibility import has_visible_text
 from document_qa.schemas import (
     Block,
@@ -46,10 +48,18 @@ class RuleDetector:
     def detect(
         self, source: Page, target: Page, match_result: PageMatchResult
     ) -> list[Issue]:
-        """按确定顺序运行各规则，保证报告输出稳定。"""
+        """按确定顺序运行各规则，保证报告输出稳定。
 
+        检测开关与阈值按语言场景解析（与 ContentDetector 共用同一
+        resolve_language 逻辑），命中 language_overrides 时使用该场景
+        的覆盖配置；默认 Profile 无覆盖，行为与全局配置一致。
+        """
+
+        settings = self.profile.detector_settings_for(
+            resolve_language(self.profile, source.regions, target.regions)
+        )
         issues: list[Issue] = []
-        enabled = self.profile.detectors.enabled
+        enabled = settings.enabled
         rasterized_issues: list[Issue] = []
         rasterized_image_ids: set[str] = set()
         rasterized_text_ids: set[str] = set()
@@ -61,7 +71,7 @@ class RuleDetector:
             rasterized_image_ids,
             rasterized_text_ids,
             rasterized_pairs,
-        ) = self._detect_rasterized_text(source, target, match_result)
+        ) = self._detect_rasterized_text(source, target, match_result, settings)
         if enabled.text_rasterized:
             issues.extend(rasterized_issues)
         if enabled.missing_element:
@@ -76,7 +86,7 @@ class RuleDetector:
         alignment_result = AlignmentDetectionResult()
         if enabled.text_alignment_changed:
             alignment_result = self.alignment_detector.detect(
-                source, target, match_result
+                source, target, match_result, settings
             )
             issues.extend(
                 issue
@@ -96,6 +106,7 @@ class RuleDetector:
                     match_result,
                     alignment_result,
                     suppressed_target_ids=rasterized_text_ids,
+                    settings=settings,
                 )
             )
         if enabled.text_fragmented:
@@ -105,6 +116,7 @@ class RuleDetector:
                     source,
                     match_result,
                     suppressed_target_ids=rasterized_text_ids,
+                    settings=settings,
                 )
             )
         if enabled.invisible_text:
@@ -114,12 +126,11 @@ class RuleDetector:
                     source,
                     match_result,
                     suppressed_target_ids=rasterized_text_ids,
+                    settings=settings,
                 )
             )
         if enabled.content_out_of_page:
-            issues.extend(
-                self._detect_out_of_page(target, self.profile.detectors.thresholds)
-            )
+            issues.extend(self._detect_out_of_page(target, settings.thresholds))
         if enabled.overlap:
             issues.extend(
                 self._detect_overlaps(
@@ -128,6 +139,7 @@ class RuleDetector:
                     match_result,
                     suppressed_pairs=rasterized_pairs,
                     suppressed_target_ids=rasterized_text_ids,
+                    settings=settings,
                 )
             )
         return issues
@@ -199,7 +211,11 @@ class RuleDetector:
         return issues
 
     def _detect_rasterized_text(
-        self, source: Page, target: Page, result: PageMatchResult
+        self,
+        source: Page,
+        target: Page,
+        result: PageMatchResult,
+        settings: DetectorSettings | None = None,
     ) -> tuple[list[Issue], set[str], set[str], set[frozenset[str]]]:
         """识别“透明译文文本层 + 同位置可见图片”的局部文字栅格化。
 
@@ -207,10 +223,11 @@ class RuleDetector:
         高重叠证据；正常插图、图片背景叠字和仅靠位置猜测的跨类型区域不会命中。
         """
 
+        resolved = settings or self.profile.detectors
         source_regions = {region.id: region for region in source.regions}
         target_regions = {region.id: region for region in target.regions}
         blocks_by_id = {block.id: block for block in target.blocks}
-        thresholds = self.profile.detectors.thresholds
+        thresholds = resolved.thresholds
         image_regions = [
             target_regions[region_id]
             for region_id in result.unmatched_target_region_ids
@@ -273,7 +290,7 @@ class RuleDetector:
                     id=f"p{target.page}-rasterized-{image_region.id}",
                     page=target.page,
                     type=IssueType.TEXT_RASTERIZED,
-                    severity=self.profile.detectors.severity_for(
+                    severity=resolved.severity_for(
                         IssueType.TEXT_RASTERIZED, Severity.HIGH
                     ),
                     source_region=source_region.id,
@@ -333,13 +350,14 @@ class RuleDetector:
         result: PageMatchResult,
         alignment_result: AlignmentDetectionResult,
         suppressed_target_ids: set[str] | None = None,
+        settings: DetectorSettings | None = None,
     ) -> list[Issue]:
         """检测显著位移、尺寸剧变与字号变化，并保留触发规则的比例。"""
 
         source_regions = {region.id: region for region in source.regions}
         target_regions = {region.id: region for region in target.regions}
-        thresholds = self.profile.detectors.thresholds
-        enabled = self.profile.detectors.enabled
+        thresholds = (settings or self.profile.detectors).thresholds
+        enabled = (settings or self.profile.detectors).enabled
         suppressed_target_ids = suppressed_target_ids or set()
         matches_by_pair = {
             (match.source_region_id, match.target_region_id): match
@@ -389,6 +407,10 @@ class RuleDetector:
                         metrics={
                             "x_shift_ratio": diff.x_shift_ratio,
                             "y_shift_ratio": diff.y_shift_ratio,
+                            "shifted_ratio_threshold": thresholds.shifted_ratio,
+                            "severely_shifted_ratio_threshold": (
+                                thresholds.severely_shifted_ratio
+                            ),
                             **evidence,
                         },
                         description="目标区域相对源区域发生显著位置偏移。",
@@ -429,6 +451,9 @@ class RuleDetector:
                             bbox=target_region.bbox,
                             metrics={
                                 "font_size_change_ratio": font_change,
+                                "font_shrink_ratio_threshold": (
+                                    thresholds.font_shrink_ratio
+                                ),
                                 **evidence,
                             },
                             description="目标区域字号为适应版面而明显缩小。",
@@ -454,6 +479,7 @@ class RuleDetector:
                         bbox=target_region.bbox,
                         metrics={
                             "font_size_change_ratio": font_change,
+                            "font_grow_ratio_threshold": thresholds.font_grow_ratio,
                             **evidence,
                         },
                         description="目标区域字号相对源区域明显放大。",
@@ -503,6 +529,9 @@ class RuleDetector:
                             "width_change_ratio": diff.width_change_ratio,
                             "height_change_ratio": diff.height_change_ratio,
                             "resize_magnitude": resize,
+                            "region_resize_ratio_threshold": (
+                                thresholds.region_resize_ratio
+                            ),
                             **evidence,
                         },
                         description="目标区域尺寸相对源区域剧变，可能发生段落合并或拆散。",
@@ -605,6 +634,7 @@ class RuleDetector:
         source: Page,
         result: PageMatchResult,
         suppressed_target_ids: set[str] | None = None,
+        settings: DetectorSettings | None = None,
     ) -> list[Issue]:
         """检测目标文字被竖排/拆散成单字母碎片的排版破坏。
 
@@ -615,7 +645,7 @@ class RuleDetector:
         供界面做"原文 → 译文"对照。
         """
 
-        thresholds = self.profile.detectors.thresholds
+        thresholds = (settings or self.profile.detectors).thresholds
         suppressed_target_ids = suppressed_target_ids or set()
         source_regions = {region.id: region for region in source.regions}
         # 目标区域 → 源区域映射：碎片化目标区域匹配到的源区域文本即原文。
@@ -663,6 +693,8 @@ class RuleDetector:
                             "target_text": text,
                             "bbox_width": region.bbox.width,
                             "letter_count": len(letters),
+                            "fragment_max_width": thresholds.fragment_max_width,
+                            "fragment_max_letters": thresholds.fragment_max_letters,
                             **region_evidence(source_region, region),
                         },
                         description="目标文字疑似被竖排或拆散成字母碎片（窄列排版破坏）。",
@@ -677,6 +709,7 @@ class RuleDetector:
         source: Page,
         result: PageMatchResult,
         suppressed_target_ids: set[str] | None = None,
+        settings: DetectorSettings | None = None,
     ) -> list[Issue]:
         """检测透明文字或文字颜色与页面背景同色的隐形文字。
 
@@ -688,7 +721,7 @@ class RuleDetector:
         Issue 附带源区域原文，供界面做"原文 → 译文"对照。
         """
 
-        thresholds = self.profile.detectors.thresholds
+        thresholds = (settings or self.profile.detectors).thresholds
         color_threshold = thresholds.invisible_color_threshold
         opacity_threshold = thresholds.invisible_opacity_threshold
         background = (target.metadata or {}).get("background_color")
@@ -871,11 +904,13 @@ class RuleDetector:
         result: PageMatchResult,
         suppressed_pairs: set[frozenset[str]] | None = None,
         suppressed_target_ids: set[str] | None = None,
+        settings: DetectorSettings | None = None,
     ) -> list[Issue]:
         """只报告翻译后新增或显著加剧的区域重叠。"""
 
         issues: list[Issue] = []
-        thresholds = self.profile.detectors.thresholds
+        resolved = settings or self.profile.detectors
+        thresholds = resolved.thresholds
         suppressed_pairs = suppressed_pairs or set()
         suppressed_target_ids = suppressed_target_ids or set()
         # 每个 Region 的源版面类比只需计算一次；两两组合会重复请求同一 Region。
@@ -946,12 +981,12 @@ class RuleDetector:
             source_first = matched_source_by_target.get(
                 first.id
             ) or self._find_layout_analog(
-                first, source, target, analog_cache
+                first, source, target, analog_cache, settings
             )
             source_second = matched_source_by_target.get(
                 second.id
             ) or self._find_layout_analog(
-                second, source, target, analog_cache
+                second, source, target, analog_cache, settings
             )
             if source_first is not None and source_second is not None:
                 source_ratio = intersection_ratio(
@@ -1004,6 +1039,13 @@ class RuleDetector:
                         "overlap_ratio": ratio,
                         "horizontal_intrusion_ratio": horizontal_intrusion_ratio,
                         "vertical_intrusion_ratio": vertical_intrusion_ratio,
+                        "overlap_ratio_threshold": thresholds.overlap_ratio,
+                        "overlap_increase_ratio_threshold": (
+                            thresholds.overlap_increase_ratio
+                        ),
+                        "text_overlap_axis_ratio_threshold": (
+                            thresholds.text_overlap_axis_ratio
+                        ),
                         "source_overlap_ratio": source_ratio,
                         "overlap_increase_ratio": ratio - source_ratio,
                         "other_region": second.id,
@@ -1076,9 +1118,11 @@ class RuleDetector:
         source: Page,
         target: Page,
         cache: dict[str, Region | None] | None = None,
+        settings: DetectorSettings | None = None,
     ) -> Region | None:
         """独立查找同类型且版面最接近的源区域，用于比较拓扑关系。"""
 
+        resolved = settings or self.profile.detectors
         cache_key = target_region.id
         if cache is not None and cache_key in cache:
             return cache[cache_key]
@@ -1100,7 +1144,7 @@ class RuleDetector:
             def layout_score(candidate: Region) -> float:
                 """拓扑对照更重视位置，尺寸只用于区分同位置的多个对象。"""
 
-                weights = self.profile.detectors.layout_analog_weights
+                weights = resolved.layout_analog_weights
                 return weights.position * position_similarity(
                     candidate.bbox,
                     target_region.bbox,

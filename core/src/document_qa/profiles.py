@@ -459,6 +459,23 @@ class GroupingSettings(SchemaModel):
     style_font_size_tolerance_points: float = Field(default=0.25, ge=0, le=5.0)
 
 
+class BackgroundSettings(SchemaModel):
+    """控制解析器对页面背景色与深色背景块的识别。
+
+    隐形文字检测依赖背景判断结果，这些阈值属于检测链路的输入而非
+    纯解析参数，因此集中在 RuleProfile 并随报告快照可复现（§12）。
+    """
+
+    # 参与深色块判定的填充矩形最小面积比例：过小的装饰块不影响
+    # 文字可见性判断。
+    dark_box_min_area_ratio: float = Field(default=0.1, ge=0, le=1)
+    # 填充色 RGB 通道最大值低于该值（0-1 刻度）即视为深色背景块；
+    # 与 invisible_color_threshold（235/255 ≈ 0.922）保持同一白度语义。
+    dark_fill_max_channel: float = Field(default=0.92, ge=0, le=1)
+    # 浅色填充达到该面积比例才作为页面背景色；深色整页填充进 dark_boxes。
+    background_min_area_ratio: float = Field(default=0.5, ge=0, le=1)
+
+
 class RuleProfile(SchemaModel):
     """一次 QA 任务可复现、可版本化的完整规则配置。"""
 
@@ -478,6 +495,7 @@ class RuleProfile(SchemaModel):
     grouping: GroupingSettings = Field(default_factory=GroupingSettings)
     detectors: DetectorSettings = Field(default_factory=DetectorSettings)
     scoring: ScoringSettings = Field(default_factory=ScoringSettings)
+    background: BackgroundSettings = Field(default_factory=BackgroundSettings)
 
     def detector_settings_for(self, language: str) -> DetectorSettings:
         """返回指定语言场景下生效的检测配置。

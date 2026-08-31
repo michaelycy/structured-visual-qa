@@ -9,6 +9,8 @@ export const HistoryPage = () => {
   return (
     <HistoryView
       refreshToken={workbench.historyRefreshToken}
+      busy={workbench.busy}
+      progressText={workbench.progressText}
       onReopen={workbench.reopenHistory}
       onRerun={workbench.rerunHistory}
       onStart={() => void navigate({ to: "/" })}

@@ -7,7 +7,12 @@ from dataclasses import dataclass, field
 
 from document_qa.detectors.evidence import region_evidence
 from document_qa.matching.text_flow import TextFlowBuilder
-from document_qa.profiles import RuleProfile, default_rule_profile
+from document_qa.profiles import (
+    DetectorSettings,
+    DetectorThresholds,
+    RuleProfile,
+    default_rule_profile,
+)
 from document_qa.schemas import (
     BoundingBox,
     HorizontalAlignment,
@@ -48,12 +53,21 @@ class TextAlignmentDetector:
         self.profile = profile or default_rule_profile()
 
     def detect(
-        self, source: Page, target: Page, result: PageMatchResult
+        self,
+        source: Page,
+        target: Page,
+        result: PageMatchResult,
+        settings: DetectorSettings | None = None,
     ) -> AlignmentDetectionResult:
-        """比较源/目标文本流对齐方式，并返回重复几何问题抑制集合。"""
+        """比较源/目标文本流对齐方式，并返回重复几何问题抑制集合。
 
-        source_groups = self._build_groups(source)
-        target_groups = self._build_groups(target)
+        settings 为调用方按语言场景解析后的检测配置；缺省回退全局
+        detectors，保证与 language_overrides 语义一致。
+        """
+
+        thresholds = (settings or self.profile.detectors).thresholds
+        source_groups = self._build_groups(source, thresholds)
+        target_groups = self._build_groups(target, thresholds)
         source_by_region = self._group_index(source_groups, source)
         target_by_region = self._group_index(target_groups, target)
 
@@ -71,7 +85,7 @@ class TextAlignmentDetector:
                 (match.target_region_id, target_index)
             )
 
-        thresholds = self.profile.detectors.thresholds
+        thresholds = (settings or self.profile.detectors).thresholds
         # 先按支持票数和占比选择唯一文本流配对；多数关系能吸收翻译导致的
         # 行数变化，同时识别一对一 Matcher 产生的少量跨段离群配对。
         candidates = sorted(
@@ -151,7 +165,9 @@ class TextAlignmentDetector:
         detection.issues.sort(key=lambda issue: (issue.bbox.y if issue.bbox else 0, issue.id))
         return detection
 
-    def _build_groups(self, page: Page) -> list[AlignmentTextFlowGroup]:
+    def _build_groups(
+        self, page: Page, thresholds: DetectorThresholds
+    ) -> list[AlignmentTextFlowGroup]:
         """按栏位、行距和字号把文本 Region 聚成临时段落流。"""
 
         expanded_regions: list[Region] = []
@@ -164,7 +180,6 @@ class TextAlignmentDetector:
             else:
                 expanded_regions.append(region)
         expanded_page = page.model_copy(update={"regions": expanded_regions})
-        thresholds = self.profile.detectors.thresholds
         builder = TextFlowBuilder(
             line_gap_ratio=thresholds.alignment_line_gap_ratio,
             horizontal_overlap_ratio=thresholds.alignment_horizontal_overlap_ratio,
@@ -176,7 +191,9 @@ class TextAlignmentDetector:
         groups: list[AlignmentTextFlowGroup] = []
         for group in builder.build(expanded_page):
             regions_in_group = list(group.regions)
-            alignment, spreads = self._infer_alignment(regions_in_group, page.width)
+            alignment, spreads = self._infer_alignment(
+                regions_in_group, page.width, thresholds
+            )
             groups.append(
                 AlignmentTextFlowGroup(
                     regions=tuple(regions_in_group),
@@ -188,11 +205,13 @@ class TextAlignmentDetector:
         return groups
 
     def _infer_alignment(
-        self, regions: list[Region], page_width: float
+        self,
+        regions: list[Region],
+        page_width: float,
+        thresholds: DetectorThresholds,
     ) -> tuple[HorizontalAlignment | None, dict[str, float]]:
         """用左边缘、右边缘和中心线的归一化极差推断对齐方式。"""
 
-        thresholds = self.profile.detectors.thresholds
         if len(regions) < thresholds.alignment_min_lines or page_width <= 0:
             return None, {}
         values = {

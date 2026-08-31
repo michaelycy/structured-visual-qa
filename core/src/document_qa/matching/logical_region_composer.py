@@ -7,7 +7,14 @@ from collections import defaultdict
 from document_qa.matching.geometry import intersection_ratio
 from document_qa.matching.text_flow import TextFlowBuilder, TextFlowGroup
 from document_qa.profiles import RuleProfile, default_rule_profile
-from document_qa.schemas import Content, Page, Region, RegionRelationships, TEXT_TYPES
+from document_qa.schemas import (
+    Content,
+    Page,
+    Region,
+    RegionRelationships,
+    TEXT_TYPES,
+)
+from document_qa.style_stats import weighted_median_font_size
 
 
 class LogicalRegionComposer:
@@ -201,6 +208,23 @@ class LogicalRegionComposer:
             if region.style and region.style.font_size
             else 0,
         )
+        # 逻辑组的样式身份（类型/颜色/对齐）沿用最大字号成员，但字号
+        # 用字符数加权中位数——与 Grouper 的原子 Region 代表样式口径
+        # 一致，避免合并后字号被最大成员抬高而误判字号缩小/放大。
+        style = representative.style
+        if style is not None:
+            weighted = weighted_median_font_size(
+                [
+                    (
+                        region.style.font_size,
+                        len(region.content.text or "") if region.content else 0,
+                    )
+                    for region in members
+                    if region.style and region.style.font_size
+                ]
+            )
+            if weighted is not None and style.font_size != weighted:
+                style = style.model_copy(update={"font_size": weighted})
         atomic_ids = [region.id for region in members]
         member_token = "-".join(
             region_id.removeprefix(f"p{page_number}-") for region_id in atomic_ids
@@ -220,7 +244,7 @@ class LogicalRegionComposer:
             page=page_number,
             type=representative.type,
             bbox=group.bbox,
-            style=representative.style,
+            style=style,
             content=Content(text=text),
             children=children,
             metadata={

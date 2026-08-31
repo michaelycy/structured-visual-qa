@@ -7,7 +7,7 @@ import json
 import shutil
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from pydantic import BaseModel, Field
 
@@ -36,6 +36,16 @@ class CompareRecord(BaseModel):
     report: dict[str, Any] | None = None
     source_path: str | None = None
     target_path: str | None = None
+
+
+class _StoredFileIdentity(NamedTuple):
+    """事务外预计算的文件身份：流式哈希不应占用 SQLite 写锁。"""
+
+    path: Path
+    file_id: str
+    sha256: str | None
+    size: int | None
+    availability: str
 
 
 class CompareHistoryService:
@@ -159,12 +169,17 @@ class CompareHistoryService:
         )
         report_bytes = report_json.encode("utf-8")
         normalized = (report_dict.get("metadata") or {}).get("normalized_from")
+        # 文件内容摘要与存在性检查必须在事务外完成：SHA-256 对上限
+        # 100 MiB 的文件可能耗时数秒，BEGIN IMMEDIATE 是库级排他写锁，
+        # 事务内计算会阻塞任务状态落库、复核保存等所有并发写操作。
+        source_identity = self._file_identity(Path(source_path))
+        target_identity = self._file_identity(Path(target_path))
         with self._database.transaction() as connection:
             source_id = self._register_file(
-                connection, Path(source_path), source_display, origin="legacy"
+                connection, source_identity, source_display, origin="legacy"
             )
             target_id = self._register_file(
-                connection, Path(target_path), target_display, origin="legacy"
+                connection, target_identity, target_display, origin="legacy"
             )
             self._ensure_profile(connection, profile)
             # 通过两侧内容身份自动关联样本；工作台无需信任客户端传 sample_id。
@@ -399,8 +414,8 @@ class CompareHistoryService:
         return names
 
     @staticmethod
-    def _register_file(connection, path: Path, display: str, *, origin: str) -> str:
-        """登记现存或遗留缺失文件；内容摘要相同的文件自然复用。"""
+    def _file_identity(path: Path) -> _StoredFileIdentity:
+        """在事务外解析路径并流式计算内容摘要（可能耗时数秒）。"""
 
         resolved = path.expanduser().resolve()
         if resolved.is_file():
@@ -409,17 +424,35 @@ class CompareHistoryService:
                 while chunk := stream.read(1024 * 1024):
                     digest.update(chunk)
             sha256 = digest.hexdigest()
-            file_id = sha256
-            size = resolved.stat().st_size
-            availability = "present"
-        else:
-            sha256 = None
-            file_id = "legacy-" + hashlib.sha256(str(resolved).encode()).hexdigest()
-            size = None
-            availability = "missing"
+            return _StoredFileIdentity(
+                path=resolved,
+                file_id=sha256,
+                sha256=sha256,
+                size=resolved.stat().st_size,
+                availability="present",
+            )
+        file_id = "legacy-" + hashlib.sha256(str(resolved).encode()).hexdigest()
+        return _StoredFileIdentity(
+            path=resolved,
+            file_id=file_id,
+            sha256=None,
+            size=None,
+            availability="missing",
+        )
+
+    @staticmethod
+    def _register_file(
+        connection, identity: _StoredFileIdentity, display: str, *, origin: str
+    ) -> str:
+        """登记文件元数据；内容摘要相同的文件自然复用。
+
+        只做查询与插入、不读文件——耗时哈希已由 _file_identity 在
+        事务外完成，注册期间的写锁占用是亚毫秒级的。
+        """
+
         existing = connection.execute(
             "SELECT file_id FROM stored_files WHERE file_id = ? OR storage_path = ?",
-            (file_id, str(resolved)),
+            (identity.file_id, str(identity.path)),
         ).fetchone()
         if existing:
             return existing["file_id"]
@@ -428,18 +461,18 @@ class CompareHistoryService:
             "file_format, size_bytes, origin, availability, created_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
-                file_id,
-                sha256,
-                display or resolved.name,
-                str(resolved),
-                resolved.suffix.lower(),
-                size,
+                identity.file_id,
+                identity.sha256,
+                display or identity.path.name,
+                str(identity.path),
+                identity.path.suffix.lower(),
+                identity.size,
                 origin,
-                availability,
+                identity.availability,
                 Database.now(),
             ),
         )
-        return file_id
+        return identity.file_id
 
     @staticmethod
     def _ensure_profile(connection, profile: RuleProfile) -> None:

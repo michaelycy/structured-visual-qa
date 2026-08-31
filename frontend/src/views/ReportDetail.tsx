@@ -35,9 +35,11 @@ export function ReportDetail({
   const [decisions, setDecisions] = useState<Record<string, ReviewDecision>>({})
   const [messageApi, contextHolder] = message.useMessage()
 
-  // 复核任务 ID 由双方文档摘要组成，同一对文档的判定自然延续——
-  // 无论从工作台还是历史记录进入，看到的是同一份复核进度。
-  const taskId = `${report.source_document_id.slice(0, 12)}-${report.target_document_id.slice(0, 12)}`
+  // 复核任务 ID 由服务端随报告下发（与历史判定记录同一派生规则）；
+  // 本地拼接仅作为旧负载缺字段时的兜底，避免复核进度整体丢失。
+  const taskId =
+    report.review_task_id ??
+    `${report.source_document_id.slice(0, 12)}-${report.target_document_id.slice(0, 12)}`
 
   // 报告对象切换时重置并拉取已有判定；无记录时静默忽略。
   useEffect(() => {

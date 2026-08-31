@@ -92,7 +92,9 @@ class ContentDetector:
         language = self._resolve_language(source, target)
         settings = self.profile.detector_settings_for(language)
         if settings.enabled.number_mismatch:
-            issues.extend(self._detect_number_mismatch(source, target, result))
+            issues.extend(
+                self._detect_number_mismatch(source, target, result, settings)
+            )
         if settings.enabled.untranslated_text:
             issues.extend(
                 self._detect_untranslated(source, target, result, settings)
@@ -303,16 +305,34 @@ class ContentDetector:
         return f"{source_script}-{target_script}"
 
     def _detect_number_mismatch(
-        self, source: Page, target: Page, result: PageMatchResult
+        self,
+        source: Page,
+        target: Page,
+        result: PageMatchResult,
+        settings=None,
     ) -> list[Issue]:
         """页面级数字集合守恒检查：总量不一致才报告，附差集明细。
 
         翻译中数字位置常在配对 Region 间移动（页眉日期 vs 正文年份），
         逐对比较会误报互换；页面级守恒只捕获真实的错漏译。
+        页面整体移页（源/目标页码不同）时，页眉/页脚中的页码、章节号
+        随页码自然变化属于排版预期，完全位于豁免带内的区域不参与
+        守恒比较；非移页页对的页眉页脚数字天然一致，行为不变。
         """
 
-        source_numbers, source_labels = self._collect_numbers(source)
-        target_numbers, target_labels = self._collect_numbers(target)
+        # 阈值取调用方已按语言场景解析的配置，避免重复做脚本投票。
+        thresholds = (settings or self.profile.detectors).thresholds
+        band_ratio = (
+            thresholds.number_mismatch_margin_band_ratio
+            if source.page != target.page
+            else 0.0
+        )
+        source_numbers, source_labels, source_excluded = self._collect_numbers(
+            source, band_ratio
+        )
+        target_numbers, target_labels, target_excluded = self._collect_numbers(
+            target, band_ratio
+        )
         if not source_numbers and not target_numbers:
             return []
         missing = source_numbers - target_numbers
@@ -329,9 +349,6 @@ class ContentDetector:
             source_anchor, target, result
         )
         # 严重度按差异数字总量分档：丢 1 个与丢 10 个不应同罪。
-        thresholds = self.profile.detector_settings_for(
-            self._resolve_language(source, target)
-        ).thresholds
         diff_count = sum(missing.values()) + sum(extra.values())
         severity = thresholds.band_severity(
             thresholds.number_mismatch_bands, diff_count, Severity.HIGH
@@ -353,6 +370,16 @@ class ContentDetector:
         hint = self._conversion_ratio_hint(missing, extra)
         if hint:
             detail_parts.append(hint)
+        # 豁免带比例必须随 Issue 落盘（阈值可复现）；被豁免的数字在
+        # 确实发生豁免时如实记录，供复核判断是否误放。
+        exempt_evidence = (
+            {
+                "excluded_margin_numbers_source": source_excluded,
+                "excluded_margin_numbers_target": target_excluded,
+            }
+            if source_excluded or target_excluded
+            else {}
+        )
         return [
             Issue(
                 id=f"p{target.page}-numbers",
@@ -374,6 +401,8 @@ class ContentDetector:
                     "normalized_source_numbers": sorted(source_numbers.elements()),
                     "normalized_target_numbers": sorted(target_numbers.elements()),
                     "diff_count": diff_count,
+                    "margin_band_ratio": band_ratio,
+                    **exempt_evidence,
                     **region_evidence(source_anchor, target_region),
                 },
                 description=(
@@ -397,17 +426,47 @@ class ContentDetector:
 
     @classmethod
     def _collect_numbers(
-        cls, page: Page
-    ) -> tuple[Counter, dict[str, list[str]]]:
-        """汇总页面数量键，并保留每个规范值对应的原文表达。"""
+        cls, page: Page, margin_band_ratio: float = 0.0
+    ) -> tuple[Counter, dict[str, list[str]], list[str]]:
+        """汇总页面数量键，并保留每个规范值对应的原文表达。
+
+        margin_band_ratio > 0 时，完全位于页面顶部/底部豁免带内的
+        区域（页眉/页脚）不参与守恒，其数字以原文表达返回，供
+        metrics 如实记录豁免行为。
+        """
 
         numbers: Counter = Counter()
         labels: dict[str, list[str]] = {}
+        excluded: list[str] = []
+        band_height = page.height * margin_band_ratio
         for region in page.regions:
+            if band_height > 0 and cls._in_margin_band(
+                region, page.height, band_height
+            ):
+                excluded.extend(
+                    mention.display
+                    for mention in cls._extract_number_mentions(region)
+                )
+                continue
             for mention in cls._extract_number_mentions(region):
                 numbers[mention.key] += 1
                 labels.setdefault(mention.key, []).append(mention.display)
-        return numbers, labels
+        return numbers, labels, excluded
+
+    @staticmethod
+    def _in_margin_band(
+        region: Region, page_height: float, band_height: float
+    ) -> bool:
+        """判断区域是否完全落入页面上端或下端的豁免带。
+
+        必须整体包含在带内：起始于带内但向正文延伸的段落不受豁免，
+        只有页眉/页脚这类独立短行才满足条件。
+        """
+
+        return (
+            region.bbox.bottom <= band_height
+            or region.bbox.y >= page_height - band_height
+        )
 
     @classmethod
     def _display_numbers(

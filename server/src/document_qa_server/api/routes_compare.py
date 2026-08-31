@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 
-from document_qa_server.api.dto import CompareRequest
+from document_qa_server.api.dto import CompareRequest, attach_review_task_id
 from document_qa_server.services import (
     CompareParsingError,
     CompareService,
@@ -120,7 +120,7 @@ def compare(request: CompareRequest, http: Request, background: BackgroundTasks)
         )
         return {
             "task_id": None,
-            "report": report.model_dump(mode="json"),
+            "report": attach_review_task_id(report.model_dump(mode="json")),
             "rendered": rendered,
             "history_record_id": record.record_id,
         }
@@ -160,11 +160,13 @@ def get_task(task_id: str, http: Request) -> dict:
     task = http.app.state.compare.get_task(task_id)
     if task is None:
         raise HTTPException(status_code=404, detail=f"任务不存在: {task_id}")
+    # 浅拷贝后注入，避免响应构造改动任务注册表中的报告字典。
+    report = dict(task.report) if task.report else None
     return {
         "task_id": task_id,
         "status": task.status,
         "error": task.error,
-        "report": task.report,
+        "report": attach_review_task_id(report),
         "rendered": task.rendered,
         "history_record_id": task.history_record_id,
     }

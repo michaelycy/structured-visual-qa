@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Request, Response
 
+from document_qa_server.api.dto import attach_review_task_id
 from document_qa_server.services import CompareHistoryService, ImageEvidenceService
 
 router = APIRouter(prefix="/api/history", tags=["history"])
@@ -54,7 +55,10 @@ def get_history(record_id: str, http: Request) -> dict:
         record = _service(http).get(record_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return record.model_dump(mode="json")
+    payload = record.model_dump(mode="json")
+    # 报告负载注入服务端派生的复核任务 ID，前端不再自行拼接。
+    payload["report"] = attach_review_task_id(payload["report"])
+    return payload
 
 
 @router.get("/item/{record_id}/image/{side}/{region_id}")

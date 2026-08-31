@@ -42,3 +42,25 @@ class ProfileSaveRequest(BaseModel):
     """界面提交的完整 Profile 对象；具体字段由核心模型校验。"""
 
     profile: dict
+
+
+def review_task_id_for_report(report: dict) -> str:
+    """从报告文档对身份派生复核任务 ID。
+
+    派生规则与既有复核记录完全一致（文档 ID 前 12 位以连字符拼接），
+    保证历史判定延续；由服务端统一下发后，前端不再自行拼接，
+    避免派生规则散落与前后端漂移。
+    """
+
+    source = str(report.get("source_document_id") or "")[:12]
+    target = str(report.get("target_document_id") or "")[:12]
+    return f"{source}-{target}"
+
+
+def attach_review_task_id(report: dict | None) -> dict | None:
+    """在报告负载中注入 review_task_id；原样返回便于内联使用。"""
+
+    if report is None:
+        return None
+    report["review_task_id"] = review_task_id_for_report(report)
+    return report

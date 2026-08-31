@@ -35,6 +35,8 @@ export interface PageResult {
 export interface QAReport {
   source_document_id: string
   target_document_id: string
+  /** 复核任务 ID：由服务端在报告返回点注入，前端不再自行拼接。 */
+  review_task_id?: string
   rule_profile_reference: string
   document_score: number
   status: "pass" | "review" | "fail"

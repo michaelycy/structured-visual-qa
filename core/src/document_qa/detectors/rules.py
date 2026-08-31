@@ -10,7 +10,11 @@ from document_qa.matching.geometry import (
     position_similarity,
     size_similarity,
 )
-from document_qa.profiles import RuleProfile, default_rule_profile
+from document_qa.profiles import (
+    DetectorThresholds,
+    RuleProfile,
+    default_rule_profile,
+)
 from document_qa.text_visibility import has_visible_text
 from document_qa.schemas import (
     Block,
@@ -113,7 +117,9 @@ class RuleDetector:
                 )
             )
         if enabled.content_out_of_page:
-            issues.extend(self._detect_out_of_page(target))
+            issues.extend(
+                self._detect_out_of_page(target, self.profile.detectors.thresholds)
+            )
         if enabled.overlap:
             issues.extend(
                 self._detect_overlaps(
@@ -808,34 +814,54 @@ class RuleDetector:
             return 0
 
     @staticmethod
-    def _detect_out_of_page(target: Page) -> list[Issue]:
-        """检测区域边界超出页面可见范围。"""
+    def _detect_out_of_page(
+        target: Page, thresholds: DetectorThresholds
+    ) -> list[Issue]:
+        """检测区域边界超出页面可见范围（含相对页面尺寸的容差）。
 
+        零容差判定会把字形上延、媒体框边缘的亚点级溢出判成 Critical
+        并拖垮整篇结论；按轴计算溢出量，与相对页宽/页高的容差比较后
+        只报告真实越界。容差与溢出量写入 metrics，保证报告能复现
+        当时的判定边界。
+        """
+
+        tolerance_x = target.width * thresholds.out_of_page_tolerance_ratio
+        tolerance_y = target.height * thresholds.out_of_page_tolerance_ratio
         issues: list[Issue] = []
         for region in target.regions:
-            if (
-                region.bbox.x < 0
-                or region.bbox.y < 0
-                or region.bbox.right > target.width
-                or region.bbox.bottom > target.height
-            ):
-                issues.append(
-                    Issue(
-                        id=f"p{target.page}-out-{region.id}",
-                        page=target.page,
-                        type=IssueType.CONTENT_OUT_OF_PAGE,
-                        severity=Severity.CRITICAL,
-                        target_region=region.id,
-                        bbox=region.bbox,
-                        metrics={
-                            "page_width": target.width,
-                            "page_height": target.height,
-                            **region_evidence(target=region),
-                        },
-                        description="目标区域超出页面边界，内容可能被裁切。",
-                        detector="overflow",
-                    )
+            # 按轴取左右/上下两个方向的最大溢出，亚点级边缘噪声不触发。
+            overflow_x = max(
+                max(0.0, -region.bbox.x),
+                max(0.0, region.bbox.right - target.width),
+            )
+            overflow_y = max(
+                max(0.0, -region.bbox.y),
+                max(0.0, region.bbox.bottom - target.height),
+            )
+            if overflow_x <= tolerance_x and overflow_y <= tolerance_y:
+                continue
+            issues.append(
+                Issue(
+                    id=f"p{target.page}-out-{region.id}",
+                    page=target.page,
+                    type=IssueType.CONTENT_OUT_OF_PAGE,
+                    severity=Severity.CRITICAL,
+                    target_region=region.id,
+                    bbox=region.bbox,
+                    metrics={
+                        "page_width": target.width,
+                        "page_height": target.height,
+                        "out_of_page_tolerance_ratio": (
+                            thresholds.out_of_page_tolerance_ratio
+                        ),
+                        "overflow_x": round(overflow_x, 2),
+                        "overflow_y": round(overflow_y, 2),
+                        **region_evidence(target=region),
+                    },
+                    description="目标区域超出页面边界，内容可能被裁切。",
+                    detector="overflow",
                 )
+            )
         return issues
 
     def _detect_overlaps(

@@ -30,6 +30,7 @@
 | T22 | Python 工程治理与可复现构建 | 🟡 实施中 | P0 | 1–2 天 |
 | T23 | 比较任务子进程隔离（OCR 不再拖慢 API） | ✅ 已落地 | P0 | 0.5–1 天 |
 | T24 | 多机部署时的任务队列选型（Celery 评估） | ⭕ 待办（触发条件制） | P3 | 触发后评估 |
+| T25 | 评审修复第一批：越界容差 / 移页数字豁免 / 事务外哈希 / review_task_id 下发 | ✅ 已落地（2026-08） | P0 | 0.5–1 天 |
 
 ### 落地记录
 
@@ -735,6 +736,66 @@ spawn 管道内存传递，不落盘。
 **验收**：契约修订先行并留验收记录；选型对比（Celery / RQ / Dramatiq /
 自研 worker 协议）附压测数据；任务状态机、失败重试、重启恢复与历史持久化
 行为与单机版对齐。
+
+---
+
+## T25 评审修复第一批：越界容差 / 移页数字豁免 / 事务外哈希 / review_task_id 下发
+
+**问题**：2026-08 全仓代码评审发现四处高优先级缺陷——
+① `CONTENT_OUT_OF_PAGE` 零容差精确比较，字形上延、媒体框边缘的亚点级
+溢出即判 Critical（按 §8 直接整篇 FAIL），且无容差参数、阈值未写入
+metrics（违反 §6.4/§12）；
+② 跨页对齐允许移页配对后，页眉/页脚中的页码、章节号随页码自然变化，
+页面级数字守恒将其判为 missing+extra，每条 MEDIUM 起步，足以把正常
+移页页面拖进 REVIEW；
+③ 历史保存在 `BEGIN IMMEDIATE` 写事务内对源/目标文件流式计算
+SHA-256（单文件上限 100 MiB），期间阻塞任务状态落库、复核保存等
+全部并发写操作，超过 busy_timeout 即报 `database is locked`；
+④ 复核任务 ID 由前端用 `source/target_document_id` 前 12 位自行拼接，
+属未成契约的自造协议，前缀相同的文档对会串用同一份复核记录。
+
+**方案**：
+
+1. core：`DetectorThresholds` 新增 `out_of_page_tolerance_ratio`
+   （默认 0.005，相对页宽/页高）；越界检测按轴计算溢出量，双轴均
+   不超容差则不判，溢出量与容差写入 Issue metrics。
+2. core：`DetectorThresholds` 新增
+   `number_mismatch_margin_band_ratio`（默认 0.08，相对页高，0 禁用）；
+   仅当源/目标页码不同（移页）时，完全位于上/下高度带内的区域不参与
+   数字守恒；豁免比例与被豁免数字写入 metrics，非移页页行为不变。
+3. server：`history_service._save` 把文件身份（SHA-256、size、
+   availability）预计算移到事务外（`_file_identity`），事务内只做
+   查询与插入；`sample_service` 的同类写法登记为后续项。
+4. server：API 层在报告返回点（同步 compare、任务轮询、历史单条）
+   注入 `review_task_id`，派生规则与既有复核记录完全一致
+   （`source[:12]-target[:12]`，保证历史判定延续）；前端 ReportDetail
+   优先使用服务端下发值，本地拼接仅作旧负载兜底。
+
+**验收**：
+
+- 新阈值全部定义在 `RuleProfile` 并写入 Issue metrics，检测器无新增
+  裸阈值（§3/§6.4/§12）；
+- 非移页真实样例检测行为不变式：parse/group/alignment/match 各阶段
+  摘要与改造前一致；detect 阶段仅预期差异（越界/数字豁免）可见；
+- ruff、渐进 mypy、compileall、双包构建、前端 build 通过；
+- 分阶段真实样例验证（parse → report）逐阶段展示摘要并经用户确认。
+
+**落地记录（2026-08）**：
+
+- `uv lock --check`、Ruff、渐进 mypy（13 个边界文件）、compileall、
+  core/server sdist+wheel 构建、frontend build 全部通过。
+- 真实样例六阶段验证（un-china-2024 对）：parse 46 页 1360/15284
+  Block、group 508/486 Region、alignment 46 对（0 缺失/0 新增）、
+  match 459 对、detect 275 Issue、report fail/80.39；与改造前 HEAD
+  基线 worktree 逐条比对，275 条 Issue 键集合与字段完全一致、分数
+  逐位一致——该样例无移页、无边界越界，两处行为修复正确处于休眠，
+  `margin_band_ratio=0.0` 已随 number_mismatch metrics 落盘。
+- 构造用例正反验证：right/left 溢出 0.1/0.5pt 不再判 Critical（旧
+  代码必报）、溢出恰等于容差（可精确表示的 3.0pt）被抑制（边界
+  `<=`）、溢出 10pt 保留 Critical 且 metrics 带溢出量；移页 3→7 页脚
+  页码差异豁免、正文数字/章节号差异照报（`margin_band_ratio=0.08`）、
+  跨越带边界的区域不豁免、非移页页对页脚差异行为不变。
+- 后续项：`sample_service` 同类事务内哈希待重构（低频路径，P2）。
 
 ---
 

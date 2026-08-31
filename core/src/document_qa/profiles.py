@@ -334,6 +334,15 @@ class DetectorThresholds(SchemaModel):
     text_reflow_width_tolerance_ratio: float = Field(default=0.25, ge=0, le=1)
     text_reflow_font_tolerance_ratio: float = Field(default=0.2, ge=0, le=1)
     text_reflow_line_height_tolerance_ratio: float = Field(default=0.6, ge=0, le=2)
+    # 内容越界容差：相对页宽/页高的允许溢出比例。字形上延、媒体框
+    # 边缘的亚点级溢出属于排版噪声，零容差会把正常页判成 Critical
+    # 并按判定规则拖垮整篇结论；真实裁切的溢出量通常远超该容差。
+    out_of_page_tolerance_ratio: float = Field(default=0.005, ge=0, le=0.1)
+    # 数字一致性页眉/页脚豁免带：仅当页面整体移页（源/目标页码不同）
+    # 时，完全位于页面顶部或底部高度带内的区域不参与数字守恒——
+    # 页码、章节号随页码自然变化属于排版预期，不是错漏译；
+    # 0 表示禁用豁免。非移页页对的页眉页脚数字天然一致，行为不变。
+    number_mismatch_margin_band_ratio: float = Field(default=0.08, ge=0, le=0.5)
 
     def band_severity(
         self, bands: list[SeverityBand], value: float, default: Severity

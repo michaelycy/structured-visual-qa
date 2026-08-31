@@ -17,6 +17,7 @@ from document_qa.profiles import (
     default_rule_profile,
 )
 from document_qa.script_detection import resolve_language
+from document_qa.style_stats import weighted_median_font_size
 from document_qa.text_visibility import has_visible_text
 from document_qa.schemas import (
     Block,
@@ -419,8 +420,29 @@ class RuleDetector:
                 )
 
             font_change = diff.font_size_change_ratio
+            # 多对一合并区域：目标 Region 覆盖 ≥2 个文本源 Region（译文
+            # 把多个标题/段落排进同一行）时，合并代表字号混入了不同内容，
+            # 区域级缩小判断与"译文变长"豁免都失去前提。span 级对照可用
+            # 时由其逐源 Region 出缩小结论并跳过区域级判断；span 证据
+            # 不可用（返回 None）则回退既有逻辑。font_grow 维持原逻辑。
+            merged_skip_shrink = False
+            if enabled.font_shrink:
+                merged_issues = self._detect_merged_font_shrink(
+                    source=source,
+                    target=target,
+                    target_region=target_region,
+                    source_region=source_region,
+                    thresholds=thresholds,
+                    match=matches_by_pair.get(
+                        (diff.source_region_id, diff.target_region_id)
+                    ),
+                )
+                if merged_issues is not None:
+                    issues.extend(merged_issues)
+                    merged_skip_shrink = True
             if (
                 enabled.font_shrink
+                and not merged_skip_shrink
                 and font_change is not None
                 and font_change < thresholds.font_shrink_ratio
             ):
@@ -538,6 +560,165 @@ class RuleDetector:
                         detector="geometry",
                     )
                 )
+        return issues
+
+    def _detect_merged_font_shrink(
+        self,
+        source: Page,
+        target: Page,
+        target_region: Region,
+        source_region: Region,
+        thresholds: DetectorThresholds,
+        match: RegionMatch | None,
+    ) -> list[Issue] | None:
+        """多对一合并区域的 span 级字号缩小对照。
+
+        译文常把多个标题/段落排进同一行，目标 Region 因此覆盖多个源
+        Region：合并代表字号混入了不同内容，区域级 diff 与"译文变长"
+        豁免都失去前提（真实记录 20260831-055811 中 -25% 的标题缩小被
+        豁免静默）。这里把目标 Region 的文本 span 分配回各源 Region，
+        并做双向实质覆盖门控（复用 merged_text_coverage_ratio）：
+        span 须大部分落在源 Region 内，源 Region 的 bbox 也须被名下
+        span 实质覆盖（防擦边页码字符）——通过后按字符数加权中位数
+        字号逐一对照。span 字号即该内容的实际渲染字号，无代表性歧义，
+        故不适用翻译排版豁免。返回 None 表示 span 证据不可用（非多
+        对一，或无带字号的可见文本 span），调用方回退既有区域级判断。
+        """
+
+        coverage_ratio = self.profile.matching.merged_text_coverage_ratio
+        covered_sources = [
+            region
+            for region in source.regions
+            if region.type in self._TEXT_TYPES
+            and not self._is_blank_text_region(region)
+            and region.style is not None
+            and region.style.font_size
+            and intersection_ratio(region.bbox, target_region.bbox) >= coverage_ratio
+        ]
+        if len(covered_sources) < 2:
+            return None
+        blocks_by_id = {block.id: block for block in target.blocks}
+        spans: list[Block] = []
+        for block_id in target_region.children:
+            block = blocks_by_id.get(block_id)
+            text = block.content.text if block and block.content else None
+            if (
+                block is None
+                or block.style is None
+                or not block.style.font_size
+                or not has_visible_text(text)
+            ):
+                continue
+            spans.append(block)
+        if not spans:
+            return None
+        # 每个 span 归属"实质性覆盖它的"源 Region：交集须占 span 面积
+        # 的比例达到 merged_text_coverage_ratio（与多对一覆盖判定同一
+        # 语义），仅按最大重叠面积会把恰好擦边的页码等小字符强行归给
+        # 大标题，产生 5pt vs 30pt 的垃圾对照。
+        assigned: dict[str, list[Block]] = {
+            region.id: [] for region in covered_sources
+        }
+        for span in spans:
+            best_region: Region | None = None
+            best_ratio = 0.0
+            for region in covered_sources:
+                overlap_width = max(
+                    0.0,
+                    min(span.bbox.right, region.bbox.right)
+                    - max(span.bbox.x, region.bbox.x),
+                )
+                overlap_height = max(
+                    0.0,
+                    min(span.bbox.bottom, region.bbox.bottom)
+                    - max(span.bbox.y, region.bbox.y),
+                )
+                overlap_area = overlap_width * overlap_height
+                span_area = span.bbox.width * span.bbox.height
+                ratio = overlap_area / span_area if span_area > 0 else 0.0
+                if ratio > best_ratio:
+                    best_ratio = ratio
+                    best_region = region
+            if best_region is not None and best_ratio >= coverage_ratio:
+                assigned[best_region.id].append(span)
+        issues: list[Issue] = []
+        for covered in covered_sources:
+            members = assigned[covered.id]
+            if not members:
+                continue
+            # 双向覆盖门控的第二向：源 Region 的 bbox 须被其名下 span
+            # 实质覆盖。仅有 span 落在源 bbox 内（如混入标题区域的页码
+            # 字符）不足以证明span 是该源内容的翻译——此时字号对照无
+            # 意义，直接跳过而非产出垃圾结论。
+            covered_area = 0.0
+            for span in members:
+                overlap_width = max(
+                    0.0,
+                    min(span.bbox.right, covered.bbox.right)
+                    - max(span.bbox.x, covered.bbox.x),
+                )
+                overlap_height = max(
+                    0.0,
+                    min(span.bbox.bottom, covered.bbox.bottom)
+                    - max(span.bbox.y, covered.bbox.y),
+                )
+                covered_area += overlap_width * overlap_height
+            source_area = covered.bbox.width * covered.bbox.height
+            if source_area <= 0 or covered_area / source_area < coverage_ratio:
+                continue
+            span_size = weighted_median_font_size(
+                [
+                    (span.style.font_size, len(span.content.text or ""))
+                    for span in members
+                ]
+            )
+            source_size = covered.style.font_size
+            if span_size is None or not source_size:
+                continue
+            change = (span_size - source_size) / source_size
+            if change >= thresholds.font_shrink_ratio:
+                continue
+            shrink_magnitude = abs(change)
+            severity = thresholds.band_severity(
+                thresholds.font_shrink_bands, shrink_magnitude, Severity.HIGH
+            )
+            bbox_x0 = min(span.bbox.x for span in members)
+            bbox_y0 = min(span.bbox.y for span in members)
+            bbox_x1 = max(span.bbox.right for span in members)
+            bbox_y1 = max(span.bbox.bottom for span in members)
+            # 匹配证据只属于配对中的那个源 Region；其余被覆盖源 Region
+            # （如未配对的第二个标题）不带 RegionMatch，避免张冠李戴。
+            pair_match = match if covered.id == source_region.id else None
+            issues.append(
+                Issue(
+                    id=f"p{target.page}-mfont-{covered.id}",
+                    page=target.page,
+                    type=IssueType.FONT_SHRINK,
+                    severity=severity,
+                    source_region=covered.id,
+                    target_region=target_region.id,
+                    bbox=BoundingBox(
+                        x=bbox_x0,
+                        y=bbox_y0,
+                        width=bbox_x1 - bbox_x0,
+                        height=bbox_y1 - bbox_y0,
+                    ),
+                    metrics={
+                        "font_size_change_ratio": round(change, 4),
+                        "source_font_size": source_size,
+                        "span_font_size": span_size,
+                        "span_count": len(members),
+                        "font_shrink_ratio_threshold": thresholds.font_shrink_ratio,
+                        "merged_region_compare": True,
+                        **region_evidence(covered, target_region, pair_match),
+                    },
+                    description=(
+                        "目标区域将多个源区域合并排版，其中本区域对应文字"
+                        "字号明显缩小。"
+                    ),
+                    detector="typography",
+                )
+            )
         return issues
 
     @classmethod

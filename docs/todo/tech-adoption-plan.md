@@ -32,6 +32,7 @@
 | T24 | 多机部署时的任务队列选型（Celery 评估） | ⭕ 待办（触发条件制） | P3 | 触发后评估 |
 | T25 | 评审修复第一批：越界容差 / 移页数字豁免 / 事务外哈希 / review_task_id 下发 | ✅ 已落地（2026-08） | P0 | 0.5–1 天 |
 | T26 | 评审修复第二批：字号基线加权 / language_overrides 贯通 / 脚本表统一 / 解析器合规（匹配惩罚经 Golden 否决） | ✅ 已落地（2026-08，②待方案重定） | P0 | 1–2 天 |
+| T27 | M→1 合并区域 span 级字号对照（修复图表标题合并排版漏报） | ✅ 已落地（2026-08） | P1 | 0.5–1 天 |
 
 ### 落地记录
 
@@ -876,6 +877,66 @@ metrics 缺少判定阈值（§6.4）。
   Issue 键集合、类型、严重度、描述与全部 font_size_change_ratio
   逐位一致（本轮改动在该样例正确休眠：单一样式 Region 的加权中位
   数等于原最大字号，language_overrides 未配置）。
+
+---
+
+## T27 M→1 合并区域 span 级字号对照
+
+**问题**：真实记录 `20260831-055811-208-3c5e` 第 5 页，译文把两个图表
+标题排进同一行（左标题保持 12pt、右标题压缩到 9pt，span 级证据确凿），
+但系统零检出。归因：目标侧合并 Region `p5-r10` 与源左标题 `r7` 配对，
+diff 已算出 font_change=-0.250（超 -0.20 阈值），却被
+`_is_expected_translation_expansion`（译文变长且面积未缩 → 视为排版
+适配）豁免；源右标题 `r7-c2` 未配对，MISSING 又被
+`_is_covered_by_target_text`（交集比例 1.0 ≥ 0.40，多对一覆盖）豁免。
+两条为正文误报设计的豁免联合吞掉了真实的标题字号缩小，且 -0.250
+信号错位挂在未缩小的左标题配对上。
+
+**方案**：只改 detect 阶段（`rules.py`），分组/匹配零改动。当匹配的
+目标 Region 覆盖 ≥2 个文本源 Region（复用 `merged_text_coverage_ratio`
+与 `intersection_ratio` 判定）时，区域级字号缩小判断不可信（合并代表
+字号混入不同内容、豁免前提失效），改为把目标 Region 的文本 span 按
+几何重叠最大者分配回各源 Region，按字符数加权中位数字号逐一对照：
+`change < font_shrink_ratio` 即按 `font_shrink_bands` 出
+FONT_SHRINK，BBox 锚定为该源 Region 对应 span 的并集，metrics 记录
+span/source 字号与阈值。span 证据不可用（无带字号可见文本）时返回
+None 回退既有区域级判断；font_grow 维持原逻辑。
+
+**验收**：
+
+- 构造用例：合并行字号一致不报（阴性）；单侧 span 缩小时报出且
+  BBox/字号证据锚定正确（阳性）；
+- IGBT 文档对端到端：`p5-r7-c2` 漏报转阳性，第 5 页其余 Issue 不变；
+- Golden（un-china 对）六阶段 + HEAD 基线逐条对照，预期逐位一致
+  （该路径仅在 M→1 合并时激活）；
+- ruff、渐进 mypy、compileall、双包构建通过。
+
+**落地记录（2026-08）**：
+
+- `rules.py` 新增 `_detect_merged_font_shrink` 并接入 `_detect_geometry`：
+  匹配目标 Region 覆盖 ≥2 个文本源 Region 时跳过区域级字号缩小判断，
+  改为 span 分配后逐一对照（阈值复用 `merged_text_coverage_ratio` 与
+  `font_shrink_ratio/bands`，无新增裸阈值）；span 证据不可用时返回
+  None 回退既有逻辑；font_grow 维持原逻辑。
+- 迭代一课：首版按"最大重叠面积"分配 span，Golden 第 24/25 页暴露
+  误报——30pt 大标题 bbox 内一个 3×5pt 页码字符"1"被强行归属，
+  产出 5pt vs 30pt 的 -83% 垃圾 HIGH。改为**双向实质覆盖门控**（复用
+  `merged_text_coverage_ratio`）：span 大部分落在源 Region 内，且源
+  Region bbox 被名下 span 实质覆盖，才允许对照。Golden 随即回到与
+  基线逐位一致。
+- 构造用例：合并行单侧 span 12→9pt 报 1 条 MEDIUM 并锚定缩小的源
+  Region；字号一致 0 条；非 M→1 返回 None 回退；页码擦边形态 0 条。
+- IGBT 文档对（记录 20260831-055811 的输入，OCR 关闭同条件）：
+  HEAD 基线 20 条 / 91.00 分（与 T10 记录的 CLI 基线一致），新代码
+  21 条 / 90.71 分——净差异恰好 +1：
+  `p5-mfont-p5-r7-c2 font_shrink/medium`，源 `p5-r7-c2`（右图表标题）
+  12pt → span 9pt（-25%），bbox=(584,228) 精确锚定右标题 span，
+  metrics 含 `span_font_size/source_font_size/merged_region_compare`；
+  其余 20 条逐条一致。
+- Golden（un-china 对）六阶段：46 页 1360/15284 Block、508/486
+  Region、46 对、459 匹配、**275 Issue / 80.3913 分与 HEAD 基线键
+  集合、严重度、描述逐位一致**；`uv lock --check`、Ruff、渐进 mypy、
+  compileall、双包 sdist+wheel 构建通过。
 
 ---
 

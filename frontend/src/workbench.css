@@ -60,7 +60,9 @@
 
 .compare-bar__main {
   display: grid;
-  grid-template-columns: minmax(190px, 1fr) 24px minmax(190px, 1fr) auto;
+  /* 选择器列用 minmax(0, 1fr)：允许长文件名收缩为省略号，保证 CTA
+   * 始终可见（190px 最小值会在 761–1180px 区间把按钮挤出屏幕）。 */
+  grid-template-columns: minmax(0, 1fr) 24px minmax(0, 1fr) auto;
   align-items: end;
   gap: 10px;
 }
@@ -85,6 +87,19 @@
 
 .document-picker .ant-space-compact {
   display: flex;
+}
+
+/* antd 会把 Upload 子元素包进 .ant-upload-wrapper——它才是 Space.Compact
+ * 的直接 flex 子项。不做收缩约束时，长文件名会把选择框撑到自然宽度、
+ * 溢出所在网格并挤压右侧 CTA；这里让整条嵌套链（wrapper → .ant-upload
+ * .ant-upload-select → span.ant-upload）都参与收缩，按钮上的 flex:1
+ * 才能生效，省略号随之生效。 */
+.document-picker .ant-upload-wrapper,
+.document-picker .ant-upload-wrapper .ant-upload-select,
+.document-picker .ant-upload-wrapper .ant-upload-select .ant-upload {
+  display: flex;
+  flex: 1;
+  min-width: 0;
 }
 
 .document-picker .ant-space-compact:focus-within {
@@ -456,7 +471,8 @@
 }
 
 .page-compare__image,
-.page-compare__target-stage {
+.page-compare__target-stage,
+.page-compare__source-stage {
   display: block;
   width: 100%;
 }
@@ -469,6 +485,11 @@
 }
 
 .page-compare__target-stage {
+  position: relative;
+}
+
+/* 源图对应框的定位容器：虚线框表示同一问题在原文中的对应位置。 */
+.page-compare__source-stage {
   position: relative;
 }
 

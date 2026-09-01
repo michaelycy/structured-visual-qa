@@ -1,5 +1,7 @@
 """MVP 使用的布局、缺失和字体规则检测。"""
 
+from typing import Any
+
 from document_qa.detectors.alignment import (
     AlignmentDetectionResult,
     TextAlignmentDetector,
@@ -377,6 +379,24 @@ class RuleDetector:
                 # 可能用一个额外图片占住剩余文本。跨内容类别的几何量
                 # 没有可比性，不能据此生成位移、尺寸或字号问题。
                 continue
+            # 多对一合并证据：目标 Region 实质覆盖 ≥2 个文本源 Region 时，
+            # 该配对不是 1↔1 内容对应（译文把多个源块排进同一区域）。
+            # 覆盖明细写入 metrics，前端据此把源图对应框展开到全部被
+            # 覆盖源区域，避免"两侧框应重合"的错觉。
+            merged_evidence: dict[str, Any] = {}
+            covered_sources = self._covered_source_regions(
+                source,
+                target_region,
+                min_ratio=thresholds.merged_source_overlap_ratio,
+            )
+            if len(covered_sources) >= 2:
+                merged_evidence = {
+                    "merged_source_count": len(covered_sources),
+                    "covered_source_bboxes": [
+                        region.bbox.model_dump(mode="json")
+                        for region in covered_sources
+                    ],
+                }
             evidence = region_evidence(
                 source_region,
                 target_region,
@@ -412,6 +432,7 @@ class RuleDetector:
                             "severely_shifted_ratio_threshold": (
                                 thresholds.severely_shifted_ratio
                             ),
+                            **merged_evidence,
                             **evidence,
                         },
                         description="目标区域相对源区域发生显著位置偏移。",
@@ -476,6 +497,7 @@ class RuleDetector:
                                 "font_shrink_ratio_threshold": (
                                     thresholds.font_shrink_ratio
                                 ),
+                                **merged_evidence,
                                 **evidence,
                             },
                             description="目标区域字号为适应版面而明显缩小。",
@@ -502,6 +524,7 @@ class RuleDetector:
                         metrics={
                             "font_size_change_ratio": font_change,
                             "font_grow_ratio_threshold": thresholds.font_grow_ratio,
+                            **merged_evidence,
                             **evidence,
                         },
                         description="目标区域字号相对源区域明显放大。",
@@ -554,6 +577,7 @@ class RuleDetector:
                             "region_resize_ratio_threshold": (
                                 thresholds.region_resize_ratio
                             ),
+                            **merged_evidence,
                             **evidence,
                         },
                         description="目标区域尺寸相对源区域剧变，可能发生段落合并或拆散。",
@@ -561,6 +585,34 @@ class RuleDetector:
                     )
                 )
         return issues
+
+    def _covered_source_regions(
+        self,
+        source: Page,
+        target_region: Region,
+        *,
+        min_ratio: float | None = None,
+    ) -> list[Region]:
+        """返回被目标 Region 压境的文本源 Region。
+
+        min_ratio 缺省用 `merged_text_coverage_ratio`（实质覆盖语义，
+        供 span 级字号对照的归属判定）；传入 `merged_source_overlap_ratio`
+        时为宽松压境语义——合并条通常只压住各源标签的一部分，用于
+        M→1 合并证据的收集。两处判定共用本方法保证口径集中。
+        """
+
+        coverage_ratio = (
+            min_ratio
+            if min_ratio is not None
+            else self.profile.matching.merged_text_coverage_ratio
+        )
+        return [
+            region
+            for region in source.regions
+            if region.type in self._TEXT_TYPES
+            and not self._is_blank_text_region(region)
+            and intersection_ratio(region.bbox, target_region.bbox) >= coverage_ratio
+        ]
 
     def _detect_merged_font_shrink(
         self,
@@ -588,12 +640,8 @@ class RuleDetector:
         coverage_ratio = self.profile.matching.merged_text_coverage_ratio
         covered_sources = [
             region
-            for region in source.regions
-            if region.type in self._TEXT_TYPES
-            and not self._is_blank_text_region(region)
-            and region.style is not None
-            and region.style.font_size
-            and intersection_ratio(region.bbox, target_region.bbox) >= coverage_ratio
+            for region in self._covered_source_regions(source, target_region)
+            if region.style is not None and region.style.font_size
         ]
         if len(covered_sources) < 2:
             return None
@@ -710,6 +758,11 @@ class RuleDetector:
                         "span_count": len(members),
                         "font_shrink_ratio_threshold": thresholds.font_shrink_ratio,
                         "merged_region_compare": True,
+                        "merged_source_count": len(covered_sources),
+                        "covered_source_bboxes": [
+                            region.bbox.model_dump(mode="json")
+                            for region in covered_sources
+                        ],
                         **region_evidence(covered, target_region, pair_match),
                     },
                     description=(

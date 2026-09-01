@@ -161,6 +161,9 @@ function DocumentPicker({
           className="document-picker__sample"
           value={null}
           disabled={disabled}
+          // 触发框固定 40px（只放下拉箭头）；面板若跟随触发器宽度，
+          // 长样例名会被裁成不可读，这里让面板按内容自适应。
+          popupMatchSelectWidth={false}
           onOpenChange={(open) => open && loadSamples()}
           onChange={(name) => {
             if (!name) return

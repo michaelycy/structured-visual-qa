@@ -103,6 +103,10 @@ export function IssueBadge({ index, active }: { index: number; active?: boolean 
 }
 
 /** 源/目标渲染图并排对比，目标图叠加 Issue 红框（BBox 为 PDF point）。 */
+
+/** 缺失类问题没有译文区域：bbox 即源文档坐标，对应框画在源图上。 */
+const MISSING_ISSUE_TYPES = new Set(["missing_element", "missing_image"])
+
 function PageCompare({
   page,
   issues,
@@ -138,6 +142,55 @@ function PageCompare({
     () => groupIssuesByBbox(issues.filter((issue) => issue.bbox), issueNumberById),
     [issueNumberById, issues],
   )
+  // 源侧对应框：优先取配对原文区域坐标（metrics.source_bbox）；缺失类
+  // 问题没有译文区域，其 bbox 本身就是源侧坐标。源图与目标图共用同一
+  // 套序号角标，审阅时两侧同号即为同一问题的原文/译文位置。
+  const sourceBboxGroups = useMemo(() => {
+    const withSourceBox = issues.flatMap((issue) => {
+      const fromMetrics = (issue.metrics ?? {}).source_bbox as
+        | Issue["bbox"]
+        | undefined
+      const box =
+        fromMetrics ??
+        (MISSING_ISSUE_TYPES.has(issue.type) ? issue.bbox : undefined)
+      return box ? [{ ...issue, bbox: box }] : []
+    })
+    return groupIssuesByBbox(withSourceBox, issueNumberById)
+  }, [issueNumberById, issues])
+  // M→1 合并块的主框之外框：covered_source_bboxes 中与主框不重合的
+  // 其余源区域同样画到源图（浅虚线、无角标），明确"译文框是多个源块
+  // 的合并"而不是 1↔1 对应，避免审阅者以为两侧框错位是画框错误。
+  const extraSourceBoxes = useMemo(() => {
+    const entries: { key: string; box: Issue["bbox"]; issueIds: string[] }[] = []
+    for (const issue of issues) {
+      const metrics = issue.metrics ?? {}
+      const covered = metrics.covered_source_bboxes
+      if (!Array.isArray(covered) || covered.length < 2) continue
+      const primary = metrics.source_bbox as Issue["bbox"] | undefined
+      for (const box of covered as Issue["bbox"][]) {
+        if (!box) continue
+        if (
+          primary &&
+          Math.round(primary.x) === Math.round(box.x) &&
+          Math.round(primary.y) === Math.round(box.y)
+        ) {
+          continue
+        }
+        const key = [box.x, box.y, box.width, box.height]
+          .map((value) => Math.round(value))
+          .join(",")
+        const existing = entries.find((entry) => entry.key === key)
+        if (existing) {
+          if (!existing.issueIds.includes(issue.id)) {
+            existing.issueIds.push(issue.id)
+          }
+        } else {
+          entries.push({ key, box, issueIds: [issue.id] })
+        }
+      }
+    }
+    return entries
+  }, [issues])
 
   useEffect(() => () => {
     if (scrollFrameRef.current !== null) cancelAnimationFrame(scrollFrameRef.current)
@@ -223,23 +276,99 @@ function PageCompare({
           <div className="page-compare__panel page-compare__panel--source">
             <div className="page-compare__panel-head">
               <span><i />源文档 · 原文</span>
-              <span>第 {page} 页</span>
+              <span>
+                第 {page} 页
+                {sourceBboxGroups.length > 0 || extraSourceBoxes.length > 0
+                  ? " · 虚线框为问题的原文侧定位"
+                  : ""}
+              </span>
             </div>
             <div
               ref={sourceCanvasRef}
               className="page-compare__canvas"
               onScroll={(event) => syncScroll("source", event.currentTarget)}
             >
-              <img
-                src={sourceUrl}
-                alt={`源文档第 ${page} 页`}
-                className="page-compare__image"
-                width={1191}
-                height={1684}
-                loading="lazy"
-                decoding="async"
-                style={{ width: `${zoom * 100}%`, maxWidth: "none" }}
-              />
+              <div
+                className="page-compare__source-stage"
+                style={{ width: `${zoom * 100}%` }}
+              >
+                <img
+                  src={sourceUrl}
+                  alt={`源文档第 ${page} 页`}
+                  className="page-compare__image"
+                  width={1191}
+                  height={1684}
+                  loading="lazy"
+                  decoding="async"
+                  onLoad={(event) => {
+                    const img = event.currentTarget
+                    setPageWidth(img.naturalWidth / 2)
+                    setPageHeight(img.naturalHeight / 2)
+                  }}
+                  style={{ width: `${zoom * 100}%`, maxWidth: "none" }}
+                />
+                {pageWidth > 0 &&
+                  extraSourceBoxes.map((entry) => {
+                    const groupActive =
+                      activeIssueId !== null &&
+                      entry.issueIds.includes(activeIssueId)
+                    return (
+                      <div
+                        key={`source-extra-${entry.key}`}
+                        style={{
+                          position: "absolute",
+                          border: groupActive
+                            ? `3px dashed ${PALETTE.critical}`
+                            : `1px dashed ${PALETTE.critical}`,
+                          background: groupActive
+                            ? "rgba(255,82,82,0.12)"
+                            : "rgba(255,82,82,0.04)",
+                          left: `${(entry.box!.x / pageWidth) * 100}%`,
+                          top: `${(entry.box!.y / pageHeight) * 100}%`,
+                          width: `${(entry.box!.width / pageWidth) * 100}%`,
+                          height: `${(entry.box!.height / pageHeight) * 100}%`,
+                          pointerEvents: "none",
+                        }}
+                      />
+                    )
+                  })}
+                {pageWidth > 0 &&
+                  sourceBboxGroups.map((group) => {
+                    const first = group[0].issue
+                    const groupActive = group.some(
+                      ({ issue }) => issue.id === activeIssueId,
+                    )
+                    return (
+                      <div
+                        key={`source-${first.id}`}
+                        style={{
+                          position: "absolute",
+                          border: groupActive
+                            ? `3px solid ${PALETTE.critical}`
+                            : `2px dashed ${PALETTE.critical}`,
+                          background: groupActive
+                            ? "rgba(255,82,82,0.14)"
+                            : "rgba(255,82,82,0.06)",
+                          left: `${(first.bbox!.x / pageWidth) * 100}%`,
+                          top: `${(first.bbox!.y / pageHeight) * 100}%`,
+                          width: `${(first.bbox!.width / pageWidth) * 100}%`,
+                          height: `${(first.bbox!.height / pageHeight) * 100}%`,
+                          pointerEvents: "none",
+                        }}
+                      >
+                        <span className="page-compare__badges">
+                          {group.map(({ issue, index }) => (
+                            <IssueBadge
+                              key={issue.id}
+                              index={index}
+                              active={issue.id === activeIssueId}
+                            />
+                          ))}
+                        </span>
+                      </div>
+                    )
+                  })}
+              </div>
             </div>
           </div>
         </Col>
@@ -427,6 +556,8 @@ const METRIC_LABELS: Record<string, string> = {
   invisible_text_region: "透明文本区域",
   invisible_text_bbox: "透明文本坐标",
   visible_image_region: "可见图片区域",
+  merged_source_count: "合并源区域数量",
+  merged_region_compare: "多对一合并对照",
 }
 
 const EVIDENCE_ONLY_KEYS = new Set([
@@ -435,6 +566,7 @@ const EVIDENCE_ONLY_KEYS = new Set([
   "source_bbox",
   "target_bbox",
   "other_bbox",
+  "covered_source_bboxes",
   "source_other_region",
   "source_other_text",
   "source_other_bbox",
@@ -978,6 +1110,12 @@ function IssueDetails({
   const targetOtherBbox = formatEvidenceBbox(metrics.other_bbox)
   const isTextOverlap = issue.type === "text_overlap"
   const metricRows = issueMetricRows(issue)
+  // M→1 合并块提示：译文区域由多个源区域内容合并时必须显式说明，
+  // 否则审阅者会以为源图/译文图两个框错位是画框错误。
+  const mergedSourceCount =
+    typeof metrics.merged_source_count === "number"
+      ? metrics.merged_source_count
+      : 0
   const isMatchedGeometry = [
     "region_shifted",
     "region_resized",
@@ -1000,6 +1138,18 @@ function IssueDetails({
           {issue.bbox
             ? `位置：目标文档第 ${issue.page} 页红框处（点击列表项可在图中高亮）`
             : "位置：无法定位到具体区域（差异为页面级，请对照左右两页人工检查）"}
+        </Typography.Text>
+      )}
+      {mergedSourceCount >= 2 && (
+        <Typography.Text type="warning" style={{ fontSize: 12 }}>
+          该译文区域由 {mergedSourceCount}{" "}
+          个源区域的内容合并而来；源图中全部虚线框均为其对应区域，与译文框不是
+          1↔1 对应。
+        </Typography.Text>
+      )}
+      {issue.type === "number_mismatch" && (
+        <Typography.Text type="warning" style={{ fontSize: 12 }}>
+          数字不一致为页面级对比：源图虚线框是缺失数字所在的原文区域，译文红框是多出数字所在的译文区域——两个框各自锚定证据位置，不是同一内容的两侧。
         </Typography.Text>
       )}
       {numberDetail.length > 0 && (

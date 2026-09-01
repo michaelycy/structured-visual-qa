@@ -215,6 +215,12 @@ class DetectorThresholds(SchemaModel):
     # 文本 BBox 在两个轴向都达到该侵入比例才算真实重叠，排除相邻行/列
     # 因字体上延、下延产生的亚点级边界接触。
     text_overlap_axis_ratio: float = Field(default=0.1, ge=0, le=1)
+    # M→1 合并证据的"压境"判定：目标 Region 与某源 Region 的交集占该
+    # 源 Region 面积的比例达到该值即计入被覆盖源区域。用于布局被译文
+    # 破坏后的合并块识别——合并条通常只压住各源标签的一部分，几何包含
+    # 不成立，须用更宽松的压境比例（与 merged_text_coverage_ratio 的
+    # 实质覆盖语义区分）。
+    merged_source_overlap_ratio: float = Field(default=0.1, ge=0, le=1)
     image_caption_area_ratio: float = Field(default=0.005, ge=0, le=1)
     # 目标文本区中仍保留源语言文字的字符占比达到该值即判为未翻译。
     untranslated_ratio: float = Field(default=0.7, ge=0, le=1)

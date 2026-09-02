@@ -1,9 +1,11 @@
 """使用确定性规则把解析 Block 组合为语义 Region。"""
 
 from collections import defaultdict
+from dataclasses import dataclass, field
 import re
 from statistics import median
 
+from document_qa.matching.geometry import intersection_ratio
 from document_qa.profiles import RuleProfile, default_rule_profile
 from document_qa.schemas import (
     Block,
@@ -16,6 +18,48 @@ from document_qa.schemas import (
     TextStyle,
 )
 from document_qa.style_stats import weighted_median_font_size
+
+
+@dataclass
+class _ComponentEntry:
+    """一个候选 Region 的中间态：原始 Block 内拆出的连通分量。
+
+    分组先按原始 Block 拆分量、再跨 Block 归并嵌套分量，最后统一建
+    Region；该结构在归并过程中承载分量的 Block 集合与 ID 出处。
+    """
+
+    source_index: int
+    component_index: int
+    component_count: int
+    blocks: list[Block]
+    # 归并进本分量的其他原始 Block 索引；仅用于 metadata 可追溯性。
+    merged_source_indexes: set[int] = field(default_factory=set)
+    consumed: bool = False
+
+    @property
+    def bbox(self) -> BoundingBox:
+        """返回分量全部 Block 的最小外接矩形。"""
+
+        return BoundingBox(
+            x=min(block.bbox.x for block in self.blocks),
+            y=min(block.bbox.y for block in self.blocks),
+            width=(
+                max(block.bbox.right for block in self.blocks)
+                - min(block.bbox.x for block in self.blocks)
+            ),
+            height=(
+                max(block.bbox.bottom for block in self.blocks)
+                - min(block.bbox.y for block in self.blocks)
+            ),
+        )
+
+    def absorb(self, other: "_ComponentEntry") -> None:
+        """把嵌套分量的 Block 并入本分量，并保持阅读顺序。"""
+
+        self.blocks.extend(other.blocks)
+        self.blocks.sort(key=lambda block: (block.bbox.y, block.bbox.x, block.id))
+        self.merged_source_indexes.add(other.source_index)
+        other.consumed = True
 
 
 class RegionGrouper:
@@ -47,27 +91,171 @@ class RegionGrouper:
         ]
         median_font_size = median(text_sizes) if text_sizes else None
 
-        regions = []
+        entries: list[_ComponentEntry] = []
         for source_index, blocks in sorted(groups.items()):
             components = self._split_disconnected_blocks(blocks)
             for component_index, component in enumerate(components):
-                region_id = f"p{page.page}-r{source_index}"
-                if component_index:
-                    region_id = f"{region_id}-c{component_index + 1}"
-                regions.append(
-                    self._build_region(
-                        page.page,
-                        source_index,
-                        component,
-                        median_font_size,
-                        region_id,
-                        component_index,
-                        len(components),
+                entries.append(
+                    _ComponentEntry(
+                        source_index=source_index,
+                        component_index=component_index,
+                        component_count=len(components),
+                        blocks=list(component),
                     )
                 )
+        entries = self._merge_interleaved_components(entries)
+        regions = [
+            self._build_region(
+                page.page,
+                entry.source_index,
+                entry.blocks,
+                median_font_size,
+                f"p{page.page}-r{entry.source_index}"
+                + (f"-c{entry.component_index + 1}" if entry.component_index else ""),
+                entry.component_index,
+                entry.component_count,
+                merged_source_indexes=entry.merged_source_indexes,
+            )
+            for entry in entries
+        ]
         regions.sort(key=lambda region: (region.bbox.y, region.bbox.x))
         regions = self._attach_relationships(regions)
         return page.model_copy(update={"regions": regions})
+
+    def _merge_interleaved_components(
+        self, entries: list[_ComponentEntry]
+    ) -> list[_ComponentEntry]:
+        """归并被 PDF 内容流错排拆散、嵌进其他分量行间的文本分量。
+
+        翻译工具重写页面内容流时，会把译文行画进另一个栏目的原始
+        Block；分组按 Block 边界拆出的两个 Region 随之互相嵌套，这是
+        真实排版不可能出现的构型，会让并集 BBox"框住"另一 Region，
+        继而产生虚假的重叠与新增报告。归并要求：嵌套分量被容器分量
+        完整覆盖、子行互不碰撞（真实文字重叠交给 overlap 检测）、且
+        与容器至少一条子行满足与块内连通一致的同栏/样式/间距条件。
+        """
+
+        changed = True
+        while changed:
+            changed = False
+            for nested in entries:
+                if nested.consumed:
+                    continue
+                container = self._find_interleaved_container(entries, nested)
+                if container is None:
+                    continue
+                container.absorb(nested)
+                changed = True
+        return [entry for entry in entries if not entry.consumed]
+
+    def _find_interleaved_container(
+        self, entries: list[_ComponentEntry], nested: _ComponentEntry
+    ) -> _ComponentEntry | None:
+        """为嵌套分量寻找唯一的最合适容器；无可归并目标时返回 None。"""
+
+        nested_bbox = nested.bbox
+        best: _ComponentEntry | None = None
+        best_score = 0.0
+        for candidate in entries:
+            if candidate is nested or candidate.consumed:
+                continue
+            candidate_bbox = candidate.bbox
+            if candidate_bbox.area <= nested_bbox.area:
+                continue
+            if not self._can_absorb_interleaved(
+                candidate.blocks, nested.blocks, candidate_bbox, nested_bbox
+            ):
+                continue
+            score = intersection_ratio(nested_bbox, candidate_bbox)
+            # 多个容器都满足时取覆盖比例最高者，保持结果确定性。
+            if score > best_score:
+                best = candidate
+                best_score = score
+        return best
+
+    def _can_absorb_interleaved(
+        self,
+        container_blocks: list[Block],
+        nested_blocks: list[Block],
+        container_bbox: BoundingBox,
+        nested_bbox: BoundingBox,
+    ) -> bool:
+        """判断嵌套分量是否满足归并进容器分量的全部几何与样式条件。"""
+
+        settings = self.profile.grouping
+        # 仅纯文本分量参与；图片等分量不参与跨 Block 归并。
+        if any(block.type != ElementType.TEXT for block in container_blocks):
+            return False
+        if any(block.type != ElementType.TEXT for block in nested_blocks):
+            return False
+        if (
+            intersection_ratio(nested_bbox, container_bbox)
+            < settings.interleaved_containment_ratio
+        ):
+            return False
+        for container_block in container_blocks:
+            for nested_block in nested_blocks:
+                if self._children_collide(
+                    container_block.bbox,
+                    nested_block.bbox,
+                    settings.interleaved_collision_tolerance_ratio,
+                ):
+                    # 子行真实碰撞说明是文字重叠而非内容流错排；
+                    # 归并会掩盖 overlap 检测的证据，必须拒绝。
+                    return False
+        return any(
+            self._cross_block_connected(container_block, nested_block)
+            for container_block in container_blocks
+            for nested_block in nested_blocks
+        )
+
+    @staticmethod
+    def _children_collide(
+        first: BoundingBox, second: BoundingBox, tolerance_ratio: float
+    ) -> bool:
+        """判断两条子行是否发生超出容忍度的真实碰撞。"""
+
+        overlap_width = max(0.0, min(first.right, second.right) - max(first.x, second.x))
+        overlap_height = max(
+            0.0, min(first.bottom, second.bottom) - max(first.y, second.y)
+        )
+        intersection = overlap_width * overlap_height
+        smaller_area = min(first.area, second.area)
+        return intersection > smaller_area * tolerance_ratio
+
+    def _cross_block_connected(self, first: Block, second: Block) -> bool:
+        """按块内连通同款几何条件判断跨 Block 的两条子行可否同组。
+
+        与 `_blocks_are_connected` 的区别：不同原始 Block 的
+        `source_line_index` 数值可能巧合相同，不能走"同源行免样式
+        检查"的捷径，跨 Block 配对一律要求样式兼容。
+        """
+
+        first, second = sorted(
+            (first, second), key=lambda block: (block.bbox.y, block.bbox.x, block.id)
+        )
+        if not self._styles_are_compatible(first, second):
+            return False
+        gap_limit = (
+            max(first.bbox.height, second.bbox.height)
+            * self.profile.grouping.disconnected_span_gap_ratio
+        )
+        horizontal_gap = max(
+            0.0,
+            max(first.bbox.x, second.bbox.x) - min(first.bbox.right, second.bbox.right),
+        )
+        vertical_gap = max(
+            0.0,
+            max(first.bbox.y, second.bbox.y) - min(first.bbox.bottom, second.bbox.bottom),
+        )
+        horizontal_overlap = horizontal_gap == 0
+        vertical_overlap = vertical_gap == 0
+        same_left_edge = abs(first.bbox.x - second.bbox.x) <= gap_limit
+        return (
+            vertical_overlap and horizontal_gap <= gap_limit
+        ) or (
+            vertical_gap <= gap_limit and (horizontal_overlap or same_left_edge)
+        )
 
     def _build_region(
         self,
@@ -78,6 +266,7 @@ class RegionGrouper:
         region_id: str,
         component_index: int,
         component_count: int,
+        merged_source_indexes: set[int] | None = None,
     ) -> Region:
         """合并同一原始 Block 的几何范围、文本和代表样式。"""
 
@@ -125,6 +314,17 @@ class RegionGrouper:
             # 字号变化检测既误报也漏报。
             style = self._representative_style(text_blocks, representative)
 
+        region_metadata: dict[str, object] = {
+            "source_block_index": source_index,
+            "source_component_index": component_index,
+            "_source_block_component_count": component_count,
+        }
+        if merged_source_indexes:
+            # 跨 Block 归并来源写入 metadata：保留内容流错排的证据链，
+            # 供上层组件与人工复核追溯 Region 的真实出处。
+            region_metadata["merged_source_block_indexes"] = sorted(
+                merged_source_indexes
+            )
         return Region(
             id=region_id,
             page=page_number,
@@ -133,11 +333,7 @@ class RegionGrouper:
             style=style,
             content=content,
             children=[block.id for block in blocks],
-            metadata={
-                "source_block_index": source_index,
-                "source_component_index": component_index,
-                "_source_block_component_count": component_count,
-            },
+            metadata=region_metadata,
         )
 
     def _split_disconnected_blocks(self, blocks: list[Block]) -> list[list[Block]]:
@@ -363,7 +559,10 @@ class RegionGrouper:
             return None
         weighted = weighted_median_font_size(
             [
-                (block.style.font_size, len(block.content.text or ""))
+                (
+                    block.style.font_size,
+                    len(block.content.text or "") if block.content else 0,
+                )
                 for block in text_blocks
                 if block.style and block.style.font_size
             ]

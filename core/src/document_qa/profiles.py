@@ -469,6 +469,15 @@ class GroupingSettings(SchemaModel):
     # 跨行合并时允许的字号浮点误差；绝对值与相对值取较大者。
     style_font_size_tolerance_ratio: float = Field(default=0.03, ge=0, le=0.5)
     style_font_size_tolerance_points: float = Field(default=0.25, ge=0, le=5.0)
+    # 跨原始 Block 归并嵌套文本分量的判定阈值：一个分量的 BBox 被另一
+    # 分量的 BBox 按交集占较小面积比例完全覆盖时视为嵌套。翻译工具
+    # 重排内容流会把一行正文画进另一个栏目的原始 Block，分组按 Block
+    # 边界拆出的两个 Region 会互相嵌套（真实排版不可能的构型）。
+    interleaved_containment_ratio: float = Field(default=0.99, ge=0.5, le=1.0)
+    # 嵌套归并的子行碰撞容忍度：嵌套分量与容器子行的交集面积超过较小
+    # 子行面积该比例即视为真实文字重叠，拒绝归并并交给 overlap 检测，
+    # 防止归并掩盖真实交付风险。
+    interleaved_collision_tolerance_ratio: float = Field(default=0.1, ge=0, le=0.5)
 
 
 class BackgroundSettings(SchemaModel):

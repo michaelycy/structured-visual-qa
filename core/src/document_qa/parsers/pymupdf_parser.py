@@ -192,8 +192,19 @@ class PyMuPDFParser:
                 if image_block is not None:
                     blocks.append(image_block)
 
+        # T39 阶段 1：矢量填充只枚举一次，背景统计与类型信号共用。
+        vector_fills, drawing_errors = self._page_vector_fills(pdf_page)
+        page_area = float(pdf_page.rect.width * pdf_page.rect.height)
+        # 整页级填充（页面底色）不属于任何元素的形状特征，从类型
+        # 信号中剔除，只保留在背景统计里——否则每个块都会被底色
+        # 记一次"全覆盖"，信号失去区分度。
+        shape_fills = [
+            (rect, fill)
+            for rect, fill in vector_fills
+            if rect.width * rect.height < page_area * self.background.background_min_area_ratio
+        ]
         background_color, dark_boxes, background_errors = self._page_background(
-            pdf_page
+            pdf_page, vector_fills, drawing_errors
         )
         page_metadata = {
             "rotation": int(pdf_page.rotation),
@@ -209,6 +220,9 @@ class PyMuPDFParser:
             # 白字白底）；契约 §9 禁止静默跳过，失败类型必须随报告
             # 可见，供验收人判断该页检测能力的可信度。
             page_metadata["background_parse_errors"] = background_errors
+        page_area = float(pdf_page.rect.width * pdf_page.rect.height)
+        for block in blocks:
+            self._attach_typing_signals(block, shape_fills, page_area)
         return Page(
             document_id=document_id,
             page=page_number,
@@ -218,48 +232,126 @@ class PyMuPDFParser:
             metadata=page_metadata,
         )
 
-    def _page_background(
+    def _page_vector_fills(
         self, pdf_page: pymupdf.Page
-    ) -> tuple[str | None, list[dict[str, float]], list[str]]:
-        """提取页面背景色、深色背景块与提取失败记录。
+    ) -> tuple[list[tuple[Any, Any]], list[str]]:
+        """枚举页面全部带填充的矢量绘图，返回 ((rect, fill), 失败记录)。
 
-        返回 (背景色, 深色块列表, 失败记录)。背景色取覆盖面积最大的
-        整页填充矩形颜色；找不到大面积填充时为 None。深色块包括非
-        浅色填充矩形与全部图片。个别异常 PDF 的绘图/图片枚举可能
-        抛错——按无背景降级处理，但失败类型写入报告而不是静默吞掉。
+        供背景统计与 T39 类型信号共用；描边类绘图（无 fill）不进入
+        清单。个别异常 PDF 的枚举可能抛错——返回空清单并记录失败
+        类型，与背景统计的降级语义一致。
         """
 
-        settings = self.background
-        page_area = pdf_page.rect.width * pdf_page.rect.height
-        dark_boxes: list[dict[str, float]] = []
+        fills: list[tuple[Any, Any]] = []
         errors: list[str] = []
-        largest: tuple[float, tuple[float, float, float] | None] | None = None
         try:
             for drawing in pdf_page.get_drawings():
                 rect = drawing.get("rect")
                 fill = drawing.get("fill")
                 if rect is None or fill is None:
                     continue
-                area = rect.width * rect.height
-                if area < page_area * settings.dark_box_min_area_ratio:
-                    # 过小的装饰块不影响文字可见性判断。
-                    continue
-                is_dark = min(fill) < settings.dark_fill_max_channel
-                if is_dark:
-                    dark_boxes.append(
-                        {
-                            "x": rect.x0,
-                            "y": rect.y0,
-                            "width": rect.width,
-                            "height": rect.height,
-                        }
-                    )
-                if area >= page_area * settings.background_min_area_ratio and not is_dark:
-                    # 浅色整页填充才是页面背景色；深色整页填充进 dark_boxes。
-                    if largest is None or area > largest[0]:
-                        largest = (area, fill)
+                fills.append((rect, fill))
         except Exception as exc:
             errors.append(f"get_drawings:{type(exc).__name__}")
+        return fills, errors
+
+    def _attach_typing_signals(
+        self,
+        block: Block,
+        vector_fills: list[tuple[Any, Any]],
+        page_area: float,
+    ) -> None:
+        """把类型推断所需的解析信号写入 block.metadata（T39 阶段 1）。
+
+        纯沉淀：当前无任何下游消费，报告也不含 Block——失败或缺失
+        不影响任何检测行为。信号语义见 docs/region-typing-design.md。
+        """
+
+        signals: dict[str, Any] = {}
+        bbox = block.bbox
+        block_area = bbox.width * bbox.height
+        if block.type == ElementType.TEXT:
+            text = block.content.text if block.content else ""
+            chars = len(text)
+            signals["chars"] = chars
+            if chars:
+                signals["digit_density"] = round(
+                    sum(1 for ch in text if ch.isdigit()) / chars, 4
+                )
+                # 坐标轴标签/图例的典型形态是短文本。
+                signals["short_text"] = chars <= 8
+            font = block.style.font_family if block.style else None
+            if font:
+                lowered = font.lower()
+                signals["math_font"] = any(
+                    marker in lowered for marker in ("math", "symbol", "stix")
+                )
+        # 与带填充矢量图形的重叠统计：图表/表格/形状分类的核心特征。
+        if block_area > 0:
+            intersect_total = 0.0
+            fill_colors: set[str] = set()
+            fill_count = 0
+            for rect, fill in vector_fills:
+                inter_x = min(bbox.right, rect.x1) - max(bbox.x, rect.x0)
+                inter_y = min(bbox.bottom, rect.y1) - max(bbox.y, rect.y0)
+                if inter_x <= 0 or inter_y <= 0:
+                    continue
+                fill_count += 1
+                intersect_total += inter_x * inter_y
+                if isinstance(fill, (tuple, list)) and len(fill) >= 3:
+                    red, green, blue = (
+                        max(0, min(255, int(round(float(channel) * 255))))
+                        for channel in fill[:3]
+                    )
+                    fill_colors.add(f"#{red:02X}{green:02X}{blue:02X}")
+            signals["vector_fill_count"] = fill_count
+            signals["vector_fill_color_count"] = len(fill_colors)
+            signals["vector_fill_area_ratio"] = round(
+                min(1.0, intersect_total / block_area), 4
+            )
+        if block.type == ElementType.IMAGE and page_area > 0:
+            signals["page_area_ratio"] = round(block_area / page_area, 4)
+        block.metadata["typing_signals"] = signals
+
+    def _page_background(
+        self,
+        pdf_page: pymupdf.Page,
+        vector_fills: list[tuple[Any, Any]],
+        drawing_errors: list[str],
+    ) -> tuple[str | None, list[dict[str, float]], list[str]]:
+        """提取页面背景色、深色背景块与提取失败记录。
+
+        返回 (背景色, 深色块列表, 失败记录)。背景色取覆盖面积最大的
+        整页填充矩形颜色；找不到大面积填充时为 None。深色块包括非
+        浅色填充矩形与全部图片。矢量清单由 _page_vector_fills 预先
+        枚举（与类型信号共用一次 get_drawings）；图片枚举仍可能抛错
+        ——按无背景降级处理，但失败类型写入报告而不是静默吞掉。
+        """
+
+        settings = self.background
+        page_area = pdf_page.rect.width * pdf_page.rect.height
+        dark_boxes: list[dict[str, float]] = []
+        errors: list[str] = list(drawing_errors)
+        largest: tuple[float, tuple[float, float, float] | None] | None = None
+        for rect, fill in vector_fills:
+            area = rect.width * rect.height
+            if area < page_area * settings.dark_box_min_area_ratio:
+                # 过小的装饰块不影响文字可见性判断。
+                continue
+            is_dark = min(fill) < settings.dark_fill_max_channel
+            if is_dark:
+                dark_boxes.append(
+                    {
+                        "x": rect.x0,
+                        "y": rect.y0,
+                        "width": rect.width,
+                        "height": rect.height,
+                    }
+                )
+            if area >= page_area * settings.background_min_area_ratio and not is_dark:
+                # 浅色整页填充才是页面背景色；深色整页填充进 dark_boxes。
+                if largest is None or area > largest[0]:
+                    largest = (area, fill)
         # 图片视为非浅色背景块：白字在图片上正常可见（图片可能是
         # 深色照片，也可能是浅色插画——统一跳过避免误判）。
         try:

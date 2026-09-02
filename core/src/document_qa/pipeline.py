@@ -28,6 +28,10 @@ from document_qa.schemas import (
     Severity,
 )
 from document_qa.scoring import QAScorer
+from document_qa.typing_consumption import apply_consumption
+from document_qa.typing_engine import RegionTyping
+from document_qa.verification import VerificationService
+from document_qa.verification.service import apply_enforce_decisions
 
 RenderScope = Literal["all", "issues"]
 
@@ -55,6 +59,8 @@ class DocumentQAPipeline:
         scorer: QAScorer | None = None,
         glossary: Glossary | None = None,
         ocr_provider: OCRProvider | None = None,
+        verifier: VerificationService | None = None,
+        region_typing: RegionTyping | None = None,
     ) -> None:
         """支持注入 Profile 与组件，便于界面配置、测试和替换 PDF 引擎。"""
 
@@ -78,6 +84,11 @@ class DocumentQAPipeline:
         self.raster_ocr_detector = (
             RasterOCRDetector(ocr_provider, self.profile) if ocr_provider else None
         )
+        # 渲染验证层（T38）：shadow/enforce 裁决器，配置来自 Profile。
+        self.verifier = verifier or VerificationService(self.profile.verification)
+        # 区域类型推断（T39 阶段 2 shadow）：引擎级开关（消费端落地
+        # 时随 Golden 更新迁入 RuleProfile.typing）。
+        self.region_typing = region_typing or RegionTyping()
         self._ocr_run: dict[str, object] | None = None
 
     def compare(
@@ -115,6 +126,10 @@ class DocumentQAPipeline:
             "group",
             {"side": "target", "regions": sum(len(p.regions) for p in target.pages)},
         )
+        # 区域类型推断（T39 阶段 2 shadow）：只写 region.metadata，
+        # 不被任何下游消费，报告不变。
+        self.region_typing.annotate_document(source)
+        self.region_typing.annotate_document(target)
 
         source_pages = {page.page: page for page in source.pages}
         target_pages = {page.page: page for page in target.pages}
@@ -439,6 +454,35 @@ class DocumentQAPipeline:
                     if ocr_result.error:
                         self._ocr_run["status"] = "error"
                         self._ocr_run["error"] = ocr_result.error
+        # 类型消费矩阵（T39 阶段 3）：先于验证与评分——豁免的 Issue
+        # 不再进入验证与扣分，验证成本与评分语义一致。
+        issues = apply_consumption(issues, target, self.profile.typing)
+        # 渲染验证层（T38）：enforce 模式始终运行（裁决改变输出）；
+        # shadow 模式仅当外部提供 progress 通道时运行（CLI/Golden 走
+        # shadow 时零开销）。shadow 只经事件通道输出裁决，enforce 才
+        # 把证据写入 metrics 并按 enforce_types 降级 rejected。
+        # 必须先于评分：实证否定的 Issue 以降级后严重度参与扣分。
+        verification = self.profile.verification
+        if (
+            verification.enabled
+            and issues
+            and target_path is not None
+            and (verification.mode == "enforce" or progress is not None)
+        ):
+            outcomes = self.verifier.verify_page(
+                issues=issues,
+                target_page=target,
+                target_path=target_path,
+                target_password=target_password,
+                renderer=self.renderer,
+            )
+            if verification.mode == "enforce":
+                apply_enforce_decisions(
+                    issues, outcomes, set(verification.enforce_types)
+                )
+            if progress is not None:
+                for outcome in outcomes:
+                    self._emit_progress(progress, "verification", outcome)
         score, status = self.scorer.score(issues)
         self._emit_progress(
             progress,

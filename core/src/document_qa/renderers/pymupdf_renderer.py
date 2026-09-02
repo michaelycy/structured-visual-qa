@@ -18,6 +18,63 @@ class PyMuPDFRenderer:
             raise ValueError("dpi 必须大于 0")
         self.dpi = dpi
         self.max_pages = max_pages
+        # 整页像素缓存（验证层采样用）：键 (路径, 页码, dpi)，容量按
+        # LRU 淘汰——96 dpi 的 A4 页约 2.3 MB，4 页足以覆盖逐页验证
+        # 的访问模式，又不让长文档占满内存。
+        self._pixel_cache: dict[tuple[str, int, int], tuple[int, int, bytes]] = {}
+        self._pixel_cache_order: list[tuple[str, int, int]] = []
+        self._pixel_cache_capacity = 4
+
+    def page_pixels(
+        self,
+        pdf_path: Path,
+        *,
+        page: int,
+        dpi: int,
+        password: str | None = None,
+    ) -> tuple[int, int, bytes]:
+        """渲染整页为 RGB 像素并缓存，返回 (宽, 高, RGB 字节流)。
+
+        供渲染验证层做像素采样（T38）； pymupdf 对象不越过本边界，
+        调用方只拿到纯 Python 数据。缓存与 dpi 相关，密码仅参与打开。
+        """
+
+        if page < 1 or dpi <= 0:
+            raise ValueError("页码与 dpi 必须为正数")
+        source_path = pdf_path.expanduser().resolve()
+        cache_key = (str(source_path), page, dpi)
+        cached = self._pixel_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        if not source_path.is_file() or source_path.suffix.lower() != ".pdf":
+            raise DocumentParsingError(f"无效 PDF 路径: {source_path}")
+        try:
+            with pymupdf.open(source_path) as pdf:
+                if pdf.needs_pass:
+                    if password is None:
+                        raise DocumentParsingError("渲染需要提供打开密码")
+                    if not pdf.authenticate(password):
+                        raise DocumentParsingError("PDF 打开密码错误")
+                if page > pdf.page_count:
+                    raise DocumentParsingError(f"PDF 不存在第 {page} 页")
+                pix = pdf[page - 1].get_pixmap(
+                    matrix=pymupdf.Matrix(dpi / 72, dpi / 72),
+                    colorspace=pymupdf.csRGB,
+                    alpha=False,
+                )
+                pixels = (pix.width, pix.height, bytes(pix.samples))
+        except DocumentParsingError:
+            raise
+        except Exception as exc:
+            raise DocumentParsingError(f"页面渲染失败: {type(exc).__name__}") from exc
+        if cache_key in self._pixel_cache_order:
+            self._pixel_cache_order.remove(cache_key)
+        self._pixel_cache_order.append(cache_key)
+        self._pixel_cache[cache_key] = pixels
+        while len(self._pixel_cache_order) > self._pixel_cache_capacity:
+            evicted = self._pixel_cache_order.pop(0)
+            self._pixel_cache.pop(evicted, None)
+        return pixels
 
     def render(
         self,

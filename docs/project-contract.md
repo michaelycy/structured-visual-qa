@@ -123,12 +123,17 @@ LibreOffice 使用 MPL 2.0（许可友好，无 AGPL 传染），仅由 server �
 ```text
 Parser → Page/Block
 Grouper → Page/Region
+Typing → Region semantic_type（可选阶段：区域类型推断，结果只写 metadata）
 PageAligner → PageAlignment
 Matcher → RegionMatch/StructuredDiff
 Detector → Issue
+Verifier → Verdict（可选阶段：渲染实证裁决，shadow 只经事件通道输出，enforce 才改 Issue）
 Scorer → Score/Status
 Reporter → QAReport/JSON
 ```
+
+Typing 与 Verifier 是 2025-09 增补的可选阶段（T39/T38）：默认或低置信时
+行为退化为不存在；阈值集中在 RuleProfile，shadow 期不得改变既有输出。
 
 界面化分层（2025-08 增补；2025-08 二次拆分为双发行包）：
 

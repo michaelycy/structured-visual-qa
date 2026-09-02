@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from enum import StrEnum
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field, model_validator
 
@@ -500,6 +501,77 @@ class BackgroundSettings(SchemaModel):
     background_min_area_ratio: float = Field(default=0.5, ge=0, le=1)
 
 
+class VerificationSettings(SchemaModel):
+    """渲染验证层配置（T38）。
+
+    shadow 模式只经 progress 事件通道输出裁决、绝不改变检测输出；
+    enforce 模式对 enforce_types 内的 rejected Issue 降为 INFO 并把
+    证据写入 metrics。全量阈值随 Profile 快照可复现（§12）。
+    """
+
+    # 总开关；False 时管线完全跳过验证计算。
+    enabled: bool = True
+    # shadow：只输出裁决事件；enforce：裁决作用于 Issue 严重度。
+    mode: Literal["shadow", "enforce"] = "shadow"
+    # enforce 模式下允许改变严重度的 Issue 类型；shadow 模式忽略。
+    enforce_types: list[str] = Field(default_factory=list)
+    # 采样渲染分辨率：对比度采样不需要 OCR 级精度，96 dpi 足够。
+    dpi: int = Field(default=96, ge=36, le=300)
+    # 单页验证条数上限：极端页直接 unverified，防拖垮管线。
+    max_issues_per_page: int = Field(default=50, ge=1)
+    # 文字像素与背景像素的归一化色距（0-1）达到该值即判定"可见"，
+    # 即检测器的"不可见"主张被实证否定。
+    min_visible_contrast: float = Field(default=0.35, ge=0, le=1)
+    # 像素归入文字色/背景色的色距容差（归一化 0-1）。
+    glyph_color_tolerance: float = Field(
+        default=0.25, ge=0, le=1
+    )
+    # bbox 内文字色像素占比低于该值时视为"找不到可实证的字形"，
+    # 保守维持检测器原判（fail-open：不确定时不否决）。
+    min_glyph_fraction: float = Field(default=0.005, ge=0, le=1)
+    # 背景参照像素占比低于该值时无法建立背景基准，维持原判。
+    min_background_fraction: float = Field(default=0.05, ge=0, le=1)
+    # content_out_of_page 实证：页内交集区渲染内容像素占比低于该值
+    # 视为"页内无可见内容"，否定越界主张。
+    min_visible_content_ratio: float = Field(default=0.02, ge=0, le=1)
+
+
+class TypingSettings(SchemaModel):
+    """区域类型感知配置（T39）。
+
+    consumption 键为 "issue类型:语义类型"，值为 normal / downgraded
+    （严重度上限降为 LOW）/ exempt（不产出）。缺省矩阵来自设计稿
+    §3.3：翻译场景下图表标签重排、公式排版、页眉页脚位移属常态，
+    不作为缺陷上报。
+    """
+
+    enabled: bool = True
+    consumption: dict[str, str] = Field(default_factory=lambda: {
+        "font_shrink:chart": "exempt",
+        "font_shrink:formula": "exempt",
+        "font_shrink:header": "exempt",
+        "font_shrink:footer": "exempt",
+        "region_shifted:chart": "downgraded",
+        "region_shifted:formula": "exempt",
+        "region_shifted:header": "exempt",
+        "region_shifted:footer": "exempt",
+        "region_resized:chart": "downgraded",
+        "region_resized:formula": "exempt",
+        "region_resized:header": "exempt",
+        "region_resized:footer": "exempt",
+        "text_overlap:chart": "downgraded",
+        "text_overlap:header": "exempt",
+        "text_overlap:footer": "exempt",
+        "text_image_overlap:chart": "downgraded",
+        "text_image_overlap:header": "exempt",
+        "text_image_overlap:footer": "exempt",
+        "number_mismatch:chart": "downgraded",
+        "number_mismatch:formula": "exempt",
+        "content_out_of_page:header": "downgraded",
+        "content_out_of_page:footer": "downgraded",
+    })
+
+
 class RuleProfile(SchemaModel):
     """一次 QA 任务可复现、可版本化的完整规则配置。"""
 
@@ -520,6 +592,8 @@ class RuleProfile(SchemaModel):
     detectors: DetectorSettings = Field(default_factory=DetectorSettings)
     scoring: ScoringSettings = Field(default_factory=ScoringSettings)
     background: BackgroundSettings = Field(default_factory=BackgroundSettings)
+    verification: VerificationSettings = Field(default_factory=VerificationSettings)
+    typing: TypingSettings = Field(default_factory=TypingSettings)
 
     def detector_settings_for(self, language: str) -> DetectorSettings:
         """返回指定语言场景下生效的检测配置。
@@ -538,7 +612,11 @@ class RuleProfile(SchemaModel):
 
 
 def default_rule_profile() -> RuleProfile:
-    """返回经过真实中英文 PDF 校准的内置平衡配置。"""
+    """返回经过真实中英文 PDF 校准的内置平衡配置。
+
+    渲染验证层（T38 阶段 2 起）默认对 invisible_text enforce：白字
+    类误报由像素实证兜底，rejected 降 INFO 保留证据。
+    """
 
     return RuleProfile(
         profile_id="translation-balanced",
@@ -546,6 +624,10 @@ def default_rule_profile() -> RuleProfile:
         version=1,
         status=ProfileStatus.PUBLISHED,
         description="适用于机器生成型双语 PDF 的默认平衡配置。",
+        verification=VerificationSettings(
+            mode="enforce",
+            enforce_types=["invisible_text", "content_out_of_page"],
+        ),
     )
 
 

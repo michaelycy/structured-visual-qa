@@ -1295,3 +1295,131 @@ ruff、渐进 mypy、compileall、双包 sdist/wheel 构建、前端
 | #6 复核闭环 | ✅ 已落地（判定持久化 + UI） |
 | #7 批量任务 | ⭕ 待办（T3 异步化是其前置） |
 | #8 报告导出 | 本文档 T2 |
+
+---
+
+## T38 渲染验证层：检测主张的像素级实证（oracle-first，阶段 2 enforce 已落地）
+
+> 2026-09-02 设计获批（含契约 §7 增补 Verifier/Typing 节点）。实现期
+> 修正两处并已回写设计稿：① shadow 裁决经 progress 事件通道输出
+> （写入 metrics 会改变报告 JSON、破坏 Golden 逐位一致），metrics
+> 落盘推迟到 enforce；② 验证配置以 verification 包内引擎级常量
+> 运行（RuleProfile 全量快照进报告，enforce 期才迁入 Profile）。
+
+**阶段 1 落地证据**（2026-09-02）：`core/src/document_qa/verification/`
+（settings/pixel_contrast/service）+ 渲染器 `page_pixels` LRU 缓存 +
+管线接线（progress 为 None 时零开销跳过）。examples 对 Golden 逐位
+一致（摘要 fail/81.91/180 不变）；SyneosHealth 对 shadow 裁决 8/8
+confirmed（透明文字渲染无字形，原判成立；T29 的 13 条误报已在检测
+层上游豁免）；构造用例双向通过——白底白字 confirmed、小块彩底白字
+rejected（对比度 0.6658 ≥ 0.35，T29 同形场景）。静态验收与双包构建
+全绿。
+
+**阶段 2 落地证据**（2026-09-02，enforce invisible_text）：
+`VerificationSettings` 迁入 RuleProfile（默认 translation-balanced 为
+enforce + `enforce_types=["invisible_text"]`）；实现期修正一处语义
+错误——验证必须先于评分（初版放在 score 之后导致降级不反映扣分，
+已改为"实证否定的 Issue 以降级后严重度参与评分"）。examples 对
+Golden 差异共 13 处、逐条可解释且全部溯源到 p30 单条 enforce 否定
+（对比度 0.7882 ≥ 0.35）：document_score 81.913→82.130、p30 页分
+86→96 且 review→pass、issue_counts high 56→55 / info 0→1、该 Issue
+severity high→info + 描述附实证结论 + metrics 证据、p2/p23 confirmed
+Issue 增加证据 metrics、快照新增 verification 块。全量裁决人工复核
+11/11（examples 3 + SyneosHealth 8，非抽样）零冤杀。静态验收与双包
+构建全绿。
+
+**阶段 3 落地证据**（2026-09-02，content_out_of_page 实证 P1）：
+`pixel_out_of_page.verify_content_out_of_page`（页外完全→confirmed；
+页内交集渲染内容像素占比 < `min_visible_content_ratio`=0.02 →
+rejected"页内无可见内容"）；服务按类型分发，默认 enforce_types 扩为
+`["invisible_text", "content_out_of_page"]`。实现修正：metrics 剔除
+`duration_ms`（计时抖动破坏报告逐字节可复现，计时只留事件通道）；
+单元级三分支验证通过（完全页外 confirmed / 页内空白 rejected
+ratio=0.005 / 页内有内容 confirmed ratio=0.096）。examples 对因
+T25 容差已无 out_of_page 候选，验证器待真实语料积累。静态验收与
+双包构建全绿。
+
+**问题**：检测器主体是"代理特征 + 阈值"的枚举式启发式，代理特征与
+真实语义之间的缝隙导致逐案修复循环（实例：T29 invisible_text 的
+`dark_box_min_area_ratio=0.1` 过滤掉饼图扇形、T25 越界容差与移页 8%
+豁免带）。检测器输出的 Issue 本质是假设而非事实，而文档质检的终极
+事实是渲染像素——T29 排查已手工验证过"渲染→采样→实证"闭环的可行性
+（38 条误报全部据此认定），但未平台化。
+
+**方案**：设计稿 `docs/render-verification-layer-design.md`。核心：
+管线在 Detector 之后、Scorer 之前新增可选 Verifier 阶段，按 Issue
+类型注册实证裁决器，对"视觉后果类"主张（invisible_text 对比度、
+content_out_of_page 内容存在性、overlap 可读性）做定向渲染实证；
+"几何/内容事实类"主张（偏移、数字不一致、缺失）明确不纳入。六原则：
+假设-实证分离、只裁决不新增、证据强制落 metrics、默认 shadow 逐类
+enforce、fail-open、阈值进 RuleProfile。Document/页 pix 双级缓存控制
+渲染成本（估算 <0.5% 总耗时）。分期：shadow（Golden 逐位不变）→
+enforce P0（invisible_text）→ P1/P2。
+
+**验收**：设计获批（含契约 §7 增补 Verifier 节点的基线确认）后按
+设计稿 §7 分期执行；阶段 1 验收 = examples Golden 逐位一致 +
+SyneosHealth 对 shadow 裁决与 T29 人工结论一致 + 构造用例
+（真不可见/边界渐变）双向通过 + 耗时预算 <15%。
+
+---
+
+## T39 区域类型感知（Region Typing）：文本/图表/表格/公式/页眉页脚的一等公民化（阶段 2 推断器 shadow 已落地）
+
+> 2026-09-02 设计获批（契约 §7 增补与 T38 一并确认）。实现期修正：
+> 页面底色级填充从类型信号中剔除（否则每个块都记一次全覆盖，信号
+> 失去区分度），只保留在背景统计里。
+
+**阶段 1 落地证据**（2026-09-02）：`pymupdf_parser` 新增
+`_page_vector_fills`（矢量填充单次枚举，背景统计与信号共用）与
+`_attach_typing_signals`（text 块：chars/digit_density/short_text/
+math_font；text+image 块：vector_fill_count/color_count/area_ratio；
+image 块：page_area_ratio，全部写入 `typing_signals`）。examples 对
+Golden 逐位一致（Block 不进报告，纯沉淀）；IGBT 正文页信号区分度
+抽检：12 色/8% 面积比的矢量图表块、单字符覆填图例标签特征清晰。
+静态验收与双包构建全绿。
+
+**阶段 2 落地证据**（2026-09-02）：`typing_engine.RegionTyping`
+（shadow，只写 `region.metadata["semantic_type"]`=type+confidence+
+evidence）：跨页重复聚类（header/footer，数字打码、带高 12%、
+出现页占比 ≥60% 且 ≥3 页）、位图图表（面积 ≥8% 页 + 周边短标签）、
+矢量图表标签（fill_ratio ≥0.5 + 短文本/数字密度）、表格（细网格
+fills ≥6 + 子块共线列）、公式（数学字体 + 短区域）；管线在分组后
+接线，构造器可注入。验收：typing 开/关报告逐位一致 ✓；三真实文档
+目标侧分布人工审通过——IGBT chart=18（图表贴片型版面）、
+state-of-ai chart=113 + footer=27（页码页脚，27/41 页）、
+SyneosHealth chart=59（甜甜圈图数据标签，正是 T27/T29 的图表标签
+问题区）。置信度以 medium 为主（位图图表标签多已栅格化进图、页脚
+页占比 <90%），符合保守分类预期。静态验收与双包构建全绿。
+
+**阶段 3 落地证据**（2026-09-02，消费矩阵）：`TypingSettings`
+（enabled + consumption 逐格键值，默认矩阵 = 设计稿 §3.3 的 22 格）+
+`typing_consumption.apply_consumption`（检测后、验证与评分前：exempt
+不产出、downgraded 严重度上限 LOW、无标签区域一律 normal）。管线
+接线后 examples 对差异 49 处全部可解释：document_score
+82.13→83.30、problem_total 180→163（17 个问题组消解）、high 55→35 /
+low 20→50（31 处降级）、图表页分数显著回升（p41 55→70、p42
+58→85）、failed_pages 12→10；豁免集中在页脚页码与图表区
+font_shrink/shifted。实现修正：metrics 剔除计时抖动字段后同配置
+两次运行逐位一致 ✓。静态验收与双包构建全绿。
+
+**问题**：`ElementType` 词表预留 11 类元素但解析器只产出 text/image
+两类，分组后仅 paragraph/heading/image 三种（IGBT 32 页实测：103
+图表与照片 Logo 装饰图在系统眼中无区别）。类型无感知的代价已有
+实例：T29 矢量图表作"背景"参与判定产生 38 条误报、T27 图表标题
+合并使字号对照失真、表格重排逐格暴露在字号/偏移检测下、公式仅靠
+转曲 INFO 豁免兜底、页眉页脚靠 8% 带状豁免窄口子。
+
+**方案**：设计稿 `docs/region-typing-design.md`。三层：① 解析信号
+沉淀（矢量密度/数字密度/短标签比例/数学字体写 `typing_signals`，
+纯 metadata）；② RegionTyping 推断器（规则优先、置信度分档、低置信
+回退 other，输出 `semantic_type`；HEADER/FOOTER 用跨页重复聚类——
+原挂起的页眉页脚方案归并于此）；③ 类型感知消费矩阵（检测器门控/
+匹配权重/T38 验证方法选择，每格独立开关独立 Golden 评估）。边界：
+不做表格结构恢复（契约 §3.2）、不做图表语义解析、首版不用模型。
+
+**验收**：设计获批（与 T38 的契约 §7 增补一并走基线确认）后按
+设计稿 §6 分期执行；阶段 1/2 验收 = examples Golden 逐位一致 +
+三个真实文档类型分布人工审（图表召回抽检 ≥90%、误标≈0）；
+阶段 3 每消费格 = 独立 Golden diff 逐条解释 + 构造用例双向验证。
+
+

@@ -1422,4 +1422,57 @@ font_shrink/shifted。实现修正：metrics 剔除计时抖动字段后同配�
 三个真实文档类型分布人工审（图表召回抽检 ≥90%、误标≈0）；
 阶段 3 每消费格 = 独立 Golden diff 逐条解释 + 构造用例双向验证。
 
+---
+
+## T40 OCR 推理加速评估：46 页图像密集对 38 分钟的根因与方案（候选，待批准）
+
+**问题**：真实任务 `cd0d3dc6b565`（un-china-2024 对，46 页图像密集）
+端到端约 38 分钟，其中 99% 在逐页检测的 OCR 子步骤——
+`RasterOCRDetector` 把每页匹配区域裁切成高分辨率小图逐张送
+PaddleOCR 推理（用于栅格漏译检测），进程单核打满（99.3%），页均
+49~60s。现状：`.env` 为 `PP-OCRv6 + cpu`，PaddleOCR 3.x pipeline
+（server `ocr-paddle` extra），文档方向/矫正三模型已关闭；适配器
+未暴露线程数与 CPU 加速开关。同样文档在 CLI（无 OCR provider）下
+约 1 分钟完成，SyneosHealth 等文本层文档 1.5s——开销只在真实栅格
+候选出现时发生。
+
+**方案**（按 ROI 排序，1+3 组合为第一期）：
+① **Mobile 模型切换**（配置级，半天）：PP-OCR 各版本均有
+server/mobile 双档，下载 mobile 检测+识别模型到 ocr-cache 并经既有
+`DQA_OCR_DETECTION_MODEL_DIR / RECOGNITION_MODEL_DIR` 指向即可，
+不改代码；预计 3~8 倍加速，精度回归是主要风险。
+② **CPU 推理参数面**（半天代码）：适配器暴露 `cpu_threads` 与
+mkldnn/推理加速开关（`DQA_OCR_CPU_THREADS` 等环境变量），当前单核
+打满说明线程配置未生效，多核利用率有 2~4 倍空间。
+③ **裁切级结果缓存**（1 天）：以图片摘要+DPI 为键持久化识别结果
+（沿用 ocr-cache 目录约定），重跑与增量质检免重复推理。
+④ **ONNX Runtime 适配器**（1~2 天，第二期）：新增 provider 实现
+core `OCRProvider` 协议（§12 可关闭适配层语义），rapidocr/paddle2onnx
+路线；解除 paddle 依赖、Apple Silicon 友好，预计在 ① 之上再 2~4 倍。
+⑤ **GPU**：仅适用于 Linux+NVIDIA 部署（paddle-gpu）；本机为
+Apple Silicon，paddle 无 Metal 后端，明确排除本地选项。
+
+**目标**：46 页图像密集对端到端 ≤ 8 分钟（第一期 ①+②，≥4.7 倍）；
+第二期叠加 ④ 后 ≤ 4 分钟。
+
+**第一期基准实测**（2026-09-02，5 张真实裁切图 200dpi，已排除首次
+预热）：A 现状默认档实为 `PP-OCRv6_medium`（非 server 档）稳态约
+0.32s/张；② cpu_threads=8 稳态持平（Paddle 3.x 内部已多线程，收益
+≈0，已作为无害配置合入 `.env`）；① mobile 档（PP-OCRv5_mobile_det
++rec）稳态约 0.13s/张，**约 2.6 倍加速**——但 5 张小样本文本与
+medium 档仅 1/3 完全一致，存在改变 untranslated_raster 检出结论的
+风险，故 mobile 默认不启用，配置入口
+`DQA_OCR_DETECTION/RECOGNITION_MODEL_NAME` 已就绪并写入
+`.env.example`。**启用 mobile 的前置门槛**：30 张裁切精度比对通过
+（设计稿验收条款）。② 结论与预估不符（预估 2~4 倍，实测 ≈0），
+第一期目标修订为：启用 mobile 后 46 页对 38 分钟 → 约 15 分钟
+（2.6 倍），≤8 分钟目标需 ④ ONNX 路线或降低 OCR DPI 再评估。
+
+**验收**：基准双文档（un-china-2024 46 页 + state-of-ai 41 页）端到端
+计时对比（含 OCR 开启的异步任务路径）；精度回归——两文档的全部
+OCR 裁切图在新旧配置下识别文本 diff 人工抽检 ≥30 张、不一致率
+≤5% 且不一致不改变 untranslated_raster 检出结论；OCR 关闭路径
+Golden 逐位一致（不受影响）；新增配置项进 `.env.example` 与
+settings.py 并在 README 记录。
+
 

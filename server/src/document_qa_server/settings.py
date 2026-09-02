@@ -61,6 +61,13 @@ class ServerSettings(BaseSettings):
     ocr_cache_dir: Path | None = None
     ocr_detection_model_dir: Path | None = None
     ocr_recognition_model_dir: Path | None = None
+    # >0 时把推理线程数传给 PaddleOCR：默认单核打满是图像密集文档
+    # OCR 慢的主因之一（T40 评估），多核机器建议设为物理核数。
+    ocr_cpu_threads: int = 0
+    # 经配置直接切换 mobile 档模型（如 PP-OCRv5_mobile_det /
+    # PP-OCRv5_mobile_rec），PaddleOCR 自动下载；None 用版本默认档。
+    ocr_detection_model_name: str | None = None
+    ocr_recognition_model_name: str | None = None
 
 
 def load_settings() -> ServerSettings:

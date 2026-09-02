@@ -27,8 +27,17 @@ class PaddleOCRProvider:
         cache_dir: Path | None = None,
         detection_model_dir: Path | None = None,
         recognition_model_dir: Path | None = None,
+        cpu_threads: int = 0,
+        detection_model_name: str | None = None,
+        recognition_model_name: str | None = None,
     ) -> None:
-        """保存运行配置；模型在第一次候选识别时只初始化一次。"""
+        """保存运行配置；模型在第一次候选识别时只初始化一次。
+
+        cpu_threads > 0 时把推理线程数传给 PaddleOCR（默认单核，
+        T40 评估确认这是图像密集文档 OCR 慢的主因之一）；
+        detection/recognition_model_name 允许经配置直接切换 mobile
+        档模型（如 PP-OCRv5_mobile_det/rec），PaddleOCR 自动下载。
+        """
 
         self.device = device
         self.language = language
@@ -36,6 +45,9 @@ class PaddleOCRProvider:
         self.cache_dir = cache_dir
         self.detection_model_dir = detection_model_dir
         self.recognition_model_dir = recognition_model_dir
+        self.cpu_threads = cpu_threads
+        self.detection_model_name = detection_model_name
+        self.recognition_model_name = recognition_model_name
         self._pipeline: Any | None = None
         self._lock = threading.Lock()
 
@@ -116,6 +128,12 @@ class PaddleOCRProvider:
                 options["text_recognition_model_dir"] = str(
                     self.recognition_model_dir
                 )
+            if self.cpu_threads > 0:
+                options["cpu_threads"] = self.cpu_threads
+            if self.detection_model_name:
+                options["text_detection_model_name"] = self.detection_model_name
+            if self.recognition_model_name:
+                options["text_recognition_model_name"] = self.recognition_model_name
             self._pipeline = PaddleOCR(**options)
             return self._pipeline
 

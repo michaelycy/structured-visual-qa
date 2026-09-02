@@ -25,6 +25,9 @@ def build_ocr_provider(
         or (artifacts_dir or settings.artifacts_dir) / "ocr-cache",
         detection_model_dir=settings.ocr_detection_model_dir,
         recognition_model_dir=settings.ocr_recognition_model_dir,
+        cpu_threads=settings.ocr_cpu_threads,
+        detection_model_name=settings.ocr_detection_model_name,
+        recognition_model_name=settings.ocr_recognition_model_name,
     )
 
 

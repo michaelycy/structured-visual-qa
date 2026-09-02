@@ -1,6 +1,7 @@
 """Structured Visual QA 端到端应用流水线。"""
 
 from collections import Counter
+from collections.abc import Callable
 from pathlib import Path
 from typing import Literal
 
@@ -29,6 +30,11 @@ from document_qa.schemas import (
 from document_qa.scoring import QAScorer
 
 RenderScope = Literal["all", "issues"]
+
+# 进度回调：stage 为阶段标识（parse/group/alignment/match/detect/ocr/render/report），
+# detail 为该阶段的可读进度数据（页数、区域数、当前页序号等）。回调只允许观察，
+# 不允许改变流水线行为；core 不感知回调另一端的传输方式。
+ProgressListener = Callable[[str, dict[str, object]], None]
 
 
 class DocumentQAPipeline:
@@ -83,23 +89,45 @@ class DocumentQAPipeline:
         render_scope: RenderScope = "all",
         source_password: str | None = None,
         target_password: str | None = None,
+        progress: ProgressListener | None = None,
     ) -> QAReport:
         """比较两个 PDF，并返回经过 Schema 校验的完整 QA 报告。
 
         source_password / target_password 用于带打开密码的 PDF，
         只在内存中传递给解析与渲染，绝不写入报告或历史产物。
+        progress 为可选进度回调（阶段标识 + 进度数据），缺省时行为
+        与无进度上报的版本完全一致。
         """
 
-        source = self._group_document(
-            self.parser.parse(source_path, password=source_password)
+        source_doc = self.parser.parse(source_path, password=source_password)
+        self._emit_progress(progress, "parse", {"side": "source", "pages": len(source_doc.pages)})
+        source = self._group_document(source_doc)
+        self._emit_progress(
+            progress,
+            "group",
+            {"side": "source", "regions": sum(len(p.regions) for p in source.pages)},
         )
-        target = self._group_document(
-            self.parser.parse(target_path, password=target_password)
+        target_doc = self.parser.parse(target_path, password=target_password)
+        self._emit_progress(progress, "parse", {"side": "target", "pages": len(target_doc.pages)})
+        target = self._group_document(target_doc)
+        self._emit_progress(
+            progress,
+            "group",
+            {"side": "target", "regions": sum(len(p.regions) for p in target.pages)},
         )
 
         source_pages = {page.page: page for page in source.pages}
         target_pages = {page.page: page for page in target.pages}
         alignment = self.page_aligner.align(source, target)
+        self._emit_progress(
+            progress,
+            "alignment",
+            {
+                "pairs": len(alignment.pairs),
+                "missing_source": len(alignment.missing_source_pages),
+                "extra_target": len(alignment.extra_target_pages),
+            },
+        )
 
         # (报告页码, 源页面, 目标页面)；跨页对齐时源/目标页码可以不同。
         entries: list[tuple[int, Page | None, Page | None]] = []
@@ -124,6 +152,7 @@ class DocumentQAPipeline:
         else:
             self._ocr_run = None
 
+        self._emit_progress(progress, "match", {"pages": len(entries)})
         page_results = [
             self._compare_page(
                 number,
@@ -133,9 +162,13 @@ class DocumentQAPipeline:
                 target_path=target_path,
                 source_password=source_password,
                 target_password=target_password,
+                progress=progress,
+                page_index=index + 1,
+                page_total=len(entries),
             )
-            for number, source_page, target_page in entries
+            for index, (number, source_page, target_page) in enumerate(entries)
         ]
+        self._emit_progress(progress, "report", {"pages": len(page_results)})
         report = self._build_report(source, target, page_results)
 
         if render_dir is not None:
@@ -148,6 +181,7 @@ class DocumentQAPipeline:
                 page_results,
                 source_password=source_password,
                 target_password=target_password,
+                progress=progress,
             )
         return report
 
@@ -162,6 +196,7 @@ class DocumentQAPipeline:
         *,
         source_password: str | None = None,
         target_password: str | None = None,
+        progress: ProgressListener | None = None,
     ) -> None:
         """使用固定子目录隔离源/目标页面，按范围渲染。
 
@@ -185,6 +220,9 @@ class DocumentQAPipeline:
             if include and target_page is not None:
                 target_render_pages.add(target_page.page)
         if source_render_pages:
+            self._emit_progress(
+                progress, "render", {"side": "source", "pages": len(source_render_pages)}
+            )
             self.renderer.render(
                 source_path,
                 render_dir / "source",
@@ -192,12 +230,30 @@ class DocumentQAPipeline:
                 password=source_password,
             )
         if target_render_pages:
+            self._emit_progress(
+                progress, "render", {"side": "target", "pages": len(target_render_pages)}
+            )
             self.renderer.render(
                 target_path,
                 render_dir / "target",
                 target_render_pages,
                 password=target_password,
             )
+
+    @staticmethod
+    def _emit_progress(
+        progress: ProgressListener | None, stage: str, detail: dict[str, object]
+    ) -> None:
+        """发布一条进度事件；回调异常不得中断质检主流程。"""
+
+        if progress is None:
+            return
+        try:
+            progress(stage, detail)
+        except Exception:
+            # 进度上报是纯观察者：监听方故障（磁盘满、反序列化等）只影响
+            # 展示，吞掉异常保证检测结果不受影响。
+            return
 
     def _is_text_vectorized(self, source: Page, target: Page) -> bool:
         """判断目标页文字是否被矢量化（转曲）。
@@ -236,8 +292,15 @@ class DocumentQAPipeline:
         target_path: Path | None = None,
         source_password: str | None = None,
         target_password: str | None = None,
+        progress: ProgressListener | None = None,
+        page_index: int = 0,
+        page_total: int = 0,
     ) -> PageQAResult:
-        """处理正常页面、源页面缺失和目标额外页面三种情况。"""
+        """处理正常页面、源页面缺失和目标额外页面三种情况。
+
+        page_index/page_total 仅用于进度上报（1 起始）；进度回调缺失时
+        它们不影响任何检测行为。
+        """
 
         if source is None and target is not None:
             issue = Issue(
@@ -337,6 +400,13 @@ class DocumentQAPipeline:
                         source_match_page, target_match_page
                     )
                 ).thresholds
+                # OCR 推理是大文档最慢的一段，先于检测上报页级进度，
+                # 让"还要等多久"在长耗时阶段仍然可预期。
+                self._emit_progress(
+                    progress,
+                    "ocr",
+                    {"page": page_number, "index": page_index, "total": page_total},
+                )
                 ocr_result = self.raster_ocr_detector.detect(
                     source_match_page,
                     target_match_page,
@@ -370,6 +440,11 @@ class DocumentQAPipeline:
                         self._ocr_run["status"] = "error"
                         self._ocr_run["error"] = ocr_result.error
         score, status = self.scorer.score(issues)
+        self._emit_progress(
+            progress,
+            "detect",
+            {"page": page_number, "index": page_index, "total": page_total},
+        )
         return PageQAResult(
             page=page_number,
             score=score,

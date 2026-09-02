@@ -77,8 +77,20 @@ function pageImage(
   return match ? `/api/pages/${match}` : null
 }
 
-/** 序号角标：图上红框左上角与 Issue 列表行首共用，保证两侧对应。 */
-export function IssueBadge({ index, active }: { index: number; active?: boolean }) {
+/** 序号角标：图上红框左上角与 Issue 列表行首共用，保证两侧对应。
+ * tone="reference" 用于源图侧的原文参照框（蓝色），与译文侧的问题
+ * 红色角标区分——原文是参照基准，不是缺陷位置。
+ */
+export function IssueBadge({
+  index,
+  active,
+  tone = "issue",
+}: {
+  index: number
+  active?: boolean
+  tone?: "issue" | "reference"
+}) {
+  const accent = tone === "reference" ? PALETTE.info : PALETTE.critical
   return (
     <span
       style={{
@@ -88,9 +100,9 @@ export function IssueBadge({ index, active }: { index: number; active?: boolean 
         width: 18,
         height: 18,
         borderRadius: 9,
-        background: active ? PALETTE.critical : PALETTE.surface,
-        color: active ? PALETTE.surface : PALETTE.critical,
-        border: `1.5px solid ${PALETTE.critical}`,
+        background: active ? accent : PALETTE.surface,
+        color: active ? PALETTE.surface : accent,
+        border: `1.5px solid ${accent}`,
         fontSize: 11,
         fontWeight: 600,
         lineHeight: 1,
@@ -145,52 +157,41 @@ function PageCompare({
   // 源侧对应框：优先取配对原文区域坐标（metrics.source_bbox）；缺失类
   // 问题没有译文区域，其 bbox 本身就是源侧坐标。源图与目标图共用同一
   // 套序号角标，审阅时两侧同号即为同一问题的原文/译文位置。
-  const sourceBboxGroups = useMemo(() => {
-    const withSourceBox = issues.flatMap((issue) => {
-      const fromMetrics = (issue.metrics ?? {}).source_bbox as
-        | Issue["bbox"]
-        | undefined
-      const box =
-        fromMetrics ??
-        (MISSING_ISSUE_TYPES.has(issue.type) ? issue.bbox : undefined)
-      return box ? [{ ...issue, bbox: box }] : []
-    })
-    return groupIssuesByBbox(withSourceBox, issueNumberById)
-  }, [issueNumberById, issues])
-  // M→1 合并块的主框之外框：covered_source_bboxes 中与主框不重合的
-  // 其余源区域同样画到源图（浅虚线、无角标），明确"译文框是多个源块
-  // 的合并"而不是 1↔1 对应，避免审阅者以为两侧框错位是画框错误。
-  const extraSourceBoxes = useMemo(() => {
-    const entries: { key: string; box: Issue["bbox"]; issueIds: string[] }[] = []
-    for (const issue of issues) {
-      const metrics = issue.metrics ?? {}
-      const covered = metrics.covered_source_bboxes
-      if (!Array.isArray(covered) || covered.length < 2) continue
-      const primary = metrics.source_bbox as Issue["bbox"] | undefined
+  // 方案 A+B：源图标注为"参照语义"且默认隐藏——点击问题行后仅显示
+  // 该问题的原文参照区域（蓝虚线框）。原文是参照基准，不使用译文侧
+  // 的红色问题语义，避免"原文也有问题/两侧应重合"的误读；M→1 合并
+  // 块的其余被覆盖源区域以浅蓝虚线一并显示。
+  const activeSourceMarks = useMemo(() => {
+    if (!activeIssueId) return null
+    const activeIssue = issues.find((issue) => issue.id === activeIssueId)
+    if (!activeIssue) return null
+    const metrics = activeIssue.metrics ?? {}
+    const primaries: NonNullable<Issue["bbox"]>[] = []
+    const extras: NonNullable<Issue["bbox"]>[] = []
+    const primary =
+      (metrics.source_bbox as Issue["bbox"] | undefined) ??
+      (MISSING_ISSUE_TYPES.has(activeIssue.type) ? activeIssue.bbox : undefined)
+    if (primary) primaries.push(primary)
+    const covered = metrics.covered_source_bboxes
+    if (Array.isArray(covered)) {
       for (const box of covered as Issue["bbox"][]) {
         if (!box) continue
-        if (
-          primary &&
-          Math.round(primary.x) === Math.round(box.x) &&
-          Math.round(primary.y) === Math.round(box.y)
-        ) {
-          continue
-        }
-        const key = [box.x, box.y, box.width, box.height]
-          .map((value) => Math.round(value))
-          .join(",")
-        const existing = entries.find((entry) => entry.key === key)
-        if (existing) {
-          if (!existing.issueIds.includes(issue.id)) {
-            existing.issueIds.push(issue.id)
-          }
-        } else {
-          entries.push({ key, box, issueIds: [issue.id] })
-        }
+        const duplicated =
+          primaries.some(
+            (existing) =>
+              Math.round(existing.x) === Math.round(box.x) &&
+              Math.round(existing.y) === Math.round(box.y),
+          ) ||
+          extras.some(
+            (existing) =>
+              Math.round(existing.x) === Math.round(box.x) &&
+              Math.round(existing.y) === Math.round(box.y),
+          )
+        if (!duplicated) extras.push(box)
       }
     }
-    return entries
-  }, [issues])
+    return { primaries, extras }
+  }, [activeIssueId, issues])
 
   useEffect(() => () => {
     if (scrollFrameRef.current !== null) cancelAnimationFrame(scrollFrameRef.current)
@@ -278,9 +279,11 @@ function PageCompare({
               <span><i />源文档 · 原文</span>
               <span>
                 第 {page} 页
-                {sourceBboxGroups.length > 0 || extraSourceBoxes.length > 0
-                  ? " · 虚线框为问题的原文侧定位"
-                  : ""}
+                {activeSourceMarks && activeSourceMarks.primaries.length + activeSourceMarks.extras.length > 0
+                  ? " · 蓝虚线框为所选问题的原文参照区域"
+                  : !activeIssueId
+                    ? " · 点击问题行显示原文参照区域"
+                    : ""}
               </span>
             </div>
             <div
@@ -308,66 +311,45 @@ function PageCompare({
                   style={{ width: `${zoom * 100}%`, maxWidth: "none" }}
                 />
                 {pageWidth > 0 &&
-                  extraSourceBoxes.map((entry) => {
-                    const groupActive =
-                      activeIssueId !== null &&
-                      entry.issueIds.includes(activeIssueId)
-                    return (
-                      <div
-                        key={`source-extra-${entry.key}`}
-                        style={{
-                          position: "absolute",
-                          border: groupActive
-                            ? `3px dashed ${PALETTE.critical}`
-                            : `1px dashed ${PALETTE.critical}`,
-                          background: groupActive
-                            ? "rgba(255,82,82,0.12)"
-                            : "rgba(255,82,82,0.04)",
-                          left: `${(entry.box!.x / pageWidth) * 100}%`,
-                          top: `${(entry.box!.y / pageHeight) * 100}%`,
-                          width: `${(entry.box!.width / pageWidth) * 100}%`,
-                          height: `${(entry.box!.height / pageHeight) * 100}%`,
-                          pointerEvents: "none",
-                        }}
-                      />
-                    )
-                  })}
+                  activeSourceMarks?.extras.map((box, idx) => (
+                    <div
+                      key={`source-extra-${idx}`}
+                      style={{
+                        position: "absolute",
+                        border: `1.5px dashed ${PALETTE.info}`,
+                        background: "rgba(31,111,235,0.05)",
+                        left: `${(box.x / pageWidth) * 100}%`,
+                        top: `${(box.y / pageHeight) * 100}%`,
+                        width: `${(box.width / pageWidth) * 100}%`,
+                        height: `${(box.height / pageHeight) * 100}%`,
+                        pointerEvents: "none",
+                      }}
+                    />
+                  ))}
                 {pageWidth > 0 &&
-                  sourceBboxGroups.map((group) => {
-                    const first = group[0].issue
-                    const groupActive = group.some(
-                      ({ issue }) => issue.id === activeIssueId,
-                    )
-                    return (
-                      <div
-                        key={`source-${first.id}`}
-                        style={{
-                          position: "absolute",
-                          border: groupActive
-                            ? `3px solid ${PALETTE.critical}`
-                            : `2px dashed ${PALETTE.critical}`,
-                          background: groupActive
-                            ? "rgba(255,82,82,0.14)"
-                            : "rgba(255,82,82,0.06)",
-                          left: `${(first.bbox!.x / pageWidth) * 100}%`,
-                          top: `${(first.bbox!.y / pageHeight) * 100}%`,
-                          width: `${(first.bbox!.width / pageWidth) * 100}%`,
-                          height: `${(first.bbox!.height / pageHeight) * 100}%`,
-                          pointerEvents: "none",
-                        }}
-                      >
-                        <span className="page-compare__badges">
-                          {group.map(({ issue, index }) => (
-                            <IssueBadge
-                              key={issue.id}
-                              index={index}
-                              active={issue.id === activeIssueId}
-                            />
-                          ))}
-                        </span>
-                      </div>
-                    )
-                  })}
+                  activeSourceMarks?.primaries.map((box, idx) => (
+                    <div
+                      key={`source-primary-${idx}`}
+                      style={{
+                        position: "absolute",
+                        border: `2px dashed ${PALETTE.info}`,
+                        background: "rgba(31,111,235,0.08)",
+                        left: `${(box.x / pageWidth) * 100}%`,
+                        top: `${(box.y / pageHeight) * 100}%`,
+                        width: `${(box.width / pageWidth) * 100}%`,
+                        height: `${(box.height / pageHeight) * 100}%`,
+                        pointerEvents: "none",
+                      }}
+                    >
+                      <span className="page-compare__badges">
+                        <IssueBadge
+                          index={issueNumberById.get(activeIssueId ?? "") ?? 0}
+                          active
+                          tone="reference"
+                        />
+                      </span>
+                    </div>
+                  ))}
               </div>
             </div>
           </div>

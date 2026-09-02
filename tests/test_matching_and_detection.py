@@ -486,5 +486,196 @@ class MatchingAndDetectionTests(unittest.TestCase):
         self.assertEqual(status, QAStatus.REVIEW)
 
 
+class FragmentationDetectionTests(unittest.TestCase):
+    """验证碎片检测对拉丁缩写碎片与 CJK 完整短词的区分。
+
+    回归背景：真实记录 20260901-063516 第 1 页，图表图例"法务/
+    欧洲/日本"等两字横排完整词被误报为碎片——CJK 字符 isalpha
+    为 True，"字母数 ≤ 3"判据天然命中中文短词。
+    """
+
+    @staticmethod
+    def detect_for(source_text: str, target_regions: list[Region]):
+        """构造同页源/目标并返回碎片 Issue 列表。"""
+
+        source = Page(
+            document_id="source",
+            page=1,
+            width=200,
+            height=400,
+            regions=[
+                Region(
+                    id="source-label",
+                    page=1,
+                    type=ElementType.PARAGRAPH,
+                    bbox=BoundingBox(x=10, y=10, width=100, height=20),
+                    content=Content(text=source_text),
+                )
+            ],
+        )
+        target = Page(
+            document_id="target",
+            page=1,
+            width=200,
+            height=400,
+            regions=target_regions,
+        )
+        result = RegionMatcher().match_page(source, target)
+        issues = RuleDetector().detect(source, target, result)
+        return [i for i in issues if i.type == IssueType.TEXT_FRAGMENTED]
+
+    def test_latin_letter_stack_is_flagged(self) -> None:
+        """拉丁缩写被逐字母竖排（P\\nK）必须报告。"""
+
+        issues = self.detect_for(
+            "PK",
+            [
+                Region(
+                    id="target-frag",
+                    page=1,
+                    type=ElementType.PARAGRAPH,
+                    bbox=BoundingBox(x=10, y=10, width=12, height=26),
+                    content=Content(text="P\nK"),
+                )
+            ],
+        )
+        self.assertEqual(len(issues), 1)
+        self.assertEqual(issues[0].metrics["source_text"], "PK")
+
+    def test_cjk_horizontal_word_is_not_flagged(self) -> None:
+        """横排单行的两字中文词（图例"法务"）是完整词，不得报告。"""
+
+        issues = self.detect_for(
+            "Legal",
+            [
+                Region(
+                    id="target-cjk",
+                    page=1,
+                    type=ElementType.PARAGRAPH,
+                    bbox=BoundingBox(x=10, y=10, width=16, height=11.6),
+                    content=Content(text="法务"),
+                )
+            ],
+        )
+        self.assertEqual(issues, [])
+
+    def test_cjk_vertical_stack_is_flagged(self) -> None:
+        """CJK 文本带换行竖排（"法\\n务"）仍是碎片，必须报告。"""
+
+        issues = self.detect_for(
+            "Legal",
+            [
+                Region(
+                    id="target-cjk-vert",
+                    page=1,
+                    type=ElementType.PARAGRAPH,
+                    bbox=BoundingBox(x=10, y=10, width=12, height=26),
+                    content=Content(text="法\n务"),
+                )
+            ],
+        )
+        self.assertEqual(len(issues), 1)
+
+    def test_single_cjk_char_region_still_flagged(self) -> None:
+        """单字 CJK 窄 Region（逐字拆散证据）保持报告，不被豁免。"""
+
+        issues = self.detect_for(
+            "Legal",
+            [
+                Region(
+                    id="target-cjk-char",
+                    page=1,
+                    type=ElementType.PARAGRAPH,
+                    bbox=BoundingBox(x=10, y=10, width=12, height=11.6),
+                    content=Content(text="法"),
+                )
+            ],
+        )
+        self.assertEqual(len(issues), 1)
+
+    def test_kept_abbreviation_exempt_by_source_page_tokens(self) -> None:
+        """译文保留的缩写/品牌名（NDA、A轮的 A）按源页词形豁免。
+
+        回归背景：真实记录 20260901-063516 后续复核，图例 M→1 配对
+        错位（"A轮"配到"Seed"），豁免必须取源页面级词形证据。
+        """
+
+        source = Page(
+            document_id="source",
+            page=1,
+            width=200,
+            height=400,
+            regions=[
+                Region(
+                    id="source-seed",
+                    page=1,
+                    type=ElementType.PARAGRAPH,
+                    bbox=BoundingBox(x=10, y=10, width=60, height=14),
+                    content=Content(text="Seed"),
+                ),
+                Region(
+                    id="source-series-a",
+                    page=1,
+                    type=ElementType.PARAGRAPH,
+                    bbox=BoundingBox(x=10, y=200, width=80, height=14),
+                    content=Content(text="Series A"),
+                ),
+                Region(
+                    id="source-nda",
+                    page=1,
+                    type=ElementType.PARAGRAPH,
+                    bbox=BoundingBox(x=10, y=300, width=50, height=14),
+                    content=Content(text="NDA"),
+                ),
+            ],
+        )
+        target = Page(
+            document_id="target",
+            page=1,
+            width=200,
+            height=400,
+            regions=[
+                Region(
+                    id="target-round-a",
+                    page=1,
+                    type=ElementType.PARAGRAPH,
+                    bbox=BoundingBox(x=10, y=10, width=16, height=11.6),
+                    content=Content(text="A轮"),
+                ),
+                Region(
+                    id="target-nda",
+                    page=1,
+                    type=ElementType.PARAGRAPH,
+                    bbox=BoundingBox(x=10, y=40, width=18, height=11.6),
+                    content=Content(text="NDA"),
+                ),
+            ],
+        )
+        result = RegionMatcher().match_page(source, target)
+        issues = [
+            i
+            for i in RuleDetector().detect(source, target, result)
+            if i.type == IssueType.TEXT_FRAGMENTED
+        ]
+        self.assertEqual(issues, [])
+
+    def test_fragment_piece_without_source_word_still_flagged(self) -> None:
+        """片断（"SAE"拆出的"SA"）不是源页完整词，仍按碎片报告。"""
+
+        issues = self.detect_for(
+            "SAE",
+            [
+                Region(
+                    id="target-piece",
+                    page=1,
+                    type=ElementType.PARAGRAPH,
+                    bbox=BoundingBox(x=10, y=10, width=16, height=11.6),
+                    content=Content(text="SA"),
+                )
+            ],
+        )
+        self.assertEqual(len(issues), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

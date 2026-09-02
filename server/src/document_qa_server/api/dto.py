@@ -44,6 +44,16 @@ class ProfileSaveRequest(BaseModel):
     profile: dict
 
 
+class HistoryBatchDeleteRequest(BaseModel):
+    """批量删除对比记录的输入：待删除记录 ID 列表。
+
+    单次上限 200 条与列表分页规模匹配，防止误传超集拖长事务；
+    不存在的 ID 不报错，在响应的 missing 中回告前端。
+    """
+
+    record_ids: list[str] = Field(min_length=1, max_length=200)
+
+
 def review_task_id_for_report(report: dict) -> str:
     """从报告文档对身份派生复核任务 ID。
 

@@ -200,6 +200,37 @@ class NumberMismatchTests(unittest.TestCase):
         )
         self.assertNotIn(IssueType.NUMBER_MISMATCH, [i.type for i in issues])
 
+    def test_abbreviated_money_matches_chinese_scaled_amount(self) -> None:
+        """英文财务缩写金额（$100M/$4.99B）与中文亿级译文应守恒。
+
+        回归背景：真实记录 20260901-055449 第 1 页，图表分档
+        "$100M - $499M" 被译为"1 亿 - 4.99 亿美元"，缩写 M/B 不被
+        识别导致整页误报数字缺失+多余（21 处差异，severity high）。
+        """
+
+        _, _, issues = detect_for(
+            [
+                "Less than $100M and $1B - $4.99B and greater than $15B.",
+                "The report is our 15th survey, presented in January at the showcase.",
+            ],
+            [
+                "低于 1 亿美元和 10 亿 - 49.9 亿美元和超过 150 亿美元。",
+                "本报告是第15份调查，于1月在展示会现场发布。",
+            ],
+        )
+        self.assertNotIn(IssueType.NUMBER_MISMATCH, [i.type for i in issues])
+
+    def test_number_mismatch_metrics_mark_page_scope(self) -> None:
+        """页面级守恒 issue 应标注 comparison_scope，锚点文本不是译文对。"""
+
+        _, _, issues = detect_for(
+            ["2024 年报告显示增长 15%。"], ["2024 年报告显示增长。"]
+        )
+        mismatch = next(
+            i for i in issues if i.type == IssueType.NUMBER_MISMATCH
+        )
+        self.assertEqual(mismatch.metrics["comparison_scope"], "page")
+
 
 class UntranslatedTextTests(unittest.TestCase):
     """验证漏译检测的判定与豁免规则。"""
@@ -250,6 +281,46 @@ class UntranslatedTextTests(unittest.TestCase):
             ["这是中文原文。"], ["这是中文目标。"]
         )
         self.assertNotIn(
+            IssueType.UNTRANSLATED_TEXT, [i.type for i in issues]
+        )
+
+    def test_source_citation_with_kept_proper_noun_not_flagged(self) -> None:
+        """来源行保留机构名（Syneos Health Consulting）不算漏译。
+
+        回归背景：真实记录 20260901-065834 第 1/5/7 页，"来源：Syneos
+        Health Consulting, Inc. 2025交易撮合者意向调查。N = 170。"是
+        完整译文，机构名与统计记法按惯例保留拉丁原文，拉丁字母占比
+        0.72 恰过 0.7 阈值被误报；占比应只统计剔除专名后的正文词。
+        """
+
+        _, _, issues = detect_for(
+            ["Source: Syneos Health Consulting, Inc. Dealmakers' Intentions 2025. N = 170."],
+            ["来源：Syneos Health Consulting, Inc. 2025交易撮合者意向调查。N = 170。"],
+        )
+        self.assertNotIn(
+            IssueType.UNTRANSLATED_TEXT, [i.type for i in issues]
+        )
+
+    def test_untranslated_english_with_proper_nouns_still_flagged(self) -> None:
+        """含专名的整段英文残留仍是漏译，专名豁免不得开漏洞。
+
+        源为英文、目标页中文为主但该区域原样保留整段英文：剔除专名
+        （Syneos Health Consulting）后正文仍是全英文，占比接近 1。
+        """
+
+        _, _, issues = detect_for(
+            [
+                "The survey explores what executives expect in terms of deals.",
+                "Syneos Health Consulting surveyed 170 industry executives "
+                "concerning licensing and acquisition deals.",
+            ],
+            [
+                "本调查探讨了高管对交易的预期。",
+                "Syneos Health Consulting surveyed 170 industry executives "
+                "concerning licensing and acquisition deals.",
+            ],
+        )
+        self.assertIn(
             IssueType.UNTRANSLATED_TEXT, [i.type for i in issues]
         )
 

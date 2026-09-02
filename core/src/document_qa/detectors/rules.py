@@ -1,5 +1,6 @@
 """MVP 使用的布局、缺失和字体规则检测。"""
 
+import re
 from typing import Any
 
 from document_qa.detectors.alignment import (
@@ -18,7 +19,11 @@ from document_qa.profiles import (
     RuleProfile,
     default_rule_profile,
 )
-from document_qa.script_detection import resolve_language
+from document_qa.script_detection import (
+    dominant_script_of_text,
+    resolve_language,
+    text_advance_units,
+)
 from document_qa.style_stats import weighted_median_font_size
 from document_qa.text_visibility import has_visible_text
 from document_qa.schemas import (
@@ -36,11 +41,19 @@ from document_qa.schemas import (
     TEXT_TYPES,
 )
 
+# 拉丁词形 token：供碎片检测比对"译文保留的缩写/品牌名"是否为
+# 源页面上的完整词（NDA、Series A 的 A、Phase II 的 II）。
+_LATIN_TOKEN_PATTERN = re.compile(r"[A-Za-z]+")
+
 
 class RuleDetector:
     """把匹配结果和目标页面转换为统一 Issue 列表。"""
 
     _TEXT_TYPES = TEXT_TYPES
+    # 短词属正常形态的脚本：CJK/假名/谚文一两个字符即可成词
+    # （"法务""欧洲"），碎片检测的"字母数 ≤ 3"判据只对拉丁式
+    # 长词拆散场景有意义。
+    _SHORT_WORD_SCRIPTS = {"cjk", "kana", "hangul"}
 
     def __init__(self, profile: RuleProfile | None = None) -> None:
         """初始化带版本的检测器开关和阈值。"""
@@ -540,6 +553,9 @@ class RuleDetector:
             expected_text_width_change = self._is_expected_text_width_change(
                 source_region, target_region, diff
             )
+            expected_text_height_change = self._is_expected_text_height_change(
+                source_region, target_region, diff
+            )
             expected_text_reflow = self._is_expected_text_reflow(
                 source_region, target_region, diff
             )
@@ -553,6 +569,7 @@ class RuleDetector:
                 and diff.target_region_id
                 not in alignment_result.suppressed_resize_target_ids
                 and not expected_text_width_change
+                and not expected_text_height_change
                 and not expected_text_reflow
                 and not expected_translation_expansion
                 and resize > thresholds.region_resize_ratio
@@ -824,6 +841,72 @@ class RuleDetector:
         # 只豁免宽度驱动的变化；高度剧变仍由 Region resize 规则报告。
         return abs(diff.width_change_ratio) > abs(diff.height_change_ratio)
 
+    def _is_expected_text_height_change(
+        self, source: Region, target: Region, diff: StructuredDiff
+    ) -> bool:
+        """识别竖排短标签因跨语言字符密度造成的正常墨迹高度变化。
+
+        竖排/旋转 90° 的文本（图表轴标签等）沿书写轴的 BBox 高度近似
+        等于"字符数 × 单字 advance"，而 CJK（约 1em）与拉丁（约 0.5em）
+        密度相差一倍，译文字数变化必然带来高度等比伸缩——这与横排短标
+        签的宽度变化同理，若不豁免会把高度轴误判成段落合并/拆散（真实
+        记录 20260901-065834 中 "Total Number of Deals"→"交易总数"
+        高度 -63%）。豁免条件全部收紧到"变化可被密度解释"：双方都是
+        竖排单行短标签、横轴（行框）与字号稳定，且实测高度变化与按
+        全角 1em/半角 0.5em 估算的文本长度变化一致。竖排碎片化破坏
+        （字符被逐字堆叠）会显著偏离密度预期，仍由 resize/fragmented
+        规则捕获，不会因本豁免漏报。
+        """
+
+        if source.type not in self._TEXT_TYPES or target.type not in self._TEXT_TYPES:
+            return False
+        source_text = source.content.text if source.content else None
+        target_text = target.content.text if target.content else None
+        if not source_text or not target_text:
+            return False
+        # 只处理单行文本：多行竖排的行数增减不属于墨迹长度伸缩，
+        # 行数变化（如图例类别丢失）必须继续由 resize 规则报告。
+        if "\n" in source_text or "\n" in target_text:
+            return False
+        # 竖排形态门控：墨迹轴为高度，BBox 呈窄高形；任一侧不是窄高形
+        # 即书写方向不一致，交回原有 resize 判定。
+        if (
+            source.bbox.width >= source.bbox.height
+            or target.bbox.width >= target.bbox.height
+        ):
+            return False
+        thresholds = self.profile.detectors.thresholds
+        source_chars = len("".join(source_text.split()))
+        target_chars = len("".join(target_text.split()))
+        if max(source_chars, target_chars) > thresholds.text_label_max_chars:
+            return False
+        font_change = diff.font_size_change_ratio
+        if (
+            font_change is not None
+            and abs(font_change) > thresholds.text_resize_font_tolerance_ratio
+        ):
+            return False
+        # 横轴（行框）必须稳定：竖排文本的宽度只由行高决定，与译文字数
+        # 无关；宽度剧变说明行框或字号本身变了，不在本豁免范围内。
+        if (
+            abs(diff.width_change_ratio)
+            > thresholds.text_resize_width_tolerance_ratio
+        ):
+            return False
+        source_units = text_advance_units(source_text)
+        target_units = text_advance_units(target_text)
+        if source_units <= 0 or target_units <= 0:
+            return False
+        expected_ratio = target_units / source_units
+        observed_ratio = 1 + diff.height_change_ratio
+        # 对称相对偏差：分母取两者较大值，避免期望比趋零时偏差爆炸；
+        # 正常适配噪声（字距、行框差异）远小于该容差，竖排碎片化堆叠
+        # 等破坏的偏差明显更大，可被干净分离。
+        deviation = abs(observed_ratio - expected_ratio) / max(
+            expected_ratio, observed_ratio
+        )
+        return deviation <= thresholds.text_resize_length_tolerance_ratio
+
     def _is_expected_text_reflow(
         self, source: Region, target: Region, diff: StructuredDiff
     ) -> bool:
@@ -875,13 +958,27 @@ class RuleDetector:
         典型场景：翻译后缩写（PK、SAE、ICF）在窄列中放不下，被
         逐字母竖排（"P\\nK"）或拆成多个窄 Region（"SA" + "E"）。
         判据：文本 Region 的宽度与字母数同时低于阈值——正常词语的
-        Region 不会既窄又只有两三个字母。Issue 附带源区域原文，
-        供界面做"原文 → 译文"对照。
+        Region 不会既窄又只有两三个字母。CJK/假名/谚文的横向单行
+        两三字短词（"法务""欧洲"）是完整词形，不构成碎片证据；译文
+        按惯例保留的缩写与品牌名（NDA、Series A→A轮、Phase II→II期）
+        经源页面词形比对为完整词，同样豁免。单字窄 Region（逐字拆散
+        证据）、带换行的竖排与源页找不到完整词形的片断（"SAE"拆成
+        "SA"+"E"）仍参与判定。Issue 附带源区域原文，供界面做
+        "原文 → 译文"对照。
         """
 
         thresholds = (settings or self.profile.detectors).thresholds
         suppressed_target_ids = suppressed_target_ids or set()
         source_regions = {region.id: region for region in source.regions}
+        # 源页面级拉丁词形集合：翻译保留的缩写/品牌名应能在源页找到
+        # 同一完整词。取页面级而非配对区域级，因为图例列的 M→1 配对
+        # 可能错位（"A轮"配到"Seed"），词形证据仍应成立。
+        source_tokens = {
+            token.casefold()
+            for region in source.regions
+            if region.content and region.content.text
+            for token in _LATIN_TOKEN_PATTERN.findall(region.content.text)
+        }
         # 目标区域 → 源区域映射：碎片化目标区域匹配到的源区域文本即原文。
         source_by_target = {
             match.target_region_id: source_regions.get(match.source_region_id)
@@ -906,6 +1003,33 @@ class RuleDetector:
                 region.bbox.width <= thresholds.fragment_max_width
                 and len(letters) <= thresholds.fragment_max_letters
             ):
+                # CJK 短词不存在"逐字母碎片"形态：两三字即可成词，
+                # 横向单行的窄 Region（图表图例"法务/欧洲"，真实记录
+                # 20260901-063516 第 1 页 5 条误报的根因）是完整词。
+                # 豁免要求至少 2 个字母：单字 Region（"法""务"各自成
+                # Region 的竖排拆散证据）仍按窄 Region 命中；带换行的
+                # 竖排（"法\n务"）与拉丁缩写碎片（PK、SAE）判据不变。
+                if (
+                    len(letters) >= 2
+                    and dominant_script_of_text(text) in self._SHORT_WORD_SCRIPTS
+                    and "\n" not in text.strip()
+                ):
+                    continue
+                # 译文保留的缩写/品牌名豁免：横向单行且目标中的全部
+                # 拉丁 token 都能在源页面找到同一完整词形（"NDA"、
+                # "A轮"的 A、"II期"的 II），说明是按惯例原样保留而非
+                # 拆散片断；片断（"SAE"→"SA"）在源页没有完整词形，
+                # 仍按碎片报告。
+                latin_tokens = _LATIN_TOKEN_PATTERN.findall(text)
+                if (
+                    latin_tokens
+                    and "\n" not in text.strip()
+                    and all(
+                        token.casefold() in source_tokens
+                        for token in latin_tokens
+                    )
+                ):
+                    continue
                 source_region = source_by_target.get(region.id)
                 source_text = (
                     source_region.content.text

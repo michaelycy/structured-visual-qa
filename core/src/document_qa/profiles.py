@@ -333,6 +333,12 @@ class DetectorThresholds(SchemaModel):
     # 单纯宽度缩短当作 Region 尺寸剧变。
     text_label_max_chars: int = Field(default=30, ge=1, le=200)
     text_resize_height_tolerance_ratio: float = Field(default=0.2, ge=0, le=1)
+    # 竖排（旋转 90°）短标签的墨迹轴是高度：译文沿轴长度随跨语言字符
+    # 密度自然伸缩，与横排标签的宽度变化同理。width 字段约束竖排标签
+    # 的横轴（行框）稳定，length 字段约束实测高度变化与"全角 1em/半角
+    # 0.5em 估算的文本长度变化"的最大偏差。
+    text_resize_width_tolerance_ratio: float = Field(default=0.2, ge=0, le=1)
+    text_resize_length_tolerance_ratio: float = Field(default=0.25, ge=0, le=1)
     text_resize_font_tolerance_ratio: float = Field(default=0.1, ge=0, le=1)
     # 同一文本条目在翻译后自然增加一行时，按每行高度而非整体 BBox 高度
     # 判断尺寸是否稳定，避免正常换行被误判为段落合并。
@@ -472,9 +478,12 @@ class BackgroundSettings(SchemaModel):
     纯解析参数，因此集中在 RuleProfile 并随报告快照可复现（§12）。
     """
 
-    # 参与深色块判定的填充矩形最小面积比例：过小的装饰块不影响
-    # 文字可见性判断。
-    dark_box_min_area_ratio: float = Field(default=0.1, ge=0, le=1)
+    # 参与深色块判定的填充矩形最小面积比例。过小的块（发丝级线条、
+    # 页码色点）过滤掉即可；有意义的背衬色块（饼图扇形、强调色条）
+    # 面积多在数百 pt² 量级，远小于旧默认 0.1（A4 上约 4.8 万 pt²）——
+    # 旧值会把饼图扇形全部过滤掉，导致彩底白字被误判为隐形文字
+    # （真实记录 20260831-104238 第 1 页 12 条误报的根因）。
+    dark_box_min_area_ratio: float = Field(default=0.0005, ge=0, le=1)
     # 填充色 RGB 通道最大值低于该值（0-1 刻度）即视为深色背景块；
     # 与 invisible_color_threshold（235/255 ≈ 0.922）保持同一白度语义。
     dark_fill_max_channel: float = Field(default=0.92, ge=0, le=1)

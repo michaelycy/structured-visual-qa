@@ -19,6 +19,7 @@ export const queryKeys = {
   history: ["history"] as const,
   historyItem: (recordId: string) => ["history", recordId] as const,
   samples: ["samples"] as const,
+  tasks: ["tasks"] as const,
   task: (taskId: string) => ["tasks", taskId] as const,
   review: (taskId: string) => ["reviews", taskId] as const,
 }
@@ -54,6 +55,7 @@ export const api = {
   glossaryDelete: (filename: string) =>
     mutate(["glossaries", "delete", filename], () => documentQaService.glossaryDelete(filename), [queryKeys.glossaries]),
   task: (taskId: string) => query(queryKeys.task(taskId), () => documentQaService.task(taskId)),
+  taskList: () => query(queryKeys.tasks, () => documentQaService.taskList()),
   exportReport: (recordId: string, format: "xlsx" | "html") =>
     mutate(["reports", "export", recordId, format], () => documentQaService.exportReport(recordId, format)),
   verify: (...args: Parameters<typeof documentQaService.verify>) =>
@@ -93,6 +95,14 @@ export const api = {
   historyList: () => query(queryKeys.history, documentQaService.historyList),
   historyItem: (recordId: string) =>
     query(queryKeys.historyItem(recordId), () => documentQaService.historyItem(recordId)),
+  historyDelete: (recordId: string) =>
+    mutate(["history", "delete", recordId], () => documentQaService.historyDelete(recordId), [
+      queryKeys.history,
+    ]),
+  historyDeleteBatch: (recordIds: string[]) =>
+    mutate(["history", "delete-batch"], () => documentQaService.historyDeleteBatch(recordIds), [
+      queryKeys.history,
+    ]),
   sampleList: (includeArchived = false) =>
     query([...queryKeys.samples, includeArchived], () => documentQaService.sampleList(includeArchived)),
   sampleCreate: (...args: Parameters<typeof documentQaService.sampleCreate>) =>

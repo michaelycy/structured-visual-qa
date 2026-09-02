@@ -1,10 +1,13 @@
-"""对比记录路由：历史列表与单条读取。"""
+"""对比记录路由：历史列表、单条读取与删除。"""
 
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Request, Response
 
-from document_qa_server.api.dto import attach_review_task_id
+from document_qa_server.api.dto import (
+    HistoryBatchDeleteRequest,
+    attach_review_task_id,
+)
 from document_qa_server.services import CompareHistoryService, ImageEvidenceService
 
 router = APIRouter(prefix="/api/history", tags=["history"])
@@ -59,6 +62,24 @@ def get_history(record_id: str, http: Request) -> dict:
     # 报告负载注入服务端派生的复核任务 ID，前端不再自行拼接。
     payload["report"] = attach_review_task_id(payload["report"])
     return payload
+
+
+@router.delete("/item/{record_id}")
+def delete_history(record_id: str, http: Request) -> dict:
+    """删除单条记录及其衍生渲染文件；记录不存在时返回 404。"""
+
+    result = _service(http).delete_many([record_id])
+    if not result["deleted"]:
+        raise HTTPException(status_code=404, detail=f"记录不存在或已删除: {record_id}")
+    return {"deleted": result["deleted"]}
+
+
+@router.post("/delete-batch")
+def delete_history_batch(payload: HistoryBatchDeleteRequest, http: Request) -> dict:
+    """批量删除记录；已删与不存在（含无效 ID）的 ID 分别回告前端。"""
+
+    result = _service(http).delete_many(payload.record_ids)
+    return {"deleted": result["deleted"], "missing": result["missing"]}
 
 
 @router.get("/item/{record_id}/image/{side}/{region_id}")

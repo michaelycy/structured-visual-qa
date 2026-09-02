@@ -12,8 +12,10 @@ import 本模块，BLAS/推理线程数上限必须先于这些导入写入环�
 
 from __future__ import annotations
 
+import json
 import os
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -24,6 +26,9 @@ if TYPE_CHECKING:
     from document_qa.ocr import OCRProvider
     from document_qa.profiles import RuleProfile
     from document_qa.schemas import QAReport
+
+# 进度回调类型：与 core pipeline.ProgressListener 对齐（stage + 进度数据）。
+ProgressCallback = Callable[[str, dict[str, object]], None]
 
 # 线程数上限需要覆盖的 BLAS/推理运行时环境变量。
 _THREAD_ENV_VARS = (
@@ -60,6 +65,7 @@ def execute_compare(
     render_scope: str = "issues",
     source_password: str | None = None,
     target_password: str | None = None,
+    progress: ProgressCallback | None = None,
 ) -> tuple["QAReport", dict[str, list[str]]]:
     """执行一次完整比较：归一化、流水线、渲染索引与报告元数据补记。
 
@@ -68,6 +74,7 @@ def execute_compare(
     子进程）。非 PDF 输入先经 LibreOffice 归一化；归一化发生时给偏移类
     阈值叠加转换噪声容差（Profile 副本上改，不污染用户配置，core 保持
     无来源感知）。密码只参与本次解析与渲染，不写入任何产物。
+    progress 为可选进度回调，透传给核心管线；缺省时行为与历史版本一致。
     """
 
     from document_qa.pipeline import DocumentQAPipeline
@@ -116,6 +123,7 @@ def execute_compare(
         render_scope=render_scope,  # type: ignore[arg-type]
         source_password=source_password,
         target_password=target_password,
+        progress=progress,
     )
     rendered = (
         _index_rendered(render_dir) if render else {"source": [], "target": []}
@@ -161,6 +169,7 @@ def run_compare(payload: dict, sender: Any) -> None:
         )
         artifacts_dir = Path(payload["artifacts_dir"])
         settings = load_settings()
+        progress_path = payload.get("progress_path")
         report, rendered = execute_compare(
             artifacts_dir=artifacts_dir,
             source=Path(payload["source"]),
@@ -172,6 +181,9 @@ def run_compare(payload: dict, sender: Any) -> None:
             render_scope=str(payload.get("render_scope", "issues")),
             source_password=payload.get("source_password"),
             target_password=payload.get("target_password"),
+            progress=_make_progress_writer(progress_path)
+            if progress_path
+            else None,
         )
         sender.send(
             {"report": report.model_dump(mode="json"), "rendered": rendered}
@@ -180,6 +192,39 @@ def run_compare(payload: dict, sender: Any) -> None:
         sender.send({"error": f"{type(exc).__name__}: {exc}"[:500]})
     finally:
         sender.close()
+
+
+def _make_progress_writer(progress_path: str) -> ProgressCallback:
+    """构造把进度事件追加写入 JSONL 文件的回调（子进程内使用）。
+
+    每行一条事件并立即刷盘：父进程的 /api/tasks 轮询直接读文件末行，
+    不需要进程间通知。任何写入失败都静默跳过——进度是纯增强信息，
+    不能让磁盘问题反噬比较主流程。
+    """
+
+    path = Path(progress_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    def emit(stage: str, detail: dict[str, object]) -> None:
+        try:
+            line = json.dumps(
+                {"ts": _now_iso(), "stage": stage, **detail},
+                ensure_ascii=False,
+            )
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(line + "\n")
+        except Exception:
+            return
+
+    return emit
+
+
+def _now_iso() -> str:
+    """当前 UTC 时间的 ISO 字符串（进度事件时间线用）。"""
+
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _ensure_pdf(

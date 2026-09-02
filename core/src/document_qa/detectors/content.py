@@ -46,6 +46,9 @@ _DIGIT_TRANSLATION = str.maketrans(
 )
 # 全大写字母词（机构缩写：UNICEF、WHO、CSAM）通常保留原文不翻译。
 _ACRONYM_PATTERN = re.compile(r"\b[A-Z]{2,}\b")
+# 专名词形：首字母大写的拉丁词（Syneos、Health、Inc、N）。来源行、
+# 机构署名按翻译惯例原样保留机构名，不构成"未翻译证据"。
+_PROPER_NOUN_PATTERN = re.compile(r"\b[A-Z][a-zA-Z']*\b")
 def _normalize_number(token: str) -> str:
     """归一化数字 token：去千分位逗号 + 去前导零（日期/页码场景）。"""
 
@@ -360,6 +363,10 @@ class ContentDetector:
                 target_region=target_region.id if target_region else None,
                 bbox=target_region.bbox if target_region else None,
                 metrics={
+                    # 页面级守恒：metrics 中的 source_text/target_text 是
+                    # 独立选取的定位锚点（多余数字所在目标区域、缺失数字
+                    # 所在源区域），不是互为译文的文本对。
+                    "comparison_scope": "page",
                     "source_numbers": self._display_numbers(
                         source_numbers, source_labels
                     ),
@@ -543,9 +550,10 @@ class ContentDetector:
     ) -> list[Issue]:
         """目标文本框仍大量保留源语言文字时判为漏译。
 
-        判据是"源语言为主、目标语言占比极低"：以源页面主导脚本为参照，
-        目标区域中源脚本字母占比超过阈值即判为未翻译。脚本识别通用化
-        后同一判据适用于任意语言对（中英、中阿、俄英……）。
+        判据是"需翻译的正文仍以源语言为主"：以源页面主导脚本为参照，
+        目标区域剔除全大写缩写与首字母大写专名（按惯例原样保留，不
+        构成漏译证据）之后，源脚本字母占比超过阈值即判为未翻译。
+        脚本识别通用化后同一判据适用于任意语言对（中英、中阿、俄英……）。
         """
 
         source_regions = {region.id: region for region in source.regions}
@@ -584,11 +592,18 @@ class ContentDetector:
             letters = ANY_SCRIPT_PATTERN.findall(text)
             if len(letters) < min_letters:
                 continue
-            without_acronyms = _ACRONYM_PATTERN.sub("", text)
-            remaining = ANY_SCRIPT_PATTERN.findall(without_acronyms)
+            # 机构名（Syneos Health Consulting）与缩写（WHO、NDA）在
+            # 译文中原样保留是标准翻译惯例（来源行、署名、统计记法
+            # N=170），不构成"未翻译证据"；占比只统计剔除专名与缩写
+            # 后"需要翻译的正文词"里残留的源语言字母。真实漏译段以
+            # 小写普通词为主，剔除后占比仍接近 1，判定行为不变。
+            evidence_text = _PROPER_NOUN_PATTERN.sub(
+                "", _ACRONYM_PATTERN.sub("", text)
+            )
+            remaining = ANY_SCRIPT_PATTERN.findall(evidence_text)
             if len(remaining) < min_letters:
                 continue
-            ratio = len(pattern.findall(text)) / len(letters)
+            ratio = len(pattern.findall(evidence_text)) / len(remaining)
             if ratio >= threshold:
                 # 严重度按源语言占比分档：占比越高越接近整段漏译。
                 severity = thresholds.band_severity(

@@ -228,6 +228,44 @@ export interface TaskPollResponse {
   report: QAReport | null
   rendered: { source: string[]; target: string[] } | null
   history_record_id: string | null
+  /** 进行中任务的流水线进度简报（阶段 + 页级进度），其余状态为 null。 */
+  progress?: TaskProgress | null
+}
+
+/** 流水线进度事件：与比较子进程写入的进度 JSONL 末行对齐。 */
+export interface TaskProgress {
+  ts: string
+  stage:
+    | "parse"
+    | "group"
+    | "alignment"
+    | "match"
+    | "detect"
+    | "ocr"
+    | "render"
+    | "report"
+  side?: "source" | "target"
+  pages?: number
+  regions?: number
+  pairs?: number
+  missing_source?: number
+  extra_target?: number
+  page?: number
+  index?: number
+  total?: number
+}
+
+/** 最近比较任务摘要（/api/tasks）：质检记录页任务动态面板的数据源。 */
+export interface TaskSummary {
+  task_id: string
+  status: "queued" | "running" | "done" | "error"
+  source_display: string
+  target_display: string
+  history_record_id: string | null
+  error: string | null
+  created_at: string
+  updated_at: string
+  progress: TaskProgress | null
 }
 
 export const documentQaService = {
@@ -276,6 +314,10 @@ export const documentQaService = {
     ),
   task: (taskId: string) =>
     httpClient.json<TaskPollResponse>(`/api/tasks/${encodeURIComponent(taskId)}`),
+  taskList: (limit = 20) =>
+    httpClient.json<{ tasks: TaskSummary[] }>(`/api/tasks?limit=${limit}`).then(
+      (r) => r.tasks,
+    ),
   exportReport: (recordId: string, format: "xlsx" | "html") =>
     httpClient.blob("/api/report/export", {
       method: "POST",
@@ -356,6 +398,20 @@ export const documentQaService = {
     ),
   historyItem: (recordId: string) =>
     httpClient.json<HistoryRecord>(`/api/history/item/${encodeURIComponent(recordId)}`),
+  historyDelete: (recordId: string) =>
+    httpClient.json<{ deleted: string[] }>(
+      `/api/history/item/${encodeURIComponent(recordId)}`,
+      { method: "DELETE" },
+    ),
+  historyDeleteBatch: (recordIds: string[]) =>
+    httpClient.json<{ deleted: string[]; missing: string[] }>(
+      "/api/history/delete-batch",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ record_ids: recordIds }),
+      },
+    ),
   sampleList: (includeArchived = false) =>
     httpClient.json<{ samples: SampleRecord[] }>(
       `/api/samples?include_archived=${includeArchived}`,

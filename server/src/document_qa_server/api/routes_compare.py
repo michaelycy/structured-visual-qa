@@ -153,11 +153,19 @@ def compare(request: CompareRequest, http: Request, background: BackgroundTasks)
     return {"task_id": task_id, "status": "queued"}
 
 
+@router.get("/tasks")
+def list_tasks(http: Request, limit: int = 20) -> dict:
+    """列出最近的比较任务；质检记录页据此展示执行中任务与失败任务。"""
+
+    return {"tasks": http.app.state.compare.list_tasks(limit=limit)}
+
+
 @router.get("/tasks/{task_id}")
 def get_task(task_id: str, http: Request) -> dict:
-    """轮询比较任务状态；done 时附带报告与渲染索引。"""
+    """轮询比较任务状态；done 时附带报告与渲染索引，进行中附带进度简报。"""
 
-    task = http.app.state.compare.get_task(task_id)
+    service: CompareService = http.app.state.compare
+    task = service.get_task(task_id)
     if task is None:
         raise HTTPException(status_code=404, detail=f"任务不存在: {task_id}")
     # 浅拷贝后注入，避免响应构造改动任务注册表中的报告字典。
@@ -169,4 +177,7 @@ def get_task(task_id: str, http: Request) -> dict:
         "report": attach_review_task_id(report),
         "rendered": task.rendered,
         "history_record_id": task.history_record_id,
+        "progress": service.task_progress(task_id)
+        if task.status in ("queued", "running")
+        else None,
     }

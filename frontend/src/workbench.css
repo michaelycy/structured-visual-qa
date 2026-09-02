@@ -691,3 +691,75 @@
   color: var(--qa-text-secondary, #5f6b7a);
   cursor: pointer;
 }
+
+/* 质检记录页任务动态面板：执行中/失败任务的阶段步进与简报 */
+.task-activity {
+  display: flex;
+  flex-direction: column;
+  gap: var(--qa-space-2, 8px);
+  margin-bottom: var(--qa-space-3, 12px);
+}
+
+.task-activity__row {
+  display: flex;
+  gap: var(--qa-space-3, 12px);
+  align-items: center;
+  flex-wrap: wrap;
+  min-width: 0;
+  padding: 10px 14px;
+  background: var(--qa-surface, #fff);
+  border: 1px solid var(--qa-border, #e2e6ee);
+  border-radius: var(--qa-radius-md, 8px);
+}
+
+.task-activity__row.is-error {
+  border-color: var(--qa-critical, #ff5252);
+}
+
+.task-activity__docs {
+  min-width: 0;
+  max-width: 420px;
+  overflow: hidden;
+  font-weight: 600;
+  color: var(--qa-text, #1f2733);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-activity__steps {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.task-activity__step {
+  padding: 2px 8px;
+  font-size: 12px;
+  color: var(--qa-text-secondary, #5f6b7a);
+  background: var(--qa-canvas, #f9f9fb);
+  border-radius: 999px;
+}
+
+.task-activity__step.is-done {
+  color: var(--qa-success, #2e7d32);
+  background: var(--qa-success-soft, #e8f5e9);
+}
+
+.task-activity__step.is-active {
+  font-weight: 600;
+  color: var(--qa-info, #1677ff);
+  background: var(--qa-info-soft, #e6f4ff);
+}
+
+.task-activity__brief {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-activity__elapsed {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}

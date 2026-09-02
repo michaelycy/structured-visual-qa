@@ -39,6 +39,36 @@ ANY_SCRIPT_PATTERN = re.compile(
     "|".join(f"(?:{pattern.pattern})" for pattern in SCRIPT_PATTERNS.values())
 )
 
+# 全角（等宽 1em）字符区间：用于字符 advance 估算，服务尺寸类检测的
+# 跨语言密度归一。刻意比 SCRIPT_PATTERNS 更宽——这里关心的是"占多宽"
+# 而非"属于哪种文字"，因此纳入兼容表意文字（U+F900 起，翻译 PDF 常
+# 见）、CJK 标点与全角形式；SCRIPT_PATTERNS 服务脚本投票，两表语义
+# 不同，不得互相替代。
+FULLWIDTH_PATTERN = re.compile(
+    r"[\u2e80-\u9fff\uf900-\ufaff\u3000-\u303f\u3040-\u30ff"
+    r"\uac00-\ud7af\uff00-\uffef]"
+)
+
+
+def text_advance_units(text: str) -> float:
+    """按全角 1.0em、半角 0.5em 估算文本的排版长度（em 单位）。
+
+    竖排/旋转文本沿书写轴的 BBox 长度近似等于"字符数 × 单字 advance"，
+    而 CJK 字符（约 1em）与拉丁字符（约 0.5em）密度相差一倍，直接比较
+    字符数或 BBox 尺寸都会把正常翻译适配误判为剧变。空格与标点按半角
+    计（略高估拉丁串长度，使豁免更保守）；不可见字符不计。
+    """
+
+    units = 0.0
+    for char in text:
+        if char == " ":
+            # 空格占半角 advance，计入墨迹长度。
+            units += 0.5
+        elif char.isprintable() and not char.isspace():
+            # 换行、制表等控制字符不占墨迹，跳过。
+            units += 1.0 if FULLWIDTH_PATTERN.match(char) else 0.5
+    return units
+
 
 def dominant_script(regions: list[Region]) -> str | None:
     """按各 Region 主脚本的数量投票判断页面主导脚本。
@@ -90,6 +120,25 @@ def dominant_script_by_characters(regions: list[Region]) -> str | None:
     if len(top) > 1 and top[0][1] == top[1][1]:
         return "mixed"
     return top[0][0]
+
+
+def dominant_script_of_text(text: str) -> str | None:
+    """按字符计数判断单段文本的主导脚本；无法判定或平票返回 None。
+
+    与 Region 级函数共用同一张 SCRIPT_PATTERNS 判定表，保证碎片、
+    漏译等检测器对同一段文本得出一致的脚本结论。
+    """
+
+    counts = {
+        name: len(pattern.findall(text))
+        for name, pattern in SCRIPT_PATTERNS.items()
+    }
+    top_two = sorted(counts.items(), key=lambda kv: -kv[1])[:2]
+    if top_two[0][1] == 0:
+        return None
+    if len(top_two) > 1 and top_two[0][1] == top_two[1][1]:
+        return None
+    return top_two[0][0]
 
 
 def resolve_language(

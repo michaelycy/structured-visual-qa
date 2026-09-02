@@ -1,11 +1,14 @@
 /** 质检记录页：antd Table + 详情抽屉，行内即看摘要，抽屉看完整详情。 */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { ReloadOutlined, SearchOutlined } from "@ant-design/icons"
-import { Alert, Button, message, Modal, Select, Space, Tooltip, Typography, Input } from "antd"
+import type { Key } from "react"
+import { DeleteOutlined, ReloadOutlined, SearchOutlined } from "@ant-design/icons"
+import { Alert, Button, message, Modal, Popconfirm, Select, Space, Tooltip, Typography, Input } from "antd"
 import type { ColumnsType } from "antd/es/table"
-import type { HistoryRecord } from "../api"
+import type { TableRowSelection } from "antd/es/table/interface"
+import type { HistoryRecord, TaskSummary } from "../api"
 import { api } from "../services/queryClient"
+import { ActiveTasksPanel } from "./ActiveTasksPanel"
 import { HistoryDetail } from "./HistoryDetail"
 import { PALETTE, scoreColor } from "../uiTokens"
 import { DataTable, PageHeader, PageSection, StatusTag } from "../components/ui"
@@ -149,6 +152,9 @@ export function HistoryView({
   const [rerunSubmitting, setRerunSubmitting] = useState(false)
   const [query, setQuery] = useState("")
   const [statusFilter, setStatusFilter] = useState("all")
+  // 批量删除的选中行（跨分页保持）；值即 record_id。
+  const [selectedRowKeys, setSelectedRowKeys] = useState<Key[]>([])
+  const [deleting, setDeleting] = useState(false)
   const tableContainerRef = useRef<HTMLDivElement>(null)
   const [tableViewportWidth, setTableViewportWidth] = useState<number | null>(null)
   const [messageApi, contextHolder] = message.useMessage()
@@ -185,6 +191,64 @@ export function HistoryView({
     loadRecords()
   }, [loadRecords, refreshToken])
 
+  // ---- 任务动态（服务端事实来源）：轮询 /api/tasks，展示执行中与最近失败。
+  // 大文档（尤其 OCR）可能跑几十分钟，若记录页完全不可见进行中任务，
+  // 用户会误以为提交丢失而重复提交（单 worker 串行只会越积越多）。
+  const [activeTasks, setActiveTasks] = useState<TaskSummary[]>([])
+  const [now, setNow] = useState(() => Date.now())
+  const hadActiveRef = useRef(false)
+
+  useEffect(() => {
+    let cancelled = false
+    const pollTasks = () => {
+      api
+        .taskList()
+        .then((tasks) => {
+          if (cancelled) return
+          setActiveTasks(tasks)
+          const hasActive = tasks.some(
+            (task) => task.status === "queued" || task.status === "running",
+          )
+          // 活跃任务刚清零（完成/失败）：记录列表立即刷新一次，
+          // 让新结果即时出现，不必等用户手动刷新。
+          if (hadActiveRef.current && !hasActive) loadRecords()
+          hadActiveRef.current = hasActive
+        })
+        .catch(() => {
+          // 任务动态是增强信息（旧版服务无该接口时不拖垮记录页），静默降级。
+          if (!cancelled) setActiveTasks([])
+        })
+    }
+    pollTasks()
+    const timer = window.setInterval(pollTasks, 5000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [loadRecords])
+
+  // 存在活跃任务时每秒走一次时钟，驱动"已 x 分 x 秒"的耗时刷新。
+  const hasActiveTask = activeTasks.some(
+    (task) => task.status === "queued" || task.status === "running",
+  )
+  useEffect(() => {
+    if (!hasActiveTask) return
+    const ticker = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(ticker)
+  }, [hasActiveTask])
+
+  // 面板可见项：进行中任务始终展示；失败任务只在最近 24 小时内展示，
+  // 避免历史失败长期霸占"任务动态"造成困扰（done 任务直接进记录表）。
+  const visibleTasks = useMemo(() => {
+    const dayMs = 24 * 60 * 60 * 1000
+    return activeTasks.filter((task) => {
+      if (task.status === "queued" || task.status === "running") return true
+      if (task.status !== "error") return false
+      const updated = Date.parse(task.updated_at)
+      return !Number.isNaN(updated) && Date.now() - updated < dayMs
+    })
+  }, [activeTasks])
+
   const filteredRecords = useMemo(() => {
     const normalizedQuery = query.trim().toLocaleLowerCase()
     return records.filter((record) => {
@@ -216,6 +280,38 @@ export function HistoryView({
       messageApi.success("记录 ID 已复制")
     } catch {
       messageApi.error("复制记录 ID 失败，请检查浏览器剪贴板权限后重试。")
+    }
+  }
+
+  /** 删除记录（单条/批量同走批量接口）：成功后清空选择并刷新列表。
+   *
+   * 服务端同步删除记录、完整报告与无共享引用的渲染目录；部分 ID
+   * 已不存在时不整体报错，用警告区分回告。
+   */
+  const deleteRecords = async (recordIds: string[]) => {
+    if (recordIds.length === 0 || deleting) return
+    setDeleting(true)
+    try {
+      const result = await api.historyDeleteBatch(recordIds)
+      if (result.missing.length > 0) {
+        messageApi.warning(
+          `已删除 ${result.deleted.length} 条；${result.missing.length} 条记录不存在（可能已被删除或清理）。`,
+          6,
+        )
+      } else {
+        messageApi.success(`已删除 ${result.deleted.length} 条质检记录及其衍生渲染文件。`)
+      }
+      setSelectedRowKeys([])
+      // 打开中的详情抽屉若指向被删记录，一并关闭避免展示悬空数据。
+      setDetailRecord((current) =>
+        current && recordIds.includes(current.record_id) ? null : current,
+      )
+      loadRecords()
+    } catch (exc) {
+      const reason = exc instanceof Error ? exc.message : String(exc)
+      messageApi.error(`删除质检记录失败：${reason}。请重试。`)
+    } finally {
+      setDeleting(false)
     }
   }
 
@@ -355,7 +451,7 @@ export function HistoryView({
     },
     {
       title: "操作",
-      width: 288,
+      width: 330,
       fixed: shouldFixOperation ? "right" : undefined,
       // 防止 antd Table 单元格内容换行导致行高抖动。
       onCell: () => ({
@@ -373,10 +469,35 @@ export function HistoryView({
           <Button type="link" size="small" onClick={() => setRerunRecord(record)}>
             重新质检
           </Button>
+          <Popconfirm
+            title="删除该质检记录？"
+            description="将同时删除完整报告与衍生渲染文件，不可恢复。"
+            okText="删除"
+            okButtonProps={{ danger: true }}
+            cancelText="取消"
+            onConfirm={() => void deleteRecords([record.record_id])}
+          >
+            <Button
+              type="link"
+              size="small"
+              danger
+              icon={<DeleteOutlined />}
+              aria-label={`删除质检记录：${record.record_id}`}
+            >
+              删除
+            </Button>
+          </Popconfirm>
         </Space>
       ),
     },
   ]
+
+  const rowSelection: TableRowSelection<Omit<HistoryRecord, "report">> = {
+    selectedRowKeys,
+    onChange: (keys) => setSelectedRowKeys(keys),
+    // 选择列固定在行首，与右侧操作列呼应，批量扫选时不随横向滚动跑位。
+    fixed: true,
+  }
 
   return (
     <div className="qa-page history-page">
@@ -405,10 +526,25 @@ export function HistoryView({
           description="完成后将自动打开报告；当前列表可继续浏览，无需等待。"
         />
       ) : null}
+      <ActiveTasksPanel tasks={visibleTasks} now={now} />
       <PageSection
         className="history-records"
         extra={
           <Space className="history-records__filters" wrap>
+            {selectedRowKeys.length > 0 ? (
+              <Popconfirm
+                title={`删除选中的 ${selectedRowKeys.length} 条质检记录？`}
+                description="将同时删除完整报告与衍生渲染文件，不可恢复。"
+                okText="删除"
+                okButtonProps={{ danger: true }}
+                cancelText="取消"
+                onConfirm={() => void deleteRecords(selectedRowKeys.map(String))}
+              >
+                <Button danger icon={<DeleteOutlined />} loading={deleting}>
+                  删除所选（{selectedRowKeys.length}）
+                </Button>
+              </Popconfirm>
+            ) : null}
             <Input
               className="qa-table-search"
               allowClear
@@ -435,6 +571,7 @@ export function HistoryView({
         <div ref={tableContainerRef}>
           <DataTable
             rowKey="record_id"
+            rowSelection={rowSelection}
             loading={loading}
             columns={columns}
             dataSource={filteredRecords}

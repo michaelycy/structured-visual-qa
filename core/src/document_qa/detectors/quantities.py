@@ -59,6 +59,15 @@ _ENGLISH_MONTH_DATE = re.compile(
     rf"\b\d{{1,2}}\s+(?P<trailing>{_MONTH_NAMES})\b",
     re.IGNORECASE,
 )
+# 英文裸月份（in January at ...）：中文"1月"无需邻接日期即被识别为
+# 月份，英文若只认"月份名+日期数字"（January 13），同一处时间状语
+# 在两侧计数不对称，页面级守恒会误报"多余 1月"。仅识别首字母大写
+# 的月份名，避免小写动词误报（stocks march higher）；may 作情态动词
+# 的频率远高于月份语义，整体排除（May 13 已由日期相邻模式覆盖）。
+_BARE_MONTH_NAMES = "|".join(
+    name.capitalize() for name in _ENGLISH_MONTHS if name != "may"
+)
+_ENGLISH_MONTH_BARE = re.compile(rf"\b(?P<month>{_BARE_MONTH_NAMES})\b")
 _CHINESE_MONTH_RANGE = re.compile(
     rf"(?P<start>{_DECIMAL_OR_CHINESE})\s*(?:-|—|–|至|到)\s*"
     rf"(?P<end>{_DECIMAL_OR_CHINESE})\s*月"
@@ -69,15 +78,80 @@ _CHINESE_SCALED = re.compile(
     rf"(?P<number>{_DECIMAL_OR_CHINESE})\s*(?P<scale>万|亿)\s*"
     r"(?P<currency>人民币|元|美元|美金|欧元)?"
 )
+# 纯乘数链（十万/百万/千万/百亿……）不含任何计数数字，是坐标轴与
+# 表头的「单位声明」写法：译文"交易总价值（百万美元）"对应源文
+# "Total Value of Deals (USD $M)"，英文侧 in millions/$M 因不含数字
+# 本来就不抽取，中文侧若把"百万"换算成 1,000,000 必然制造单侧多余
+# （真实记录 20260901-073417 第 2 页误报的根因）。含计数数字的表达
+# （三百万、十五亿）仍是真实数量，照常换算。
+_PURE_MULTIPLIER_CHAIN = re.compile(r"[十百千]+")
 _CHINESE_SCALED_RANGE = re.compile(
     rf"(?P<start>{_DECIMAL_OR_CHINESE})\s*(?:-|—|–|至|到)\s*"
     rf"(?P<end>{_DECIMAL_OR_CHINESE})\s*(?P<scale>万|亿)\s*"
     r"(?P<currency>人民币|元|美元|美金|欧元)?"
 )
+# 英文财务缩写金额（$100M、$4.99B、€5m）：图表分档与坐标轴的惯用
+# 写法，中文译文会展开为"1 亿 / 4.99 亿美元"，语义完全等价；只识别
+# thousand/million/billion 全词时这些表达会降级为裸数字，与中文侧的
+# 倍率数量守恒必然错位（真实记录 20260901-055449 第 1 页整页误报的
+# 根因）。必须锚定货币前缀，防止把 "Section 5B" 这类编号误判成金额；
+# 单字母后紧随字母或数字的组合（100MB）同样不成立。
+_ENGLISH_ABBR_SCALED = re.compile(
+    r"(?:US\$|C\$|A\$|HK\$|NT\$|S\$|[$€£¥₹]|USD|EUR|GBP|JPY|CNY|RMB|CHF|CAD|AUD)\s*"
+    r"(?P<number>\d+(?:\.\d+)?)\s*(?P<scale>[MBK])(?![A-Za-z0-9])",
+    re.IGNORECASE,
+)
 _ENGLISH_SCALED = re.compile(
     r"(?P<number>\d+(?:\.\d+)?)\s*"
     r"(?P<scale>thousand|million|billion)\s*"
     r"(?P<currency>rmb|yuan|cny|usd|us dollars?|dollars?|euros?|eur)?\b",
+    re.IGNORECASE,
+)
+# 缩写单字母到全词倍率键的映射，复用 _SCALE_FACTORS 倍率表。
+_ABBR_SCALE_WORDS = {"k": "thousand", "m": "million", "b": "billion"}
+# 英文基数词表：只收数值含义明确的整数词，不收 hundred/thousand
+# （冠词歧义：a hundred）。报告类译文对数据区间一律数字化
+# （six to 12 months → 6到12个月），源文"基数词+数字"混写是明确的
+# 数值区间信号；只认阿拉伯数字会让源侧整体缺号（同上记录第 2 页
+# "多余 6" 误报的根因）。
+_ENGLISH_CARDINALS = {
+    "one": 1,
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+    "ten": 10,
+    "eleven": 11,
+    "twelve": 12,
+    "thirteen": 13,
+    "fourteen": 14,
+    "fifteen": 15,
+    "sixteen": 16,
+    "seventeen": 17,
+    "eighteen": 18,
+    "nineteen": 19,
+    "twenty": 20,
+    "thirty": 30,
+    "forty": 40,
+    "fifty": 50,
+    "sixty": 60,
+    "seventy": 70,
+    "eighty": 80,
+    "ninety": 90,
+}
+_CARDINAL_WORDS = "|".join(_ENGLISH_CARDINALS)
+# 基数词与数字混排区间（six to 12）：两端换算为裸数字键，与译文侧
+# 裸数字守恒。两端同类（1.5 to 2、one to one）不在此处理：前者由
+# 裸数字与既有倍率/百分比模式覆盖，抢占其跨度会破坏 ratio 键归一；
+# 后者（one to one → 一对一）译文通常不含数字，识别反而制造缺失。
+_ENGLISH_CARDINAL_RANGE = re.compile(
+    rf"\b(?P<start>{_CARDINAL_WORDS}|\d+(?:\.\d+)?)\s*"
+    r"(?:-|—|–|to|through)\s*"
+    rf"(?P<end>\d+(?:\.\d+)?|{_CARDINAL_WORDS})\b",
     re.IGNORECASE,
 )
 _ENGLISH_SCALED_RANGE = re.compile(
@@ -224,25 +298,35 @@ def extract_quantity_mentions(text: str) -> list[QuantityMention]:
         group = "leading" if match.group("leading") else "trailing"
         raw = match.group(group)
         add(f"month:{_ENGLISH_MONTHS[raw.lower()]}", raw, match.span(group))
+    # 裸月份只补位未被日期相邻模式占用的跨度，避免同一处月份双计。
+    for match in _ENGLISH_MONTH_BARE.finditer(text):
+        raw = match.group("month")
+        add(f"month:{_ENGLISH_MONTHS[raw.lower()]}", raw, match.span())
 
     for pattern in (_CHINESE_SCALED_RANGE, _ENGLISH_SCALED_RANGE):
         for match in pattern.finditer(text):
             factor = _SCALE_FACTORS[match.group("scale").lower()]
             for group in ("start", "end"):
-                value = _decimal_value(match.group(group))
-                if value is not None:
-                    add(
-                        f"quantity:{_decimal_text(value * factor)}",
-                        match.group(group),
-                        match.span(group),
-                    )
+                raw = match.group(group)
+                value = _decimal_value(raw)
+                # 纯乘数链端（百万到千万这类单位声明）不是数量，跳过。
+                if value is None or _PURE_MULTIPLIER_CHAIN.fullmatch(raw):
+                    continue
+                add(
+                    f"quantity:{_decimal_text(value * factor)}",
+                    raw,
+                    match.span(group),
+                )
 
-    for pattern in (_CHINESE_SCALED, _ENGLISH_SCALED):
+    for pattern in (_CHINESE_SCALED, _ENGLISH_ABBR_SCALED, _ENGLISH_SCALED):
         for match in pattern.finditer(text):
-            value = _decimal_value(match.group("number"))
-            if value is None:
+            raw = match.group("number")
+            value = _decimal_value(raw)
+            if value is None or _PURE_MULTIPLIER_CHAIN.fullmatch(raw):
                 continue
-            factor = _SCALE_FACTORS[match.group("scale").lower()]
+            scale = match.group("scale").lower()
+            # 缩写单字母（k/m/b）先归一到全词，再查同一张倍率表。
+            factor = _SCALE_FACTORS[_ABBR_SCALE_WORDS.get(scale, scale)]
             # 数字一致性只比较换算后的数值；币种名称由术语/文本规则负责，
             # 避免译文省略重复币种时把相同金额判成数字缺失。
             add(
@@ -250,6 +334,31 @@ def extract_quantity_mentions(text: str) -> list[QuantityMention]:
                 match.group(0),
                 match.span(),
             )
+
+    # 混排区间（six to 12 months ↔ 6到12个月）：基数词端换算为裸数字
+    # 键。放在倍率区间之后运行，"1.5 to 2 billion" 的端点已由倍率
+    # 区间占用，不会被这里降级成裸数字。
+    for match in _ENGLISH_CARDINAL_RANGE.finditer(text):
+        # 百分比上下文交还百分比模式：数字端须保持 ratio 键，混入
+        # 裸数字键会与译文侧（20%到30%）失配。
+        if re.match(r"\s*(?:%|percent\b)", text[match.end():], re.IGNORECASE):
+            continue
+        start_raw = match.group("start")
+        end_raw = match.group("end")
+        start_digit = start_raw[0].isdigit()
+        end_digit = end_raw[0].isdigit()
+        # 仅"一端数字、一端基数词"的混排区间才处理；两端同类交给
+        # 既有模式或直接忽略（见 _ENGLISH_CARDINAL_RANGE 注释）。
+        if start_digit == end_digit:
+            continue
+        for group, is_digit in (("start", start_digit), ("end", end_digit)):
+            raw = match.group(group)
+            value = (
+                Decimal(raw)
+                if is_digit
+                else Decimal(_ENGLISH_CARDINALS[raw.lower()])
+            )
+            add(_decimal_text(value), raw, match.span(group))
 
     ratio_patterns = (
         (_CHINESE_PERCENT, Decimal("1")),

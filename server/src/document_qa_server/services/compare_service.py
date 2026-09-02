@@ -9,6 +9,7 @@ CPU 时接口仍能即时响应，子进程崩溃也不会拖垮服务。同步�
 
 from __future__ import annotations
 
+import json
 import multiprocessing
 import threading
 import time
@@ -178,6 +179,9 @@ class CompareService:
             "source_password": source_password,
             "target_password": target_password,
             "worker_threads": self._worker_threads,
+            # 子进程把流水线阶段进度追加写入该 JSONL，/api/tasks 轮询
+            # 读末行展示"当前阶段 + 页级简报"；文件按任务隔离。
+            "progress_path": str(self._task_progress_path(task_id)),
         }
         error_message: str | None = None
         result: dict = {}
@@ -236,6 +240,68 @@ class CompareService:
         if state is not None:
             return state
         return self._load_task_from_db(task_id)
+
+    def list_tasks(self, limit: int = 20) -> list[dict]:
+        """列出最近的比较任务（含进行中），供质检记录页展示任务动态。
+
+        数据以 async_tasks 表为准（每次状态迁移同步落库，重启中断任务
+        会被标记 error，不会展示陈旧的 running）。进行中任务附带流水线
+        进度简报；数据库不可用时返回空列表而不是报错——动态展示属于
+        增强信息，不能影响记录页主列表。
+        """
+
+        if self._database is None:
+            return []
+        try:
+            with self._database.connect() as connection:
+                rows = connection.execute(
+                    "SELECT task_id, status, source_display, target_display, "
+                    "history_record_id, error, created_at, updated_at "
+                    "FROM async_tasks ORDER BY created_at DESC LIMIT ?",
+                    (max(1, min(limit, 100)),),
+                ).fetchall()
+        except Exception:
+            return []
+        tasks: list[dict] = []
+        for row in rows:
+            task = {
+                "task_id": row["task_id"],
+                "status": row["status"],
+                "source_display": row["source_display"],
+                "target_display": row["target_display"],
+                "history_record_id": row["history_record_id"],
+                "error": row["error"],
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+                "progress": None,
+            }
+            if task["status"] in ("queued", "running"):
+                task["progress"] = self.task_progress(task["task_id"])
+            tasks.append(task)
+        return tasks
+
+    def task_progress(self, task_id: str) -> dict | None:
+        """读取任务的最新流水线进度（进度 JSONL 末行）；无进度时为 None。"""
+
+        path = self._task_progress_path(task_id)
+        try:
+            if not path.is_file():
+                return None
+            with path.open("r", encoding="utf-8") as handle:
+                last_line = ""
+                for line in handle:
+                    stripped = line.strip()
+                    if stripped:
+                        last_line = stripped
+            return json.loads(last_line) if last_line else None
+        except Exception:
+            # 进度文件损坏/被清理时退化为"无简报"，不影响任务状态展示。
+            return None
+
+    def _task_progress_path(self, task_id: str) -> Path:
+        """任务进度 JSONL 的固定路径；task_id 来自服务端生成的 uuid。"""
+
+        return self._artifacts_dir / "tasks" / task_id / "progress.jsonl"
 
     def run(
         self,

@@ -141,6 +141,48 @@ class CompareHistoryService:
             report["summary"]["problem_total"] = count_problem_groups(validated.pages)
         return self._record_from_row(row, report=report, include_paths=True)
 
+    def delete(self, record_id: str) -> bool:
+        """删除单条记录（完整报告级联）并回收其衍生渲染目录。"""
+
+        result = self.delete_many([record_id])
+        return bool(result["deleted"])
+
+    def delete_many(self, record_ids: list[str]) -> dict[str, Any]:
+        """批量删除记录及衍生文件，返回已删与缺失的 ID 列表。
+
+        记录行与完整报告在同一事务删除（报告经外键级联）；复核决定、
+        样本与规则版本按文档/版本维度关联，不受单条记录删除影响。
+        渲染目录（pages/task-*）可能被多条记录共享（缓存命中场景），
+        因此行删除后统一走孤儿回收，按全量存活引用判定后再删磁盘。
+        """
+
+        deleted_ids: list[str] = []
+        missing_ids: list[str] = []
+        with self._database.transaction() as connection:
+            for record_id in record_ids:
+                try:
+                    self._validate_id(record_id)
+                except ValueError:
+                    missing_ids.append(record_id)
+                    continue
+                row = connection.execute(
+                    "SELECT 1 FROM comparison_records WHERE record_id = ?",
+                    (record_id,),
+                ).fetchone()
+                if row is None:
+                    missing_ids.append(record_id)
+                    continue
+                connection.execute(
+                    "DELETE FROM comparison_records WHERE record_id = ?",
+                    (record_id,),
+                )
+                deleted_ids.append(record_id)
+        if deleted_ids:
+            # 渲染目录回收在事务提交后执行：存活引用需重新读库，且
+            # 磁盘删除不属于数据库事务边界。
+            self._collect_orphan_render_dirs()
+        return {"deleted": deleted_ids, "missing": missing_ids}
+
     def _save(
         self,
         *,
